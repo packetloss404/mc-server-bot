@@ -79,6 +79,7 @@ You may call previously saved skill functions shown in context. They accept (bot
 export class ActionAgent {
   private llmClient: LLMClient;
   private maxTokens: number;
+  private static MAX_PARSE_RETRIES = 3;
 
   constructor(llmClient: LLMClient, maxTokens: number) {
     this.llmClient = llmClient;
@@ -102,7 +103,42 @@ export class ActionAgent {
       5
     );
 
-    // Build iterative refinement context
+    let lastRaw = previousCode;
+    let lastError = previousError;
+    let lastCritique = critique;
+
+    for (let attempt = 1; attempt <= ActionAgent.MAX_PARSE_RETRIES; attempt++) {
+      const iterativeContext = this.buildIterativeContext(lastRaw, lastError, lastCritique);
+      const userMessage = `${iterativeContext}
+${obsText}
+Task: ${task.description}
+${skillContext ? `\nPreviously saved skills you can call:\n${skillContext}` : ''}
+
+Write the function:`;
+
+      const response = await this.llmClient.generate(ACTION_SYSTEM_PROMPT, userMessage, this.maxTokens);
+      lastRaw = response.text;
+
+      try {
+        const generated = this.parseGeneratedFunction(response.text);
+        logger.info({
+          task: task.description,
+          functionName: generated.functionName,
+          codeLength: generated.functionCode.length,
+          parseAttempt: attempt,
+        }, 'Action agent generated code');
+        return generated;
+      } catch (err: any) {
+        lastError = `Parse error: ${err.message}`;
+        lastCritique = 'Return exactly one valid async JavaScript function declaration with balanced parentheses/braces and no extra text.';
+        logger.warn({ task: task.description, parseAttempt: attempt, err: err.message }, 'Action agent parse retry');
+      }
+    }
+
+    throw new Error(`ActionAgent failed to produce valid code after ${ActionAgent.MAX_PARSE_RETRIES} parse attempts: ${lastError || 'unknown parse error'}`);
+  }
+
+  private buildIterativeContext(previousCode?: string, previousError?: string, critique?: string): string {
     let iterativeContext = '';
     if (previousCode) {
       iterativeContext += `\nCode from the last round:\n${previousCode}\n`;
@@ -113,19 +149,7 @@ export class ActionAgent {
     if (critique) {
       iterativeContext += `\nCritique: ${critique}\n`;
     }
-
-    const userMessage = `${iterativeContext}
-${obsText}
-Task: ${task.description}
-${skillContext ? `\nPreviously saved skills you can call:\n${skillContext}` : ''}
-
-Write the function:`;
-
-    const response = await this.llmClient.generate(ACTION_SYSTEM_PROMPT, userMessage, this.maxTokens);
-
-    const generated = this.parseGeneratedFunction(response.text);
-    logger.info({ task: task.description, functionName: generated.functionName, codeLength: generated.functionCode.length }, 'Action agent generated code');
-    return generated;
+    return iterativeContext;
   }
 
   private parseGeneratedFunction(raw: string): GeneratedCode {

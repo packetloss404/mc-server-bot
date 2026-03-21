@@ -9,6 +9,12 @@ interface SkillEntry {
   file: string;
 }
 
+export interface SkillMatch {
+  name: string;
+  description: string;
+  code: string;
+}
+
 export class SkillLibrary {
   private skillsDir: string;
   private indexPath: string;
@@ -141,6 +147,18 @@ export class SkillLibrary {
       }
     }
     return parts.join('\n\n');
+  }
+
+  getBestMatch(query: string): SkillMatch | null {
+    const match = this.search(query, 1)[0];
+    if (!match) return null;
+    const code = this.getCode(match.name);
+    if (!code) return null;
+    return {
+      name: match.name,
+      description: match.description,
+      code,
+    };
   }
 
   /** Build a summary string for the LLM of available skills */

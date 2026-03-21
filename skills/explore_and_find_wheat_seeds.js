@@ -1,40 +1,36 @@
-async function getMoreWheatSeeds(bot) {
+async function collectWheatSeeds(bot) {
   try {
-    const targetCount = 5;
+    const targetCount = 64;
     const getSeedsCount = () => {
-      const item = bot.inventory.items().find(i => i.name === 'wheat_seeds');
-      return item ? item.count : 0;
+      const items = bot.inventory.items();
+      const seedItem = items.find(i => i.name === 'wheat_seeds');
+      return seedItem ? seedItem.count : 0;
     };
 
     while (getSeedsCount() < targetCount) {
-      let grass = bot.findBlock({
-        matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
+      let targetBlock = bot.findBlock({
+        matching: block => ['grass', 'short_grass', 'tall_grass'].includes(block.name),
         maxDistance: 32
       });
 
-      if (!grass) {
-        await exploreUntil(bot, 'north', 60, () => {
+      if (!targetBlock) {
+        targetBlock = await exploreUntil('north', 60, () => {
           return bot.findBlock({
-            matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
+            matching: block => ['grass', 'short_grass', 'tall_grass'].includes(block.name),
             maxDistance: 32
           });
         });
-        grass = bot.findBlock({
-          matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
-          maxDistance: 32
-        });
       }
 
-      if (grass) {
-        await mineBlock(grass.name, 1);
-        await bot.waitForTicks(10);
+      if (targetBlock) {
+        await mineBlock(targetBlock.name, 1);
       } else {
-        // If still no grass found after exploring, move a bit and try again
         const pos = bot.entity.position;
-        await moveTo(pos.x + 10, pos.y, pos.z + 10, 2, 20);
+        await moveTo(pos.x + 10, pos.y, pos.z + 10, 2, 10);
       }
+      await bot.waitForTicks(10);
     }
   } catch (error) {
-    // Handle potential errors during exploration or mining
+    // Handle error gracefully
   }
 }

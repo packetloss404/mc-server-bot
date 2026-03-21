@@ -43,6 +43,13 @@ export class BotInstance {
   private conversationManager: ConversationManager;
   private chatCooldowns: Map<string, number> = new Map();
   private voyagerLoop: VoyagerLoop | null = null;
+  private instinctInterval: NodeJS.Timeout | null = null;
+  private instinctResumeTimeout: NodeJS.Timeout | null = null;
+  private instinctActive = false;
+  private voyagerPausedByInstinct = false;
+  private lastAttackedAt = 0;
+  private lastHealth = 20;
+  private lastAttackerName: string | null = null;
   private static CHAT_COOLDOWN_MS = 3000;
 
   constructor(options: BotOptions) {
@@ -86,6 +93,7 @@ export class BotInstance {
         food: this.bot?.food,
       }, 'Bot spawned in world');
       this.reconnectAttempts = 0;
+      this.lastHealth = this.bot?.health ?? 20;
 
       if (this.bot) {
         this.bot.physicsEnabled = true;
@@ -135,14 +143,25 @@ export class BotInstance {
         this.bot.pathfinder.stop();
         logger.warn({ bot: this.name }, 'Stopped pathfinder after death');
       }
+      this.stopInstinct('death');
     });
 
     this.bot.on('health', () => {
+      const health = this.bot?.health ?? 20;
       logger.info({
         bot: this.name,
-        health: this.bot?.health,
+        health,
         food: this.bot?.food,
       }, 'Bot health updated');
+      if (this.bot && health < this.lastHealth) {
+        this.triggerAttackInstinct(this.findLikelyThreat(), 'health-drop');
+      }
+      this.lastHealth = health;
+    });
+
+    this.bot.on('entityHurt', (entity: any, source: any) => {
+      if (!this.bot || !entity || entity.id !== this.bot.entity.id) return;
+      this.triggerAttackInstinct(source || this.findLikelyThreat(), 'entity-hurt');
     });
 
     this.bot.on('goal_reached', () => {
@@ -396,7 +415,8 @@ export class BotInstance {
 
       const affinity = this.affinityManager.get(this.name, playerName);
       const isCodegen = this.mode === BotMode.CODEGEN;
-      const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen);
+      const internalState = this.voyagerLoop?.getInternalState();
+      const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen, internalState);
 
       // Build conversation history (current message appended by buildContentsArray)
       const contents = this.conversationManager.buildContentsArray(this.name, playerName, message);
@@ -413,15 +433,16 @@ export class BotInstance {
 
       // Extract [TASK: ...] tag if present (codegen mode)
       const { cleanText, taskDescription } = extractTask(response.text);
-      const safeText = this.sanitizeOutput(cleanText);
+      // Collapse newlines (Minecraft truncates at first \n) and cap length
+      const flatText = this.sanitizeOutput(cleanText).replace(/\n+/g, ' ').trim().slice(0, 200);
 
       // Store both messages in history for future context
       this.conversationManager.addPlayerMessage(this.name, playerName, message);
-      this.conversationManager.addBotResponse(this.name, playerName, safeText);
-      this.bot.chat(safeText);
+      this.conversationManager.addBotResponse(this.name, playerName, flatText);
+      this.bot.chat(flatText);
 
       logger.info(
-        { bot: this.name, player: playerName, response: safeText, tokens: response.inputTokens },
+        { bot: this.name, player: playerName, response: flatText, tokens: response.inputTokens },
         'Chat response sent'
       );
 
@@ -486,7 +507,8 @@ export class BotInstance {
           );
 
           const response = await this.llmClient.generate(systemPrompt, prompt, 60);
-          this.bot.chat(response.text);
+          const ambientText = response.text.replace(/\n+/g, ' ').trim().slice(0, 200);
+          this.bot.chat(ambientText);
 
           logger.info({ bot: this.name, nearPlayer: nearestPlayer }, 'Ambient chat');
         } catch (err: any) {
@@ -512,7 +534,146 @@ export class BotInstance {
     this.voyagerLoop.start();
   }
 
+  private triggerAttackInstinct(source: any, trigger: string): void {
+    if (!this.bot || !this.config.instincts.enabled || this.destroyed) return;
+    this.lastAttackedAt = Date.now();
+    this.lastAttackerName = source?.username || source?.name || null;
+
+    if (!this.instinctActive) {
+      this.instinctActive = true;
+      this.state = BotState.INSTINCT;
+      if (this.bot.pathfinder.isMoving()) {
+        this.bot.pathfinder.stop();
+      }
+      if (this.voyagerLoop?.isRunning() && !this.voyagerLoop.isPaused()) {
+        this.voyagerLoop.pause(`instinct:${trigger}`);
+        this.voyagerPausedByInstinct = true;
+      }
+      logger.warn({ bot: this.name, trigger, attacker: this.lastAttackerName, health: this.bot.health }, 'Attack instinct triggered');
+      this.startInstinctLoop();
+    }
+
+    if (this.instinctResumeTimeout) {
+      clearTimeout(this.instinctResumeTimeout);
+    }
+    this.instinctResumeTimeout = setTimeout(() => this.stopInstinct('attack-cooldown-expired'), this.config.instincts.attackCooldownMs);
+  }
+
+  private startInstinctLoop(): void {
+    if (this.instinctInterval || !this.bot) return;
+    this.instinctInterval = setInterval(() => {
+      if (!this.bot || !this.instinctActive) return;
+      if (this.bot.health <= 0) return;
+
+      const threat = this.findLikelyThreat();
+      if (!threat) {
+        logger.info({ bot: this.name }, 'Instinct active but no nearby threat found');
+        return;
+      }
+
+      if (this.shouldFight(threat)) {
+        this.runFightInstinct(threat);
+      } else {
+        this.runFleeInstinct(threat);
+      }
+    }, 1000);
+  }
+
+  private stopInstinct(reason: string): void {
+    if (this.instinctResumeTimeout) {
+      clearTimeout(this.instinctResumeTimeout);
+      this.instinctResumeTimeout = null;
+    }
+    if (this.instinctInterval) {
+      clearInterval(this.instinctInterval);
+      this.instinctInterval = null;
+    }
+    if (!this.instinctActive) return;
+
+    this.instinctActive = false;
+    this.lastAttackerName = null;
+    if (this.state === BotState.INSTINCT) {
+      this.state = BotState.IDLE;
+    }
+    if (!this.destroyed && this.state !== BotState.DISCONNECTED && this.voyagerPausedByInstinct && this.voyagerLoop) {
+      this.voyagerLoop.resume(`instinct-ended:${reason}`);
+    }
+    this.voyagerPausedByInstinct = false;
+    if (this.mode !== BotMode.CODEGEN) {
+      this.startWandering();
+    }
+    logger.info({ bot: this.name, reason }, 'Instinct ended');
+  }
+
+  private findLikelyThreat(): any | null {
+    if (!this.bot) return null;
+    const hostileNames = new Set(['zombie', 'skeleton', 'creeper', 'spider', 'witch', 'slime', 'pillager', 'drowned', 'husk']);
+    return this.bot.nearestEntity((entity: any) => {
+      if (!entity?.position || entity.id === this.bot?.entity?.id) return false;
+      const dist = entity.position.distanceTo(this.bot!.entity.position);
+      if (dist > 12) return false;
+      if (entity.type === 'hostile') return true;
+      if (hostileNames.has(entity.name)) return true;
+      if (entity.type === 'player' && entity.username !== this.bot!.username) return true;
+      return false;
+    });
+  }
+
+  private shouldFight(threat: any): boolean {
+    if (!this.bot) return false;
+    const lowHealth = this.bot.health <= this.config.instincts.lowHealthThreshold;
+    if (lowHealth) return false;
+    if (threat?.type === 'hostile') {
+      return ['guard', 'blacksmith', 'explorer'].includes(this.personality.toLowerCase()) || this.bot.health > 14;
+    }
+    return ['guard', 'blacksmith'].includes(this.personality.toLowerCase()) && this.bot.health > 12;
+  }
+
+  private runFightInstinct(threat: any): void {
+    if (!this.bot || !threat?.position) return;
+    this.state = BotState.HOSTILE;
+    const { goals } = require('mineflayer-pathfinder');
+    this.bot.pathfinder.setGoal(new goals.GoalFollow(threat, 2), true);
+    const dist = this.bot.entity.position.distanceTo(threat.position);
+    if (dist <= this.config.instincts.fightRange) {
+      try {
+        this.bot.attack(threat);
+      } catch {
+        // noop
+      }
+    }
+    logger.warn({
+      bot: this.name,
+      instinct: 'fight',
+      target: threat.username || threat.name || 'unknown',
+      distance: Number(dist.toFixed(2)),
+      health: this.bot.health,
+    }, 'Instinct action');
+  }
+
+  private runFleeInstinct(threat: any): void {
+    if (!this.bot || !threat?.position) return;
+    this.state = BotState.INSTINCT;
+    const current = this.bot.entity.position;
+    const away = current.minus(threat.position);
+    const dx = away.x === 0 && away.z === 0 ? (Math.random() > 0.5 ? 1 : -1) : away.x;
+    const dz = away.x === 0 && away.z === 0 ? (Math.random() > 0.5 ? 1 : -1) : away.z;
+    const mag = Math.sqrt(dx * dx + dz * dz) || 1;
+    const flee = this.config.instincts.fleeDistance;
+    const target = current.offset((dx / mag) * flee, 0, (dz / mag) * flee);
+    const { goals } = require('mineflayer-pathfinder');
+    this.bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 2));
+    logger.warn({
+      bot: this.name,
+      instinct: 'flee',
+      from: threat.username || threat.name || 'unknown',
+      health: this.bot.health,
+      target: { x: Number(target.x.toFixed(1)), y: Number(target.y.toFixed(1)), z: Number(target.z.toFixed(1)) },
+    }, 'Instinct action');
+  }
+
   private stopAmbientBehaviors(): void {
+    this.stopInstinct('stop-ambient-behaviors');
     if (this.headTrackingInterval) {
       clearInterval(this.headTrackingInterval);
       this.headTrackingInterval = null;

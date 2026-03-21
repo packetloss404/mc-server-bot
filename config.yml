@@ -34,6 +34,13 @@ affinity:
   hostileThreshold: 20
   trustThreshold: 70
 
+instincts:
+  enabled: true
+  attackCooldownMs: 12000
+  lowHealthThreshold: 8
+  fleeDistance: 14
+  fightRange: 3
+
 voyager:
   enabled: true
   taskCooldownMs: 10000

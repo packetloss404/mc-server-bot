@@ -1,30 +1,21 @@
-async function walkToNearestFarmland(bot) {
+async function goToFarmland(bot) {
   try {
-    bot.chat("Searching for nearest farmland...");
     let farmland = bot.findBlock({
       matching: block => block.name === 'farmland',
       maxDistance: 32
     });
-
     if (!farmland) {
-      bot.chat("Farmland not nearby. Exploring...");
-      farmland = await exploreUntil({ x: 1, y: 0, z: 0 }, 60, () => {
+      farmland = await exploreUntil('north', 60, () => {
         return bot.findBlock({
           matching: block => block.name === 'farmland',
           maxDistance: 32
         });
       });
     }
-
     if (farmland) {
-      const pos = farmland.position;
-      bot.chat(`Found farmland at ${pos.x}, ${pos.y}, ${pos.z}. Moving there...`);
-      await moveTo(pos.x, pos.y, pos.z, 1, 30);
-      bot.chat("Reached the farmland.");
-    } else {
-      bot.chat("Could not find any farmland in the area.");
+      await moveTo(farmland.position.x, farmland.position.y + 1, farmland.position.z, 1, 30);
     }
   } catch (err) {
-    bot.chat(`Error walking to farmland: ${err.message}`);
+    // Handle error silently
   }
 }

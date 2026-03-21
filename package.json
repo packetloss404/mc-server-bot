@@ -9,6 +9,9 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.2",
+    "@babel/traverse": "^7.29.0",
     "dotenv": "^17.3.1",
     "express": "^4.21.0",
     "js-yaml": "^4.1.0",
@@ -21,6 +24,8 @@
     "vec3": "^0.1.10"
   },
   "devDependencies": {
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",

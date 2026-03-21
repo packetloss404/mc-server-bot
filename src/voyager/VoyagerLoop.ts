@@ -19,8 +19,14 @@ export class VoyagerLoop {
   private actionAgent: ActionAgent | null;
   private criticAgent: CriticAgent;
   private running = false;
+  private paused = false;
   private loopTimeout: NodeJS.Timeout | null = null;
   private playerTaskQueue: Task[] = [];
+
+  // Exposed state for chat context
+  private currentTask: string | null = null;
+  private lastCompletedTask: string | null = null;
+  private lastFailedTask: string | null = null;
 
   constructor(
     bot: Bot,
@@ -62,6 +68,7 @@ export class VoyagerLoop {
 
   stop(): void {
     this.running = false;
+    this.paused = false;
     if (this.loopTimeout) {
       clearTimeout(this.loopTimeout);
       this.loopTimeout = null;
@@ -71,6 +78,48 @@ export class VoyagerLoop {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  pause(reason = 'paused'): void {
+    if (!this.running || this.paused) return;
+    this.paused = true;
+    if (this.loopTimeout) {
+      clearTimeout(this.loopTimeout);
+      this.loopTimeout = null;
+    }
+    this.codeExecutor.requestInterrupt(reason);
+    logger.warn({ bot: this.botName, reason, task: this.currentTask }, 'Voyager loop paused');
+  }
+
+  resume(reason = 'resumed'): void {
+    if (!this.running || !this.paused) return;
+    this.paused = false;
+    logger.info({ bot: this.botName, reason }, 'Voyager loop resumed');
+    this.scheduleNext();
+  }
+
+  isPaused(): boolean {
+    return this.paused;
+  }
+
+  /** Returns a short summary of what the bot is currently doing, for chat context. */
+  getInternalState(): string {
+    const parts: string[] = [];
+    if (this.currentTask) {
+      parts.push(`Currently working on: ${this.currentTask}`);
+    } else {
+      parts.push('Idle, waiting for next task');
+    }
+    if (this.lastCompletedTask) {
+      parts.push(`Just finished: ${this.lastCompletedTask}`);
+    }
+    if (this.lastFailedTask) {
+      parts.push(`Recently failed: ${this.lastFailedTask}`);
+    }
+    if (this.playerTaskQueue.length > 0) {
+      parts.push(`Queued tasks: ${this.playerTaskQueue.map(t => t.description).join(', ')}`);
+    }
+    return parts.join('. ');
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
@@ -86,7 +135,7 @@ export class VoyagerLoop {
   }
 
   private scheduleNext(): void {
-    if (!this.running) return;
+    if (!this.running || this.paused) return;
 
     this.loopTimeout = setTimeout(async () => {
       if (!this.running) return;
@@ -102,6 +151,7 @@ export class VoyagerLoop {
   }
 
   private async runOneCycle(): Promise<void> {
+    if (this.paused) return;
     // 1. Get task from player queue or curriculum
     const playerTask = this.playerTaskQueue.shift();
     const task = playerTask || await this.curriculumAgent.proposeTask(
@@ -109,6 +159,8 @@ export class VoyagerLoop {
       this.personality,
       this.skillLibrary
     );
+
+    this.currentTask = task.description;
 
     logger.info({
       bot: this.botName,
@@ -149,6 +201,12 @@ export class VoyagerLoop {
         allSkillCode,
       });
 
+      if (execResult.error?.startsWith('Execution interrupted:')) {
+        logger.warn({ bot: this.botName, task: task.description, reason: execResult.error }, 'Voyager task interrupted');
+        this.currentTask = null;
+        return;
+      }
+
       logger.info({
         bot: this.botName,
         execSuccess: execResult.success,
@@ -187,6 +245,8 @@ export class VoyagerLoop {
           generated.functionCode
         );
         this.curriculumAgent.updateProgress(task, true);
+        this.lastCompletedTask = task.description;
+        this.currentTask = null;
         return;
       }
 
@@ -202,6 +262,8 @@ export class VoyagerLoop {
     }
 
     this.curriculumAgent.updateProgress(task, false);
+    this.lastFailedTask = task.description;
+    this.currentTask = null;
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
   }
 

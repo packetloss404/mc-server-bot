@@ -1,39 +1,40 @@
-async function findWheatSeeds(bot) {
+async function getMoreWheatSeeds(bot) {
   try {
-    bot.chat("Looking for wheat seeds...");
-    let seedsFound = 0;
-    const targetSeeds = 1;
+    const targetCount = 5;
+    const getSeedsCount = () => {
+      const item = bot.inventory.items().find(i => i.name === 'wheat_seeds');
+      return item ? item.count : 0;
+    };
 
-    while (seedsFound < targetSeeds) {
-      const grass = bot.findBlock({
-        matching: (block) => ["short_grass", "grass"].includes(block.name),
-        maxDistance: 32,
+    while (getSeedsCount() < targetCount) {
+      let grass = bot.findBlock({
+        matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
+        maxDistance: 32
       });
 
-      if (grass) {
-        bot.chat(`Breaking grass at ${grass.position.x}, ${grass.position.y}, ${grass.position.z}`);
-        await moveTo(grass.position.x, grass.position.y, grass.position.z, 1, 15);
-        const blockToDig = bot.blockAt(grass.position);
-        if (blockToDig) {
-          await bot.dig(blockToDig);
-          // Wait a moment for the item to drop and be picked up
-          await bot.waitForTicks(10);
-        }
-      } else {
-        bot.chat("No grass nearby, wandering to find some...");
-        const pos = bot.entity.position;
-        const dx = (Math.random() - 0.5) * 40;
-        const dz = (Math.random() - 0.5) * 40;
-        await moveTo(pos.x + dx, pos.y, pos.z + dz, 2, 20);
+      if (!grass) {
+        await exploreUntil(bot, 'north', 60, () => {
+          return bot.findBlock({
+            matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
+            maxDistance: 32
+          });
+        });
+        grass = bot.findBlock({
+          matching: (block) => ['short_grass', 'grass', 'tall_grass'].includes(block.name),
+          maxDistance: 32
+        });
       }
 
-      const seedItem = bot.inventory.items().find(item => item.name === "wheat_seeds");
-      if (seedItem) {
-        seedsFound = seedItem.count;
-        bot.chat(`I have found ${seedsFound} wheat seeds!`);
+      if (grass) {
+        await mineBlock(grass.name, 1);
+        await bot.waitForTicks(10);
+      } else {
+        // If still no grass found after exploring, move a bit and try again
+        const pos = bot.entity.position;
+        await moveTo(pos.x + 10, pos.y, pos.z + 10, 2, 20);
       }
     }
-  } catch (err) {
-    bot.chat(`Error while finding seeds: ${err.message}`);
+  } catch (error) {
+    // Handle potential errors during exploration or mining
   }
 }

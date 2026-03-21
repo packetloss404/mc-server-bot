@@ -1,12 +1,16 @@
 import { getPersonality } from '../../personality/PersonalityType';
 
-export function buildSystemPrompt(botName: string, personalityKey: string, affinity: number, codegenMode = false): string {
+export function buildSystemPrompt(botName: string, personalityKey: string, affinity: number, codegenMode = false, internalState?: string): string {
   const personality = getPersonality(personalityKey);
+
+  const stateBlock = internalState
+    ? `\nYOUR CURRENT STATE (use this to answer questions about what you're doing — describe it naturally in character, don't repeat it verbatim):\n${internalState}\n`
+    : '';
 
   return `You are ${botName}, an NPC character in a Minecraft world.
 
 ${personality.systemPromptFragment}
-
+${stateBlock}
 IMPORTANT — WHEN TO RESPOND:
 You can see all nearby player chat. Most of the time, players are NOT talking to you.
 Only respond if ONE of these is clearly true:

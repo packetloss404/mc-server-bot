@@ -64,6 +64,13 @@ export class GeminiClient implements LLMClient {
     if (!parts || parts.length === 0) {
       throw new Error('No parts in Gemini response');
     }
-    return parts[0].text.trim();
+    const text = parts
+      .map((part: any) => (typeof part?.text === 'string' ? part.text : ''))
+      .join('')
+      .trim();
+    if (!text) {
+      throw new Error('No text parts in Gemini response');
+    }
+    return text;
   }
 }

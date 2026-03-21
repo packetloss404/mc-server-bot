@@ -1,4 +1,9 @@
 import { Bot } from 'mineflayer';
+import { parse } from '@babel/parser';
+import traverse from '@babel/traverse';
+import generate from '@babel/generator';
+import type { NodePath } from '@babel/traverse';
+import type { FunctionDeclaration } from '@babel/types';
 import { LLMClient } from '../ai/LLMClient';
 import { SkillLibrary } from './SkillLibrary';
 import { Task } from './CurriculumAgent';
@@ -19,10 +24,13 @@ Reuse these as much as possible. They are the preferred way to act in the world.
 \`\`\`
 async function mineBlock(name, count)    // collect blocks/items
 async function craftItem(name, count)    // craft items
+async function smeltItem(itemName, fuelName, count) // smelt items in a furnace
 async function placeItem(name, x, y, z)  // place blocks
 async function killMob(name, maxMs)      // fight mobs
 async function moveTo(x, y, z, range, timeoutSec) // pathfind to a target
 async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target
+async function withdrawItem(containerName, itemName, count) // withdraw from chest/barrel/etc
+async function depositItem(containerName, itemName, count)  // deposit into chest/barrel/etc
 \`\`\`
 
 ## Bot state / observation APIs
@@ -51,8 +59,10 @@ These are mainly for observing state or selecting a target.
 ## Primitive usage requirements
 - For mining or collecting tasks, use mineBlock(...). Do NOT use bot.dig(...) directly.
 - For crafting tasks, use craftItem(...). Do NOT use bot.craft(...) or bot.recipesFor(...) directly.
+- For smelting tasks, use smeltItem(...). Do NOT use bot.openFurnace(...) directly.
 - For placement tasks, use placeItem(...). Do NOT use bot.placeBlock(...) directly.
 - For combat tasks, use killMob(...). Do NOT use bot.attack(...) directly.
+- For chest or container tasks, use withdrawItem(...) and depositItem(...) instead of scripting container UI manually.
 - For movement tasks, use moveTo(...).
 - If the target is not nearby or cannot be found immediately, use exploreUntil(...) before giving up.
 - Do NOT use bot.pathfinder.setGoal(...) directly unless there is no primitive that can solve the task.
@@ -132,14 +142,9 @@ Write the function:`;
       code = code.substring(funcStart);
     }
 
-    // Extract function name
-    const nameMatch = code.match(/^async\s+function\s+(\w+)\s*\(/m);
-    if (nameMatch) {
-      return {
-        functionName: nameMatch[1],
-        functionCode: code,
-        execCode: `await ${nameMatch[1]}(bot);`,
-      };
+    const parsed = this.extractFunctionWithBabel(code);
+    if (parsed) {
+      return parsed;
     }
 
     // Fallback: LLM returned raw body, wrap it in a function
@@ -153,10 +158,48 @@ Write the function:`;
     }
 
     const wrappedCode = `async function ${fallbackName}(bot) {\n${code}\n}`;
+    this.assertFunctionParses(wrappedCode);
     return {
       functionName: fallbackName,
       functionCode: wrappedCode,
       execCode: `await ${fallbackName}(bot);`,
     };
+  }
+
+  private extractFunctionWithBabel(code: string): GeneratedCode | null {
+    try {
+      const ast = parse(code, {
+        sourceType: 'script',
+        plugins: ['asyncGenerators'],
+      });
+
+      let found: GeneratedCode | null = null;
+      traverse(ast, {
+        FunctionDeclaration(path: NodePath<FunctionDeclaration>) {
+          if (found) return;
+          const node = path.node;
+          if (!node.async || !node.id?.name) return;
+          const functionCode = generate(node).code;
+          found = {
+            functionName: node.id.name,
+            functionCode,
+            execCode: `await ${node.id.name}(bot);`,
+          };
+          path.stop();
+        },
+      });
+
+      return found;
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'ActionAgent Babel parse failed');
+      return null;
+    }
+  }
+
+  private assertFunctionParses(code: string): void {
+    parse(code, {
+      sourceType: 'script',
+      plugins: ['asyncGenerators'],
+    });
   }
 }

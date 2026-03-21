@@ -19,7 +19,9 @@ Reuse these as much as possible. They are the preferred way to act in the world.
 \`\`\`
 async function mineBlock(name, count)    // collect blocks/items
 async function craftItem(name, count)    // craft items
-async function placeItem(name, x, y, z)  // place blocks
+async function placeItem(name, x, y, z)  // place a block from inventory
+async function setBlock(name, x, y, z, state?)  // place ANY block via /setblock (no inventory needed). state is optional e.g. "facing=north,half=top"
+async function fillBlocks(name, x1, y1, z1, x2, y2, z2, mode?) // fill a region via /fill. mode: "replace"|"hollow"|"outline"|"destroy". Great for walls, floors, clearing areas.
 async function killMob(name, maxMs)      // fight mobs
 async function moveTo(x, y, z, range, timeoutSec) // pathfind to a target
 async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target
@@ -56,6 +58,15 @@ These are mainly for observing state or selecting a target.
 - For movement tasks, use moveTo(...).
 - If the target is not nearby or cannot be found immediately, use exploreUntil(...) before giving up.
 - Do NOT use bot.pathfinder.setGoal(...) directly unless there is no primitive that can solve the task.
+
+## Building guidance
+- For building/construction tasks, use setBlock() and fillBlocks() — they work without inventory.
+- Use fillBlocks() for walls, floors, ceilings, and clearing areas. It is much faster than individual setBlock() calls.
+- Use bot.entity.position to get your current location and build relative to it.
+- Build layer by layer from bottom to top.
+- Use appropriate materials: stone_bricks, deepslate_bricks, oak_planks, glass, iron_door, glowstone, etc.
+- For hollow rooms, use fillBlocks with "outline" or build walls/floor/ceiling separately.
+- Add interior details: torches, furniture (stairs as chairs, slabs as tables), carpets, etc.
 
 ## Behavioral guidance
 - First identify the target.

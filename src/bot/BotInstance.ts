@@ -11,6 +11,7 @@ import { ConversationManager } from '../personality/ConversationManager';
 import { buildSystemPrompt, buildAmbientContext } from '../ai/prompts/personality';
 import { analyzeSentiment, parseCommand, extractTask } from '../ai/prompts/chat';
 import { followPlayer } from '../actions/followPlayer';
+import { buildSchematic, listSchematics } from '../actions/buildSchematic';
 import { VoyagerLoop } from '../voyager/VoyagerLoop';
 
 export interface BotOptions {
@@ -379,6 +380,41 @@ export class BotInstance {
         }
         this.state = BotState.IDLE;
         break;
+
+      case 'list-schematics': {
+        const files = listSchematics();
+        if (files.length === 0) {
+          this.bot.chat('No schematics found. Drop .schem or .schematic files in the schematics/ folder.');
+        } else {
+          this.bot.chat(`Available schematics: ${files.join(', ')}`);
+        }
+        break;
+      }
+
+      case 'build-schematic': {
+        const files = listSchematics();
+        const match = files.find((f) => f.toLowerCase() === command.args.toLowerCase());
+        if (!match) {
+          this.bot.chat(`Schematic "${command.args}" not found. Say "list schematics" to see available files.`);
+          break;
+        }
+        this.bot.chat(`Starting build from ${match}. This may take a while...`);
+        this.state = BotState.EXECUTING_TASK;
+        if (this.voyagerLoop) this.voyagerLoop.pause();
+        const origin = this.bot.entity.position.floored();
+        buildSchematic(this.bot, match, { x: origin.x, y: origin.y, z: origin.z }, (placed, total) => {
+          this.bot?.chat(`Building... ${placed}/${total} blocks`);
+        }).then((result) => {
+          if (this.bot) this.bot.chat(result.message);
+          this.state = BotState.IDLE;
+          if (this.voyagerLoop) this.voyagerLoop.resume();
+        }).catch((err) => {
+          this.bot?.chat(`Build failed: ${err.message}`);
+          this.state = BotState.IDLE;
+          if (this.voyagerLoop) this.voyagerLoop.resume();
+        });
+        break;
+      }
     }
   }
 
@@ -405,17 +441,27 @@ export class BotInstance {
 
       const response = await this.llmClient.chat(systemPrompt, contents, this.config.llm.chatMaxTokens);
 
-      // Check if LLM decided not to respond
-      if (response.text.trim() === '[NO_RESPONSE]' || response.text.trim().startsWith('[NO_RESPONSE]')) {
-        logger.info({ bot: this.name, player: playerName }, 'LLM chose not to respond (not addressed)');
-        // Still store the player message for context in future conversations
+      // Check if LLM decided not to respond (empty/blank response = silence)
+      const trimmed = response.text.trim();
+      if (!trimmed || trimmed.toLowerCase().includes('[no_response]') || trimmed.toLowerCase() === 'no_response') {
+        logger.info({ bot: this.name, player: playerName }, 'LLM chose not to respond');
+        // Store both messages to maintain alternating user/model roles in history
         this.conversationManager.addPlayerMessage(this.name, playerName, message);
+        this.conversationManager.addBotResponse(this.name, playerName, '...');
         return;
       }
 
-      // Extract [TASK: ...] tag if present (codegen mode)
+      // Extract >>>TASK: tag if present (codegen mode)
       const { cleanText, taskDescription } = extractTask(response.text);
       const safeText = this.sanitizeOutput(cleanText);
+
+      // Don't send if empty after sanitization
+      if (!safeText) {
+        logger.warn({ bot: this.name, player: playerName, raw: response.text }, 'Suppressed empty response');
+        this.conversationManager.addPlayerMessage(this.name, playerName, message);
+        this.conversationManager.addBotResponse(this.name, playerName, '...');
+        return;
+      }
 
       // Store both messages in history for future context
       this.conversationManager.addPlayerMessage(this.name, playerName, message);
@@ -535,34 +581,30 @@ export class BotInstance {
 
   private sendLongChat(text: string): void {
     if (!this.bot) return;
-    const MAX_LEN = 90; // short chunks — server prefix eats into the limit
-    if (text.length <= MAX_LEN) {
-      this.bot.chat(text);
-      return;
-    }
-    // Split on sentence boundaries or whitespace
-    const chunks: string[] = [];
-    let remaining = text;
-    while (remaining.length > MAX_LEN) {
-      let splitAt = remaining.lastIndexOf('. ', MAX_LEN);
-      if (splitAt < MAX_LEN / 2) splitAt = remaining.lastIndexOf(' ', MAX_LEN);
-      if (splitAt < MAX_LEN / 2) splitAt = MAX_LEN;
-      chunks.push(remaining.slice(0, splitAt + 1).trim());
-      remaining = remaining.slice(splitAt + 1).trim();
-    }
-    if (remaining) chunks.push(remaining);
-
-    const bot = this.bot;
-    chunks.forEach((chunk, i) => {
-      setTimeout(() => bot.chat(chunk), i * 1000);
-    });
+    // Mineflayer automatically splits messages at 256 chars.
+    // Just send the text directly.
+    this.bot.chat(text);
   }
 
   private sanitizeOutput(text: string): string {
-    // Strip anything that looks like an API key (AIza..., sk-..., etc.)
-    return text.replace(/AIza[A-Za-z0-9_-]{30,}/g, '[REDACTED]')
+    // Strip API keys
+    let clean = text.replace(/AIza[A-Za-z0-9_-]{30,}/g, '[REDACTED]')
       .replace(/sk-[A-Za-z0-9]{20,}/g, '[REDACTED]')
       .replace(/key[=:\s]+[A-Za-z0-9_-]{20,}/gi, '[REDACTED]');
+    // Strip any leaked [NO_RESPONSE] tags
+    clean = clean.replace(/\[no_response\]/gi, '').trim();
+    // Strip task tags that weren't caught by extractTask
+    clean = clean.replace(/\[TASK:[^\]]*\]/gi, '').trim();
+    clean = clean.replace(/>>>TASK:.*/gi, '').trim();
+    return clean;
+  }
+
+  private isBreakingCharacter(text: string): boolean {
+    const lower = text.toLowerCase();
+    return lower.includes('system instruction') ||
+      lower.includes('i am an ai') || lower.includes('i\'m an ai') ||
+      lower.includes('language model') || lower.includes('as an ai') ||
+      lower.includes('i am a bot') || lower.includes('i\'m a bot');
   }
 
   setMode(newMode: BotMode): void {

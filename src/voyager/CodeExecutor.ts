@@ -118,6 +118,18 @@ export class CodeExecutor {
         logs.push(`[primitive] placeItem result: ${result.message}`);
         return result;
       },
+      setBlock: async (name: string, x: number, y: number, z: number, state?: string) => {
+        const blockSpec = state ? `minecraft:${name}[${state}]` : `minecraft:${name}`;
+        bot.chat(`/setblock ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)} ${blockSpec} replace`);
+        logs.push(`[primitive] setBlock("${blockSpec}", ${Math.floor(x)}, ${Math.floor(y)}, ${Math.floor(z)})`);
+        await new Promise((r) => setTimeout(r, 50));
+      },
+      fillBlocks: async (name: string, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, mode = 'replace') => {
+        const blockSpec = `minecraft:${name}`;
+        bot.chat(`/fill ${Math.floor(x1)} ${Math.floor(y1)} ${Math.floor(z1)} ${Math.floor(x2)} ${Math.floor(y2)} ${Math.floor(z2)} ${blockSpec} ${mode}`);
+        logs.push(`[primitive] fillBlocks("${name}", ${x1},${y1},${z1} -> ${x2},${y2},${z2}, ${mode})`);
+        await new Promise((r) => setTimeout(r, 100));
+      },
       killMob: async (name: string, maxDuration = 30000) => {
         logs.push(`[primitive] killMob("${name}")`);
         const result = await attack(bot, name, maxDuration);

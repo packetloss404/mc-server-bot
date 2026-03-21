@@ -54,6 +54,14 @@ export class ConversationManager {
   private trim(botName: string, playerName: string): void {
     const history = this.getOrCreate(botName, playerName);
     while (history.length > this.maxHistory) {
+      // Remove in pairs to maintain alternating user/model roles
+      history.shift();
+      if (history.length > 0 && history[0].role === 'model') {
+        history.shift();
+      }
+    }
+    // Ensure history always starts with 'user' role (Gemini requirement)
+    while (history.length > 0 && history[0].role === 'model') {
       history.shift();
     }
   }

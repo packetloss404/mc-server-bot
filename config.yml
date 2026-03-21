@@ -38,16 +38,16 @@ voyager:
   enabled: true
   taskCooldownMs: 10000
   maxRetriesPerTask: 3
-  codeExecutionTimeoutMs: 120000
+  codeExecutionTimeoutMs: 300000
   curriculumLLMCalls: true
   criticLLMCalls: true
 
 llm:
   provider: "gemini"
-  model: "gemini-3-flash-preview"
+  model: "gemini-3.1-pro-preview"
   temperature: 0.9
-  chatMaxTokens: 300
-  codeGenMaxTokens: 1024
+  chatMaxTokens: 1024
+  codeGenMaxTokens: 4096
   maxConcurrentRequests: 3
 
 skills:

@@ -10,4 +10,5 @@ export { attack } from './attack';
 export { giveItem } from './giveItem';
 export { idle } from './idle';
 export { say } from './say';
+export { buildSchematic, listSchematics } from './buildSchematic';
 export type { ActionResult } from './types';

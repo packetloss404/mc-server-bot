@@ -32,6 +32,7 @@ async function moveTo(x, y, z, range, timeoutSec) // pathfind to a target
 async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target
 async function withdrawItem(containerName, itemName, count) // withdraw from chest/barrel/etc
 async function depositItem(containerName, itemName, count)  // deposit into chest/barrel/etc
+async function inspectContainer(containerName) // inspect container contents
 \`\`\`
 
 ## Bot state / observation APIs
@@ -70,6 +71,7 @@ These are mainly for observing state or selecting a target.
 - For placement tasks, use placeItem(...). Do NOT use bot.placeBlock(...) directly.
 - For combat tasks, use killMob(...). Do NOT use bot.attack(...) directly.
 - For chest or container tasks, use withdrawItem(...) and depositItem(...) instead of scripting container UI manually.
+- Use inspectContainer(...) when you need to check what is inside a nearby chest/container.
 - For movement tasks, use moveTo(...).
 - If the target is not nearby or cannot be found immediately, use exploreUntil(...) before giving up.
 - Do NOT use bot.pathfinder.setGoal(...) directly unless there is no primitive that can solve the task.

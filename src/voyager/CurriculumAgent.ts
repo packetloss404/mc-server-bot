@@ -37,7 +37,8 @@ You should:
 6. Encourage exploration and progression (mine → craft → build → explore)
 7. Consider the bot's personality when choosing tasks
 
-Output ONLY a JSON object with no markdown fences: {"reasoning": "why this task", "task": "the task description", "keywords": ["keyword1", "keyword2"]}`;
+Output ONLY a JSON object with no markdown fences: {"reasoning": "brief 1-sentence reason", "task": "the task description", "keywords": ["keyword1", "keyword2"]}
+IMPORTANT: Keep reasoning under 20 words. Do NOT write long explanations. The entire JSON must fit in one short response.`;
 
 // Large progression-aware fallback pool used when LLM is unavailable.
 // Tasks are ordered by progression stage; proposeStaticTask picks the first feasible & uncompleted one.
@@ -323,9 +324,24 @@ Last task: ${this.lastTask || 'none'}
 
 Propose the next task:`;
 
-      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 300);
+      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000);
+      logger.debug({ rawResponse: response.text.slice(0, 500) }, 'Curriculum LLM raw response');
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
-      const parsed = JSON.parse(cleaned);
+      // Extract first JSON object if LLM wraps it in extra text
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) throw new Error(`No JSON object found in response: ${cleaned.slice(0, 200)}`);
+      let parsed: any;
+      try {
+        parsed = JSON.parse(jsonMatch[0]);
+      } catch {
+        // Truncated JSON — try to salvage the task field via regex
+        const taskMatch = jsonMatch[0].match(/"task"\s*:\s*"([^"]+)"/);
+        if (!taskMatch) throw new Error(`Truncated JSON, could not extract task: ${cleaned.slice(0, 200)}`);
+        const kwMatch = jsonMatch[0].match(/"keywords"\s*:\s*\[([^\]]*)\]/);
+        const keywords = kwMatch ? kwMatch[1].match(/"([^"]+)"/g)?.map(s => s.replace(/"/g, '')) || [] : [];
+        parsed = { task: taskMatch[1], keywords };
+        logger.info({ task: parsed.task }, 'Curriculum: salvaged task from truncated LLM JSON');
+      }
       this.lastTask = parsed.task || parsed.description;
 
       const taskContext = await this.getTaskContext(parsed.task || parsed.description, bot);
@@ -562,7 +578,7 @@ Goal: ${description}
 
 Decompose into ordered subtasks:`;
 
-      const response = await this.llmClient.generate(systemPrompt, userMessage, 300);
+      const response = await this.llmClient.generate(systemPrompt, userMessage, 1000);
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const subtasks: string[] = JSON.parse(cleaned);
 

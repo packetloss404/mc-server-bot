@@ -7,7 +7,7 @@ import { craft } from '../actions/craft';
 import { placeBlock } from '../actions/placeBlock';
 import { attack } from '../actions/attack';
 import { smelt } from '../actions/smelt';
-import { depositToContainer, withdrawFromContainer } from '../actions/container';
+import { depositToContainer, inspectContainer, withdrawFromContainer } from '../actions/container';
 
 export interface ExecutionResult {
   success: boolean;
@@ -215,6 +215,16 @@ export class CodeExecutor {
         pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'depositItem', containerName, itemName, count });
         return result;
       },
+      inspectContainer: async (containerName: string) => {
+        throwIfInterrupted();
+        logs.push(`[primitive] inspectContainer("${containerName}")`);
+        pushEvent('primitive_start', `inspectContainer ${containerName}`, { primitive: 'inspectContainer', containerName });
+        const result = await inspectContainer(bot, containerName);
+        const message = result.message || 'inspectContainer completed';
+        logs.push(`[primitive] inspectContainer result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'inspectContainer', containerName });
+        return result;
+      },
       killMob: async (name: string, maxDuration = 30000) => {
         throwIfInterrupted();
         logs.push(`[primitive] killMob("${name}")`);
@@ -275,54 +285,74 @@ export class CodeExecutor {
           cleanupTrace();
           throw new Error('exploreUntil requires direction { x, y, z }');
         }
+        const validAxis = [direction.x, direction.y, direction.z].every((value) => value === -1 || value === 0 || value === 1);
+        if (!validAxis || (direction.x === 0 && direction.y === 0 && direction.z === 0)) {
+          logs.push(`[primitive] exploreUntil: invalid discrete direction ${JSON.stringify(direction)}`);
+          pushEvent('primitive_failure', 'exploreUntil invalid discrete direction', { primitive: 'exploreUntil', direction });
+          cleanupTrace();
+          throw new Error('exploreUntil direction must use only -1, 0, or 1 and cannot be 0,0,0');
+        }
         const startTime = Date.now();
         const dir = new Vec3(direction.x, direction.y, direction.z);
-        let iteration = 0;
-        while (Date.now() - startTime < maxTime * 1000) {
-          throwIfInterrupted();
-          iteration++;
-          const found = callback();
-          if (found) {
-            const blockPos = (found as any)?.position;
-            logs.push(`[primitive] exploreUntil: found target on iteration=${iteration}${blockPos ? ` at (${blockPos.x}, ${blockPos.y}, ${blockPos.z})` : ''}`);
-            pushEvent('primitive_success', 'exploreUntil found target', { primitive: 'exploreUntil', iteration, blockPos });
+        return await new Promise<any>((resolve, reject) => {
+          let iteration = 0;
+          const cleanUp = () => {
+            clearInterval(explorationInterval);
+            clearTimeout(maxTimeTimeout);
+            bot.pathfinder.setGoal(null as any);
             cleanupTrace();
-            return found;
-          }
-          const pos = bot.entity.position;
-          const target = pos.offset(dir.x * 16, dir.y * 16, dir.z * 16);
-          logs.push(`[primitive] exploreUntil: iteration=${iteration} moving from (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) toward (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
-          bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 3));
-          await new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => {
-              bot.pathfinder.stop();
-              logs.push(`[primitive] exploreUntil: iteration=${iteration} timed out waiting for goal`);
-              pushEvent('path_timeout', 'exploreUntil iteration timed out', { primitive: 'exploreUntil', iteration });
-              cleanupInterrupt();
-              resolve();
-            }, 10000);
-            const cleanupInterrupt = onInterrupt((reason) => {
-              clearTimeout(timeout);
-              bot.pathfinder.stop();
-              logs.push(`[primitive] exploreUntil: interrupted (${reason}) on iteration=${iteration}`);
-              pushEvent('interrupt', `exploreUntil interrupted: ${reason}`, { primitive: 'exploreUntil', iteration, reason });
-              cleanupInterrupt();
-              reject(new Error(`Execution interrupted: ${reason}`));
-            });
-            bot.once('goal_reached' as any, () => {
-              clearTimeout(timeout);
-              const reachedPos = bot.entity.position;
-              logs.push(`[primitive] exploreUntil: iteration=${iteration} goal reached at (${reachedPos.x.toFixed(1)}, ${reachedPos.y.toFixed(1)}, ${reachedPos.z.toFixed(1)})`);
-              pushEvent('path_goal_reached', 'exploreUntil iteration goal reached', { primitive: 'exploreUntil', iteration });
-              cleanupInterrupt();
-              resolve();
-            });
+            cleanupInterrupt();
+          };
+
+          const cleanupInterrupt = onInterrupt((reason) => {
+            logs.push(`[primitive] exploreUntil: interrupted (${reason})`);
+            pushEvent('interrupt', `exploreUntil interrupted: ${reason}`, { primitive: 'exploreUntil', reason });
+            cleanUp();
+            reject(new Error(`Execution interrupted: ${reason}`));
           });
-        }
-        logs.push('[primitive] exploreUntil: timed out');
-        pushEvent('primitive_failure', 'exploreUntil timed out', { primitive: 'exploreUntil', maxTime });
-        cleanupTrace();
-        return null;
+
+          const explore = () => {
+            try {
+              throwIfInterrupted();
+              iteration++;
+              const found = callback();
+              if (found) {
+                const blockPos = (found as any)?.position;
+                logs.push(`[primitive] exploreUntil: found target on iteration=${iteration}${blockPos ? ` at (${blockPos.x}, ${blockPos.y}, ${blockPos.z})` : ''}`);
+                pushEvent('primitive_success', 'exploreUntil found target', { primitive: 'exploreUntil', iteration, blockPos });
+                cleanUp();
+                resolve(found);
+                return;
+              }
+
+              const stepX = dir.x === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.x;
+              const stepY = dir.y === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.y;
+              const stepZ = dir.z === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.z;
+              const pos = bot.entity.position;
+              const target = pos.offset(stepX, stepY, stepZ);
+              logs.push(`[primitive] exploreUntil: iteration=${iteration} moving from (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) toward (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
+
+              if (dir.y === 0) {
+                bot.pathfinder.setGoal(new goals.GoalNearXZ(target.x, target.z, 3) as any);
+              } else {
+                bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 3));
+              }
+            } catch (err: any) {
+              cleanUp();
+              reject(err);
+            }
+          };
+
+          const explorationInterval = setInterval(explore, 2000);
+          const maxTimeTimeout = setTimeout(() => {
+            logs.push('[primitive] exploreUntil: timed out');
+            pushEvent('primitive_failure', 'exploreUntil timed out', { primitive: 'exploreUntil', maxTime });
+            cleanUp();
+            resolve(null);
+          }, Math.min(maxTime, 1200) * 1000);
+
+          explore();
+        });
       },
     };
 

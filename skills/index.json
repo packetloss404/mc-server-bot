@@ -377,6 +377,9 @@
     "file": "craft_a_wooden_shovel.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "mine_8_cobblestone",
     "description": "Mine 8 cobblestone",
     "keywords": [
@@ -384,12 +387,12 @@
       "cobblestone",
       "stone"
     ],
-    "file": "mine_8_cobblestone.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "mine_8_cobblestone.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "break_the_nearest_chest",
     "description": "Break the nearest chest",
     "keywords": [
@@ -398,12 +401,12 @@
       "nearest",
       "chest"
     ],
-    "file": "break_the_nearest_chest.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "break_the_nearest_chest.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "mine_3_cobblestone",
     "description": "Mine 3 cobblestone",
     "keywords": [
@@ -411,12 +414,12 @@
       "cobblestone",
       "stone"
     ],
-    "file": "mine_3_cobblestone.js",
-    "quality": 0.9,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "mine_3_cobblestone.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "craft_a_wooden_axe",
     "description": "Craft a wooden axe",
     "keywords": [
@@ -424,12 +427,12 @@
       "wooden_axe",
       "tool"
     ],
-    "file": "craft_a_wooden_axe.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "craft_a_wooden_axe.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "craft_a_wooden_pickaxe",
     "description": "Craft a wooden pickaxe",
     "keywords": [
@@ -437,12 +440,12 @@
       "pickaxe",
       "wood"
     ],
-    "file": "craft_a_wooden_pickaxe.js",
-    "quality": 0.9,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "craft_a_wooden_pickaxe.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 4,
+    "failureCount": 0,
     "name": "explore_50_blocks_to_the",
     "description": "Explore 50 blocks to the west",
     "keywords": [
@@ -450,12 +453,12 @@
       "walk",
       "west"
     ],
-    "file": "explore_50_blocks_to_the.js",
-    "quality": 0.8,
-    "successCount": 4,
-    "failureCount": 0
+    "file": "explore_50_blocks_to_the.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "craft_a_stone_sword",
     "description": "Craft a stone sword",
     "keywords": [
@@ -463,7 +466,17 @@
       "stone_sword",
       "tool"
     ],
-    "file": "craft_a_stone_sword.js",
+    "file": "craft_a_stone_sword.js"
+  },
+  {
+    "name": "mine_1_birch_log",
+    "description": "Mine 1 birch log",
+    "keywords": [
+      "mine",
+      "birch_log",
+      "wood"
+    ],
+    "file": "mine_1_birch_log.js",
     "quality": 0.8,
     "successCount": 1,
     "failureCount": 0

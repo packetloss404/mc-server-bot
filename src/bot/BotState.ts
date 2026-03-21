@@ -1,0 +1,16 @@
+export enum BotState {
+  SPAWNING = 'SPAWNING',
+  IDLE = 'IDLE',
+  WANDERING = 'WANDERING',
+  FOLLOWING = 'FOLLOWING',
+  MINING = 'MINING',
+  PATROLLING = 'PATROLLING',
+  HOSTILE = 'HOSTILE',
+  EXECUTING_TASK = 'EXECUTING_TASK',
+  DISCONNECTED = 'DISCONNECTED',
+}
+
+export enum BotMode {
+  PRIMITIVE = 'primitive',
+  CODEGEN = 'codegen',
+}

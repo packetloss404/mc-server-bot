@@ -1,0 +1,258 @@
+[
+  {
+    "name": "wander_randomly",
+    "description": "Walk to a random nearby position",
+    "keywords": [
+      "wander",
+      "walk",
+      "explore",
+      "random",
+      "move"
+    ],
+    "file": "wander_randomly.js"
+  },
+  {
+    "name": "look_at_nearest_player",
+    "description": "Look at the nearest player",
+    "keywords": [
+      "look",
+      "player",
+      "watch",
+      "observe"
+    ],
+    "file": "look_at_nearest_player.js"
+  },
+  {
+    "name": "announce_wares",
+    "description": "Announce trading wares to nearby players",
+    "keywords": [
+      "announce",
+      "trade",
+      "wares",
+      "merchant",
+      "chat",
+      "sell"
+    ],
+    "file": "announce_wares.js"
+  },
+  {
+    "name": "patrol_square",
+    "description": "Patrol in a square pattern around current position",
+    "keywords": [
+      "patrol",
+      "guard",
+      "walk",
+      "square",
+      "perimeter"
+    ],
+    "file": "patrol_square.js"
+  },
+  {
+    "name": "idle_and_look_around",
+    "description": "Stand idle and look around randomly",
+    "keywords": [
+      "idle",
+      "stand",
+      "wait",
+      "look",
+      "rest"
+    ],
+    "file": "idle_and_look_around.js"
+  },
+  {
+    "name": "walk_to_nearest_player",
+    "description": "Walk to the nearest player",
+    "keywords": [
+      "walk",
+      "player",
+      "approach",
+      "move",
+      "go"
+    ],
+    "file": "walk_to_nearest_player.js"
+  },
+  {
+    "name": "challenge_stranger",
+    "description": "Challenge a nearby player as a guard would",
+    "keywords": [
+      "challenge",
+      "guard",
+      "chat",
+      "player",
+      "halt"
+    ],
+    "file": "challenge_stranger.js"
+  },
+  {
+    "name": "share_wisdom",
+    "description": "Share a wise saying about Minecraft",
+    "keywords": [
+      "wisdom",
+      "elder",
+      "chat",
+      "say",
+      "proverb"
+    ],
+    "file": "share_wisdom.js"
+  },
+  {
+    "name": "mine_the_nearest_oak_log",
+    "description": "mine the nearest oak log",
+    "keywords": [
+      "mine",
+      "the",
+      "nearest",
+      "oak",
+      "log"
+    ],
+    "file": "mine_the_nearest_oak_log.js"
+  },
+  {
+    "name": "mine_the_block_the_player",
+    "description": "mine the block the player is looking at",
+    "keywords": [
+      "mine",
+      "the",
+      "block",
+      "the",
+      "player",
+      "looking"
+    ],
+    "file": "mine_the_block_the_player.js"
+  },
+  {
+    "name": "point_the_player_towards_the",
+    "description": "point the player towards the nearest forest",
+    "keywords": [
+      "point",
+      "the",
+      "player",
+      "towards",
+      "the",
+      "nearest",
+      "forest"
+    ],
+    "file": "point_the_player_towards_the.js"
+  },
+  {
+    "name": "mine_3_blocks_of_grass",
+    "description": "mine 3 blocks of grass",
+    "keywords": [
+      "mine",
+      "blocks",
+      "grass"
+    ],
+    "file": "mine_3_blocks_of_grass.js"
+  },
+  {
+    "name": "mine_1_oak_log",
+    "description": "Mine 1 oak log",
+    "keywords": [
+      "mine",
+      "oak_log",
+      "wood"
+    ],
+    "file": "mine_1_oak_log.js"
+  },
+  {
+    "name": "walk_to_the_nearest_player",
+    "description": "Walk to the nearest player",
+    "keywords": [
+      "guard",
+      "protect",
+      "player"
+    ],
+    "file": "walk_to_the_nearest_player.js"
+  },
+  {
+    "name": "find_a_water_source",
+    "description": "find a water source",
+    "keywords": [
+      "find",
+      "water",
+      "source"
+    ],
+    "file": "find_a_water_source.js"
+  },
+  {
+    "name": "challengestranger",
+    "description": "challenge_stranger",
+    "keywords": [
+      "challenge",
+      "guard",
+      "player"
+    ],
+    "file": "challengestranger.js"
+  },
+  {
+    "name": "find_the_nearest_water_source",
+    "description": "find the nearest water source",
+    "keywords": [
+      "find",
+      "the",
+      "nearest",
+      "water",
+      "source"
+    ],
+    "file": "find_the_nearest_water_source.js"
+  },
+  {
+    "name": "announce_trading_wares",
+    "description": "Announce trading wares",
+    "keywords": [
+      "interaction",
+      "trade",
+      "announcement"
+    ],
+    "file": "announce_trading_wares.js"
+  },
+  {
+    "name": "pointtheplayertowardsthenearestforest",
+    "description": "point_the_player_towards_the_nearest_forest",
+    "keywords": [
+      "forest",
+      "direction"
+    ],
+    "file": "pointtheplayertowardsthenearestforest.js"
+  },
+  {
+    "name": "share_wisdom_with_nearby_player",
+    "description": "Share wisdom with nearby player",
+    "keywords": [
+      "share",
+      "wisdom",
+      "player"
+    ],
+    "file": "share_wisdom_with_nearby_player.js"
+  },
+  {
+    "name": "explore_and_find_wheat_seeds",
+    "description": "Explore and find wheat seeds",
+    "keywords": [
+      "explore",
+      "seeds",
+      "wheat"
+    ],
+    "file": "explore_and_find_wheat_seeds.js"
+  },
+  {
+    "name": "craft_a_wooden_hoe",
+    "description": "Craft a wooden hoe",
+    "keywords": [
+      "craft",
+      "hoe",
+      "wood"
+    ],
+    "file": "craft_a_wooden_hoe.js"
+  },
+  {
+    "name": "walk_to_the_nearest_farmland",
+    "description": "Walk to the nearest farmland",
+    "keywords": [
+      "walk",
+      "farm",
+      "crops"
+    ],
+    "file": "walk_to_the_nearest_farmland.js"
+  }
+]

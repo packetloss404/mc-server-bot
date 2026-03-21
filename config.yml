@@ -1,0 +1,58 @@
+# DyoBot Sidecar Configuration
+
+api:
+  port: 3001
+  host: "127.0.0.1"
+
+minecraft:
+  host: "87.99.133.148"
+  port: 25565
+  version: "1.21.11"
+  auth: "offline"
+
+bots:
+  maxBots: 10
+  defaultMode: "codegen"
+  reconnectDelaySec: 5
+  maxReconnectAttempts: 10
+
+behavior:
+  headTrackingRange: 10
+  headTrackingTickMs: 250
+  wanderRadius: 15
+  wanderIntervalMs: 5000
+  ambientChatMinSec: 120
+  ambientChatMaxSec: 300
+  conversationRadius: 20.0
+
+affinity:
+  default: 50
+  hitPenalty: 10
+  chatBonus: 2
+  giftBonus: 5
+  negativeSentimentPenalty: 3
+  hostileThreshold: 20
+  trustThreshold: 70
+
+voyager:
+  enabled: true
+  taskCooldownMs: 10000
+  maxRetriesPerTask: 3
+  codeExecutionTimeoutMs: 120000
+  curriculumLLMCalls: true
+  criticLLMCalls: true
+
+llm:
+  provider: "gemini"
+  model: "gemini-3-flash-preview"
+  temperature: 0.9
+  chatMaxTokens: 150
+  codeGenMaxTokens: 1024
+  maxConcurrentRequests: 3
+
+skills:
+  directory: "./skills"
+  maxSkills: 500
+
+logging:
+  level: "debug"

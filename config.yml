@@ -5,7 +5,7 @@ api:
   host: "127.0.0.1"
 
 minecraft:
-  host: "87.99.133.148"
+  host: "play.dyoburon.com"
   port: 25565
   version: "1.21.11"
   auth: "offline"
@@ -23,7 +23,7 @@ behavior:
   wanderIntervalMs: 5000
   ambientChatMinSec: 120
   ambientChatMaxSec: 300
-  conversationRadius: 20.0
+  conversationRadius: 64.0
 
 affinity:
   default: 50
@@ -46,7 +46,7 @@ llm:
   provider: "gemini"
   model: "gemini-3-flash-preview"
   temperature: 0.9
-  chatMaxTokens: 150
+  chatMaxTokens: 300
   codeGenMaxTokens: 1024
   maxConcurrentRequests: 3
 

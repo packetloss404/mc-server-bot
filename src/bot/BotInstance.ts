@@ -365,8 +365,10 @@ export class BotInstance {
       case 'follow':
         this.bot.chat(`Alright ${playerName}, I'll follow you.`);
         this.state = BotState.FOLLOWING;
-        followPlayer(this.bot, playerName, 120000).finally(() => {
+        if (this.voyagerLoop) this.voyagerLoop.pause();
+        followPlayer(this.bot, playerName, 600000).finally(() => {
           if (this.state === BotState.FOLLOWING) this.state = BotState.IDLE;
+          if (this.voyagerLoop) this.voyagerLoop.resume();
         });
         break;
 
@@ -418,7 +420,7 @@ export class BotInstance {
       // Store both messages in history for future context
       this.conversationManager.addPlayerMessage(this.name, playerName, message);
       this.conversationManager.addBotResponse(this.name, playerName, safeText);
-      this.bot.chat(safeText);
+      this.sendLongChat(safeText);
 
       logger.info(
         { bot: this.name, player: playerName, response: safeText, tokens: response.inputTokens },
@@ -529,6 +531,31 @@ export class BotInstance {
       this.voyagerLoop.stop();
       this.voyagerLoop = null;
     }
+  }
+
+  private sendLongChat(text: string): void {
+    if (!this.bot) return;
+    const MAX_LEN = 90; // short chunks — server prefix eats into the limit
+    if (text.length <= MAX_LEN) {
+      this.bot.chat(text);
+      return;
+    }
+    // Split on sentence boundaries or whitespace
+    const chunks: string[] = [];
+    let remaining = text;
+    while (remaining.length > MAX_LEN) {
+      let splitAt = remaining.lastIndexOf('. ', MAX_LEN);
+      if (splitAt < MAX_LEN / 2) splitAt = remaining.lastIndexOf(' ', MAX_LEN);
+      if (splitAt < MAX_LEN / 2) splitAt = MAX_LEN;
+      chunks.push(remaining.slice(0, splitAt + 1).trim());
+      remaining = remaining.slice(splitAt + 1).trim();
+    }
+    if (remaining) chunks.push(remaining);
+
+    const bot = this.bot;
+    chunks.forEach((chunk, i) => {
+      setTimeout(() => bot.chat(chunk), i * 1000);
+    });
   }
 
   private sanitizeOutput(text: string): string {

@@ -19,6 +19,7 @@ export class VoyagerLoop {
   private actionAgent: ActionAgent | null;
   private criticAgent: CriticAgent;
   private running = false;
+  private paused = false;
   private loopTimeout: NodeJS.Timeout | null = null;
   private playerTaskQueue: Task[] = [];
 
@@ -73,6 +74,22 @@ export class VoyagerLoop {
     return this.running;
   }
 
+  pause(): void {
+    this.paused = true;
+    if (this.loopTimeout) {
+      clearTimeout(this.loopTimeout);
+      this.loopTimeout = null;
+    }
+    logger.info({ bot: this.botName }, 'Voyager loop paused');
+  }
+
+  resume(): void {
+    if (!this.paused) return;
+    this.paused = false;
+    logger.info({ bot: this.botName }, 'Voyager loop resumed');
+    if (this.running) this.scheduleNext();
+  }
+
   queuePlayerTask(description: string, requestedBy: string): void {
     const keywords = description
       .toLowerCase()
@@ -89,7 +106,7 @@ export class VoyagerLoop {
     if (!this.running) return;
 
     this.loopTimeout = setTimeout(async () => {
-      if (!this.running) return;
+      if (!this.running || this.paused) return;
 
       try {
         await this.runOneCycle();

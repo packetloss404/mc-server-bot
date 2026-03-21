@@ -29,6 +29,13 @@ export interface Config {
     hostileThreshold: number;
     trustThreshold: number;
   };
+  instincts: {
+    enabled: boolean;
+    attackCooldownMs: number;
+    lowHealthThreshold: number;
+    fleeDistance: number;
+    fightRange: number;
+  };
   voyager: {
     enabled: boolean;
     taskCooldownMs: number;

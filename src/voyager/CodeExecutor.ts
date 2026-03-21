@@ -1,17 +1,25 @@
 import vm from 'vm';
 import { Bot } from 'mineflayer';
-import { goals, Movements } from 'mineflayer-pathfinder';
+import { goals } from 'mineflayer-pathfinder';
 import { Vec3 } from 'vec3';
-import { logger } from '../util/logger';
 import { mineBlock } from '../actions/mineBlock';
 import { craft } from '../actions/craft';
 import { placeBlock } from '../actions/placeBlock';
 import { attack } from '../actions/attack';
+import { smelt } from '../actions/smelt';
+import { depositToContainer, inspectContainer, withdrawFromContainer } from '../actions/container';
 
 export interface ExecutionResult {
   success: boolean;
   output: string;
   error?: string;
+  events: ExecutionEvent[];
+}
+
+export interface ExecutionEvent {
+  type: string;
+  message: string;
+  data?: Record<string, unknown>;
 }
 
 export interface ExecuteParams {
@@ -20,25 +28,59 @@ export interface ExecuteParams {
   allSkillCode: string;
 }
 
-/**
- * Executes LLM-generated JavaScript in a sandboxed vm context.
- * The code gets access to a bot proxy with whitelisted Mineflayer APIs,
- * but no access to require, process, eval, or the filesystem.
- */
+type InterruptState = {
+  interrupted: boolean;
+  reason: string;
+  listeners: Set<(reason: string) => void>;
+};
+
 export class CodeExecutor {
   private timeoutMs: number;
+  private currentInterrupt: InterruptState | null = null;
 
   constructor(timeoutMs: number) {
     this.timeoutMs = timeoutMs;
   }
 
+  requestInterrupt(reason = 'Execution interrupted'): void {
+    if (!this.currentInterrupt || this.currentInterrupt.interrupted) return;
+    this.currentInterrupt.interrupted = true;
+    this.currentInterrupt.reason = reason;
+    for (const listener of this.currentInterrupt.listeners) {
+      listener(reason);
+    }
+    this.currentInterrupt.listeners.clear();
+  }
+
   async execute(bot: Bot, params: ExecuteParams | string): Promise<ExecutionResult> {
     const logs: string[] = [];
+    const events: ExecutionEvent[] = [];
     const startPos = bot.entity.position.clone();
+    const interruptState: InterruptState = {
+      interrupted: false,
+      reason: 'Execution interrupted',
+      listeners: new Set(),
+    };
+    this.currentInterrupt = interruptState;
+
+    const throwIfInterrupted = () => {
+      if (interruptState.interrupted) {
+        throw new Error(`Execution interrupted: ${interruptState.reason}`);
+      }
+    };
+
+    const onInterrupt = (listener: (reason: string) => void) => {
+      interruptState.listeners.add(listener);
+      return () => interruptState.listeners.delete(listener);
+    };
 
     const pushPos = (label: string) => {
       const pos = bot.entity.position;
       logs.push(`${label} pos=(${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) moving=${bot.pathfinder.isMoving()}`);
+    };
+
+    const pushEvent = (type: string, message: string, data?: Record<string, unknown>) => {
+      events.push({ type, message, data });
     };
 
     const addMovementTrace = (label: string) => {
@@ -76,10 +118,24 @@ export class CodeExecutor {
       };
     };
 
+    const interruptibleDelay = (ms: number) => {
+      throwIfInterrupted();
+      return new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(() => {
+          cleanup();
+          resolve();
+        }, ms);
+        const cleanup = onInterrupt((reason) => {
+          clearTimeout(timeout);
+          cleanup();
+          reject(new Error(`Execution interrupted: ${reason}`));
+        });
+      });
+    };
+
     pushPos('[exec] start');
 
-    // Build the whitelisted bot proxy
-    const botProxy = this.createBotProxy(bot, logs);
+    const botProxy = this.createBotProxy(bot, logs, interruptibleDelay);
 
     const sandbox = {
       bot: botProxy,
@@ -96,26 +152,77 @@ export class CodeExecutor {
       clearTimeout,
       Promise,
 
-      // Control primitives — high-level helpers the LLM should prefer over raw API
       mineBlock: async (name: string, count = 1) => {
+        throwIfInterrupted();
         const beforeItems = bot.inventory.items().map((i) => `${i.name}x${i.count}`).join(', ') || 'empty';
         logs.push(`[primitive] mineBlock("${name}", ${count})`);
+        pushEvent('primitive_start', `mineBlock ${name} x${count}`, { primitive: 'mineBlock', name, count });
         const result = await mineBlock(bot, name, count);
-        logs.push(`[primitive] mineBlock result: ${result.message}`);
+        const message = result.message || 'mineBlock completed';
+        logs.push(`[primitive] mineBlock result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'mineBlock', name, count });
         const afterItems = bot.inventory.items().map((i) => `${i.name}x${i.count}`).join(', ') || 'empty';
         logs.push(`[primitive] mineBlock inventory before=${beforeItems} after=${afterItems}`);
         return result;
       },
       craftItem: async (name: string, count = 1) => {
+        throwIfInterrupted();
         logs.push(`[primitive] craftItem("${name}", ${count})`);
+        pushEvent('primitive_start', `craftItem ${name} x${count}`, { primitive: 'craftItem', name, count });
         const result = await craft(bot, name, count);
-        logs.push(`[primitive] craftItem result: ${result.message}`);
+        const message = result.message || 'craftItem completed';
+        logs.push(`[primitive] craftItem result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'craftItem', name, count });
+        return result;
+      },
+      smeltItem: async (itemName: string, fuelName: string, count = 1) => {
+        throwIfInterrupted();
+        logs.push(`[primitive] smeltItem("${itemName}", "${fuelName}", ${count})`);
+        pushEvent('primitive_start', `smeltItem ${itemName} fuel=${fuelName} x${count}`, { primitive: 'smeltItem', itemName, fuelName, count });
+        const result = await smelt(bot, itemName, fuelName, count);
+        const message = result.message || 'smeltItem completed';
+        logs.push(`[primitive] smeltItem result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'smeltItem', itemName, fuelName, count });
         return result;
       },
       placeItem: async (name: string, x: number, y: number, z: number) => {
+        throwIfInterrupted();
         logs.push(`[primitive] placeItem("${name}", ${x}, ${y}, ${z})`);
+        pushEvent('primitive_start', `placeItem ${name}`, { primitive: 'placeItem', name, x, y, z });
         const result = await placeBlock(bot, name, x, y, z);
-        logs.push(`[primitive] placeItem result: ${result.message}`);
+        const message = result.message || 'placeItem completed';
+        logs.push(`[primitive] placeItem result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'placeItem', name, x, y, z });
+        return result;
+      },
+      withdrawItem: async (containerName: string, itemName: string, count = 1) => {
+        throwIfInterrupted();
+        logs.push(`[primitive] withdrawItem("${containerName}", "${itemName}", ${count})`);
+        pushEvent('primitive_start', `withdrawItem ${itemName} from ${containerName}`, { primitive: 'withdrawItem', containerName, itemName, count });
+        const result = await withdrawFromContainer(bot, containerName, itemName, count);
+        const message = result.message || 'withdrawItem completed';
+        logs.push(`[primitive] withdrawItem result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'withdrawItem', containerName, itemName, count });
+        return result;
+      },
+      depositItem: async (containerName: string, itemName: string, count = 1) => {
+        throwIfInterrupted();
+        logs.push(`[primitive] depositItem("${containerName}", "${itemName}", ${count})`);
+        pushEvent('primitive_start', `depositItem ${itemName} into ${containerName}`, { primitive: 'depositItem', containerName, itemName, count });
+        const result = await depositToContainer(bot, containerName, itemName, count);
+        const message = result.message || 'depositItem completed';
+        logs.push(`[primitive] depositItem result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'depositItem', containerName, itemName, count });
+        return result;
+      },
+      inspectContainer: async (containerName: string) => {
+        throwIfInterrupted();
+        logs.push(`[primitive] inspectContainer("${containerName}")`);
+        pushEvent('primitive_start', `inspectContainer ${containerName}`, { primitive: 'inspectContainer', containerName });
+        const result = await inspectContainer(bot, containerName);
+        const message = result.message || 'inspectContainer completed';
+        logs.push(`[primitive] inspectContainer result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'inspectContainer', containerName });
         return result;
       },
       setBlock: async (name: string, x: number, y: number, z: number, state?: string) => {
@@ -131,87 +238,140 @@ export class CodeExecutor {
         await new Promise((r) => setTimeout(r, 100));
       },
       killMob: async (name: string, maxDuration = 30000) => {
+        throwIfInterrupted();
         logs.push(`[primitive] killMob("${name}")`);
+        pushEvent('primitive_start', `killMob ${name}`, { primitive: 'killMob', name, maxDuration });
         const result = await attack(bot, name, maxDuration);
-        logs.push(`[primitive] killMob result: ${result.message}`);
+        const message = result.message || 'killMob completed';
+        logs.push(`[primitive] killMob result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'killMob', name, maxDuration });
         return result;
       },
       moveTo: async (x: number, y: number, z: number, range = 2, timeoutSec = 15) => {
+        throwIfInterrupted();
         const cleanupTrace = addMovementTrace('moveTo');
         const start = bot.entity.position;
         const targetSummary = `(${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`;
         logs.push(`[primitive] moveTo target=${targetSummary} range=${range} timeoutSec=${timeoutSec}`);
+        pushEvent('primitive_start', `moveTo ${targetSummary}`, { primitive: 'moveTo', x, y, z, range, timeoutSec });
         logs.push(`[primitive] moveTo startPos=(${start.x.toFixed(1)}, ${start.y.toFixed(1)}, ${start.z.toFixed(1)})`);
         bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
-        return new Promise<boolean>((resolve) => {
+        return new Promise<boolean>((resolve, reject) => {
           const timeout = setTimeout(() => {
             bot.pathfinder.stop();
             const pos = bot.entity.position;
             logs.push(`[primitive] moveTo: timed out, stopping at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
+            pushEvent('primitive_failure', 'moveTo timed out', { primitive: 'moveTo', x, y, z, range, timeoutSec });
             cleanupTrace();
+            cleanupInterrupt();
             resolve(false);
           }, timeoutSec * 1000);
+          const cleanupInterrupt = onInterrupt((reason) => {
+            clearTimeout(timeout);
+            bot.pathfinder.stop();
+            logs.push(`[primitive] moveTo: interrupted (${reason})`);
+            pushEvent('interrupt', `moveTo interrupted: ${reason}`, { primitive: 'moveTo', reason });
+            cleanupTrace();
+            cleanupInterrupt();
+            reject(new Error(`Execution interrupted: ${reason}`));
+          });
           bot.once('goal_reached' as any, () => {
             clearTimeout(timeout);
             const pos = bot.entity.position;
             logs.push(`[primitive] moveTo: goal reached at (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)})`);
+            pushEvent('primitive_success', 'moveTo reached goal', { primitive: 'moveTo', x, y, z, range, timeoutSec });
             cleanupTrace();
+            cleanupInterrupt();
             resolve(true);
           });
         });
       },
       exploreUntil: async (direction: { x: number; y: number; z: number }, maxTime = 60, callback: () => any) => {
+        throwIfInterrupted();
         const cleanupTrace = addMovementTrace('exploreUntil');
         logs.push(`[primitive] exploreUntil(${JSON.stringify(direction)}, ${maxTime}s)`);
+        pushEvent('primitive_start', 'exploreUntil started', { primitive: 'exploreUntil', direction, maxTime });
         if (!direction || typeof direction.x !== 'number' || typeof direction.y !== 'number' || typeof direction.z !== 'number') {
           logs.push(`[primitive] exploreUntil: invalid direction argument ${JSON.stringify(direction)}`);
+          pushEvent('primitive_failure', 'exploreUntil invalid direction', { primitive: 'exploreUntil', direction });
           cleanupTrace();
           throw new Error('exploreUntil requires direction { x, y, z }');
         }
+        const validAxis = [direction.x, direction.y, direction.z].every((value) => value === -1 || value === 0 || value === 1);
+        if (!validAxis || (direction.x === 0 && direction.y === 0 && direction.z === 0)) {
+          logs.push(`[primitive] exploreUntil: invalid discrete direction ${JSON.stringify(direction)}`);
+          pushEvent('primitive_failure', 'exploreUntil invalid discrete direction', { primitive: 'exploreUntil', direction });
+          cleanupTrace();
+          throw new Error('exploreUntil direction must use only -1, 0, or 1 and cannot be 0,0,0');
+        }
         const startTime = Date.now();
         const dir = new Vec3(direction.x, direction.y, direction.z);
-        let iteration = 0;
-        while (Date.now() - startTime < maxTime * 1000) {
-          iteration++;
-          const found = callback();
-          if (found) {
-            const blockPos = (found as any)?.position;
-            logs.push(`[primitive] exploreUntil: found target on iteration=${iteration}${blockPos ? ` at (${blockPos.x}, ${blockPos.y}, ${blockPos.z})` : ''}`);
+        return await new Promise<any>((resolve, reject) => {
+          let iteration = 0;
+          const cleanUp = () => {
+            clearInterval(explorationInterval);
+            clearTimeout(maxTimeTimeout);
+            bot.pathfinder.setGoal(null as any);
             cleanupTrace();
-            return found;
-          }
-          // Walk in direction
-          const pos = bot.entity.position;
-          const target = pos.offset(dir.x * 16, dir.y * 16, dir.z * 16);
-          logs.push(`[primitive] exploreUntil: iteration=${iteration} moving from (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) toward (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
-          bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 3));
-          await new Promise<void>((resolve) => {
-            const timeout = setTimeout(() => {
-              bot.pathfinder.stop();
-              logs.push(`[primitive] exploreUntil: iteration=${iteration} timed out waiting for goal`);
-              resolve();
-            }, 10000);
-            bot.once('goal_reached', () => {
-              clearTimeout(timeout);
-              const reachedPos = bot.entity.position;
-              logs.push(`[primitive] exploreUntil: iteration=${iteration} goal reached at (${reachedPos.x.toFixed(1)}, ${reachedPos.y.toFixed(1)}, ${reachedPos.z.toFixed(1)})`);
-              resolve();
-            });
+            cleanupInterrupt();
+          };
+
+          const cleanupInterrupt = onInterrupt((reason) => {
+            logs.push(`[primitive] exploreUntil: interrupted (${reason})`);
+            pushEvent('interrupt', `exploreUntil interrupted: ${reason}`, { primitive: 'exploreUntil', reason });
+            cleanUp();
+            reject(new Error(`Execution interrupted: ${reason}`));
           });
-        }
-        logs.push('[primitive] exploreUntil: timed out');
-        cleanupTrace();
-        return null;
+
+          const explore = () => {
+            try {
+              throwIfInterrupted();
+              iteration++;
+              const found = callback();
+              if (found) {
+                const blockPos = (found as any)?.position;
+                logs.push(`[primitive] exploreUntil: found target on iteration=${iteration}${blockPos ? ` at (${blockPos.x}, ${blockPos.y}, ${blockPos.z})` : ''}`);
+                pushEvent('primitive_success', 'exploreUntil found target', { primitive: 'exploreUntil', iteration, blockPos });
+                cleanUp();
+                resolve(found);
+                return;
+              }
+
+              const stepX = dir.x === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.x;
+              const stepY = dir.y === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.y;
+              const stepZ = dir.z === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.z;
+              const pos = bot.entity.position;
+              const target = pos.offset(stepX, stepY, stepZ);
+              logs.push(`[primitive] exploreUntil: iteration=${iteration} moving from (${pos.x.toFixed(1)}, ${pos.y.toFixed(1)}, ${pos.z.toFixed(1)}) toward (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
+
+              if (dir.y === 0) {
+                bot.pathfinder.setGoal(new goals.GoalNearXZ(target.x, target.z, 3) as any);
+              } else {
+                bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 3));
+              }
+            } catch (err: any) {
+              cleanUp();
+              reject(err);
+            }
+          };
+
+          const explorationInterval = setInterval(explore, 2000);
+          const maxTimeTimeout = setTimeout(() => {
+            logs.push('[primitive] exploreUntil: timed out');
+            pushEvent('primitive_failure', 'exploreUntil timed out', { primitive: 'exploreUntil', maxTime });
+            cleanUp();
+            resolve(null);
+          }, Math.min(maxTime, 1200) * 1000);
+
+          explore();
+        });
       },
     };
 
-    // Build the wrapped code
     let wrappedCode: string;
     if (typeof params === 'string') {
-      // Legacy: raw code body
       wrappedCode = `(async () => { ${params} })();`;
     } else {
-      // Structured: all skills + new function + exec call
       wrappedCode = `
 (async () => {
   ${params.allSkillCode}
@@ -226,147 +386,114 @@ export class CodeExecutor {
     try {
       const context = vm.createContext(sandbox);
       const script = new vm.Script(wrappedCode, { filename: 'skill.js' });
-
       const resultPromise = script.runInContext(context, { timeout: 5000 });
 
-      // The script returns a promise from the async IIFE — await it with a timeout
       await Promise.race([
         resultPromise,
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('Execution timed out')), this.timeoutMs)
         ),
+        new Promise((_, reject) => {
+          const cleanup = onInterrupt((reason) => {
+            cleanup();
+            reject(new Error(`Execution interrupted: ${reason}`));
+          });
+        }),
       ]);
 
       pushPos('[exec] end');
       logs.push(`[exec] movedDistance=${startPos.distanceTo(bot.entity.position).toFixed(2)}`);
-
-      return {
-        success: true,
-        output: logs.join('\n'),
-      };
+      pushEvent('execution_complete', 'Execution completed', { movedDistance: Number(startPos.distanceTo(bot.entity.position).toFixed(2)) });
+      return { success: true, output: logs.join('\n'), events };
     } catch (err: any) {
       pushPos('[exec] error');
       logs.push(`[exec] movedDistance=${startPos.distanceTo(bot.entity.position).toFixed(2)}`);
+      pushEvent('execution_error', err.message || String(err), { movedDistance: Number(startPos.distanceTo(bot.entity.position).toFixed(2)) });
       return {
         success: false,
         output: logs.join('\n'),
         error: err.message || String(err),
+        events,
       };
+    } finally {
+      if (this.currentInterrupt === interruptState) {
+        this.currentInterrupt = null;
+      }
     }
   }
 
-  private createBotProxy(bot: Bot, logs: string[]) {
+  private createBotProxy(bot: Bot, logs: string[], interruptibleDelay: (ms: number) => Promise<void>) {
     return {
-      // Position and world info
       get entity() { return { position: bot.entity.position, velocity: bot.entity.velocity, height: (bot.entity as any).height || 1.8 }; },
       get health() { return bot.health; },
       get food() { return bot.food; },
       get time() { return { timeOfDay: bot.time.timeOfDay, day: bot.time.day }; },
       get isRaining() { return bot.isRaining; },
-
-      // Inventory
       get inventory() {
         return {
-          items: () => bot.inventory.items().map((i) => ({
-            name: i.name,
-            count: i.count,
-            slot: i.slot,
-          })),
+          items: () => bot.inventory.items().map((i) => ({ name: i.name, count: i.count, slot: i.slot, type: i.type })),
         };
       },
-
-      // Chat — log only, do NOT send to actual game chat (avoids spam)
       chat: (msg: string) => {
         const safe = String(msg).slice(0, 256);
-        if (!safe.startsWith('/')) {
-          logs.push(`[chat] ${safe}`);
-        }
+        if (!safe.startsWith('/')) logs.push(`[chat] ${safe}`);
       },
-
-      // Movement
       pathfinder: {
         setGoal: (goal: any, dynamic?: boolean) => bot.pathfinder.setGoal(goal, dynamic),
         setMovements: (m: any) => bot.pathfinder.setMovements(m),
         isMoving: () => bot.pathfinder.isMoving(),
         stop: () => bot.pathfinder.stop(),
       },
-
-      // Looking
       lookAt: (pos: Vec3) => bot.lookAt(pos),
       look: (yaw: number, pitch: number) => bot.look(yaw, pitch),
-
-      // Block interaction
-      dig: async (block: any) => {
-        if (block) await bot.dig(block);
-      },
-      placeBlock: async (block: any, faceVec: Vec3) => {
-        if (block) await bot.placeBlock(block, faceVec);
-      },
+      dig: async (block: any) => { if (block) await bot.dig(block); },
+      placeBlock: async (block: any, faceVec: Vec3) => { if (block) await bot.placeBlock(block, faceVec); },
       blockAt: (pos: Vec3) => {
         const b = bot.blockAt(pos);
         if (!b) return null;
         return { name: b.name, position: b.position, hardness: b.hardness };
       },
       findBlock: (opts: { matching: (b: any) => boolean; maxDistance: number; count?: number }) => {
-        const block = bot.findBlock({
+        return bot.findBlock({
           matching: opts.matching,
           maxDistance: opts.maxDistance,
           count: opts.count || 1,
         });
-        return block; // Return actual Block object so dig() works
       },
-
-      // Entity
       nearestEntity: (filter?: (e: any) => boolean) => {
         const e = bot.nearestEntity(filter);
         if (!e) return null;
         return { position: e.position, name: e.name, type: e.type, username: (e as any).username };
       },
-
-      // Players
       get players() {
         const result: Record<string, { entity: { position: Vec3 } | null; username: string }> = {};
         for (const [name, p] of Object.entries(bot.players)) {
-          result[name] = {
-            username: p.username,
-            entity: p.entity ? { position: p.entity.position } : null,
-          };
+          result[name] = { username: p.username, entity: p.entity ? { position: p.entity.position } : null };
         }
         return result;
       },
-
-      // Crafting
       craft: async (recipe: any, count: number, table?: any) => {
         await bot.craft(recipe, count, table);
       },
       recipesFor: (itemId: number, metadata?: number | null, minResultCount?: number | null, craftingTable?: any) =>
         bot.recipesFor(itemId, metadata ?? null, minResultCount ?? null, craftingTable ?? null),
-
-      // Equipment
       equip: async (item: any, dest: string) => {
         await bot.equip(item, dest as any);
       },
-
-      // Events
       once: (event: string, listener: (...args: any[]) => void) => {
         const allowed = ['goal_reached', 'diggingCompleted', 'death', 'health'];
-        if (allowed.includes(event)) {
-          bot.once(event as any, listener);
-        }
+        if (allowed.includes(event)) bot.once(event as any, listener);
       },
       on: (event: string, listener: (...args: any[]) => void) => {
         const allowed = ['goal_reached', 'diggingCompleted', 'death', 'health'];
-        if (allowed.includes(event)) {
-          bot.on(event as any, listener);
-        }
+        if (allowed.includes(event)) bot.on(event as any, listener);
       },
       removeListener: (event: string, listener: (...args: any[]) => void) => {
         bot.removeListener(event as any, listener);
       },
-
-      // Utility
-      waitForTicks: (ticks: number) => {
-        return new Promise<void>((resolve) => setTimeout(resolve, ticks * 50));
+      waitForTicks: (ticks: number) => interruptibleDelay(ticks * 50),
+      toss: async (itemType: number, metadata: any, count: number) => {
+        await bot.toss(itemType, metadata, count);
       },
     };
   }

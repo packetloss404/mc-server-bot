@@ -6,12 +6,14 @@ export interface Observation {
   timeOfDay: string;
   health: number;
   hunger: number;
+  oxygen: number;
   position: string;
   equipment: string;
   inventory: string;
   inventorySlots: string;
   nearbyBlocks: string;
   nearbyEntities: string;
+  knownLocations?: string;
 }
 
 export function renderObservation(bot: Bot): Observation {
@@ -46,6 +48,13 @@ export function renderObservation(bot: Bot): Observation {
   // Nearby blocks (scan for unique block types within 16 blocks)
   const nearbyBlocks = getNearbyBlocks(bot, 16);
 
+  // Override biome to "underground" if no surface blocks are nearby (matches original Voyager)
+  const surfaceIndicators = ['dirt', 'grass_block', 'sand', 'snow', 'snow_block'];
+  const blockList = nearbyBlocks.split(', ');
+  if (biome !== 'unknown' && !blockList.some((b) => surfaceIndicators.some((s) => b.includes(s))) && !nearbyBlocks.includes('log')) {
+    biome = 'underground';
+  }
+
   // Nearby entities (sorted by distance)
   const nearbyEntities = getNearbyEntities(bot, 32);
 
@@ -54,6 +63,7 @@ export function renderObservation(bot: Bot): Observation {
     timeOfDay,
     health: bot.health,
     hunger: bot.food,
+    oxygen: (bot.entity as any).oxygenLevel ?? 300,
     position: `${Math.round(pos.x)}, ${Math.round(pos.y)}, ${Math.round(pos.z)}`,
     equipment,
     inventory: inventoryLines,
@@ -68,11 +78,103 @@ export function formatObservation(obs: Observation): string {
 Time: ${obs.timeOfDay}
 Health: ${obs.health}/20
 Hunger: ${obs.hunger}/20
+Oxygen: ${obs.oxygen}
 Position: ${obs.position}
 Equipment: ${obs.equipment}
 Inventory (${obs.inventorySlots}): ${obs.inventory}
 Nearby blocks: ${obs.nearbyBlocks}
 Nearby entities: ${obs.nearbyEntities}`;
+}
+
+/**
+ * Warm-up thresholds for curriculum observation fields.
+ * Matches original Voyager's graduated observation system.
+ * Fields with threshold 0 are always shown; others are gated by completedTaskCount
+ * and have an 80% stochastic inclusion chance once unlocked.
+ */
+const WARMUP_THRESHOLDS: Record<string, number> = {
+  nearbyBlocks: 0,     // always — essential for early mining tasks
+  position: 0,         // always — needed for movement tasks
+  equipment: 0,        // always — what the bot is holding
+  inventory: 0,        // always — core decision driver
+  completedTasks: 0,   // always — avoid repeats
+  failedTasks: 0,      // always — avoid retrying broken tasks
+  nearbyEntities: 5,   // after 5 tasks — combat/social awareness
+  biome: 10,           // after 10 tasks — biome-specific resources
+  time: 15,            // after 15 tasks — day/night cycle awareness
+  health: 15,          // after 15 tasks — survival awareness
+  hunger: 15,          // after 15 tasks — food management
+  oxygen: 20,          // after 20 tasks — underwater exploration
+  context: 15,         // after 15 tasks — QA context
+};
+
+/** Core inventory items shown before the optional_inventory threshold. */
+const CORE_INVENTORY_REGEX = /log|plank|stick|pickaxe|axe|hoe|sword|shovel|crafting_table|furnace|cobblestone|stone|iron|coal|diamond|gold|wheat|bread|seed/i;
+
+/**
+ * Format observation with graduated field inclusion based on how many tasks
+ * the bot has completed. Early on, only essential fields are shown to prevent
+ * information overload and keep the curriculum focused on basics.
+ */
+export function formatObservationWithWarmup(obs: Observation, completedTaskCount: number): string {
+  const lines: string[] = [];
+
+  if (shouldInclude('nearbyBlocks', completedTaskCount)) {
+    lines.push(`Nearby blocks: ${obs.nearbyBlocks}`);
+  }
+  if (shouldInclude('position', completedTaskCount)) {
+    lines.push(`Position: ${obs.position}`);
+  }
+  if (shouldInclude('equipment', completedTaskCount)) {
+    lines.push(`Equipment: ${obs.equipment}`);
+  }
+  if (shouldInclude('inventory', completedTaskCount)) {
+    // Filter inventory to core items early on
+    const inventoryStr = completedTaskCount < 7
+      ? filterCoreInventory(obs.inventory)
+      : obs.inventory;
+    lines.push(`Inventory (${obs.inventorySlots}): ${inventoryStr}`);
+  }
+  if (shouldInclude('nearbyEntities', completedTaskCount)) {
+    lines.push(`Nearby entities: ${obs.nearbyEntities}`);
+  }
+  if (shouldInclude('biome', completedTaskCount)) {
+    lines.push(`Biome: ${obs.biome}`);
+  }
+  if (shouldInclude('time', completedTaskCount)) {
+    lines.push(`Time: ${obs.timeOfDay}`);
+  }
+  if (shouldInclude('health', completedTaskCount)) {
+    lines.push(`Health: ${obs.health}/20`);
+  }
+  if (shouldInclude('hunger', completedTaskCount)) {
+    lines.push(`Hunger: ${obs.hunger}/20`);
+  }
+  if (shouldInclude('oxygen', completedTaskCount)) {
+    lines.push(`Oxygen: ${obs.oxygen}`);
+  }
+
+  return lines.join('\n');
+}
+
+/** Check if the QA context warm-up threshold has been met. */
+export function isContextWarmedUp(completedTaskCount: number): boolean {
+  return completedTaskCount >= WARMUP_THRESHOLDS.context;
+}
+
+function shouldInclude(field: string, completedTaskCount: number): boolean {
+  const threshold = WARMUP_THRESHOLDS[field] ?? 0;
+  if (completedTaskCount < threshold) return false;
+  // Fields with threshold 0 are always included; others have 80% stochastic inclusion
+  if (threshold === 0) return true;
+  return Math.random() < 0.8;
+}
+
+function filterCoreInventory(inventory: string): string {
+  if (inventory === 'empty') return inventory;
+  const items = inventory.split(', ');
+  const filtered = items.filter((item) => CORE_INVENTORY_REGEX.test(item));
+  return filtered.length > 0 ? filtered.join(', ') : inventory;
 }
 
 function getNearbyBlocks(bot: Bot, radius: number): string {

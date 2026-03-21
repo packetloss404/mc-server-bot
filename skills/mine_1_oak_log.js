@@ -1,9 +1,21 @@
-async function mineNearestOakLog(bot) {
+async function mineOneOakLog(bot) {
   try {
-    await mineTheNearestOakLog(bot);
-    bot.chat("Mined 1 oak log.");
+    const oakLog = bot.findBlock({
+      matching: b => b.name === 'oak_log',
+      maxDistance: 32
+    });
+
+    if (!oakLog) {
+      await exploreUntil('north', 60, () => {
+        return bot.findBlock({
+          matching: b => b.name === 'oak_log',
+          maxDistance: 32
+        });
+      });
+    }
+
+    await mineBlock('oak_log', 1);
   } catch (err) {
     console.error('Error mining oak log:', err);
-    bot.chat("Failed to mine oak log.");
   }
 }

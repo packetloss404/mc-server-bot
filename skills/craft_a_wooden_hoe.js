@@ -1,22 +1,33 @@
-async function craftWoodenHoeTask(bot) {
+async function craftWoodenHoe(bot) {
   try {
-    bot.chat("Gathering materials for a wooden hoe.");
-    // We have 1 log and 8 sticks. We need 2 logs total for Table + Hoe.
-    await mineBlock("spruce_log", 2);
-    await craftItem("spruce_planks", 8);
-    
-    // Check if we need a crafting table
-    const table = bot.inventory.items().find(i => i.name === "crafting_table");
-    if (!table) {
-      await craftItem("crafting_table", 1);
+    // 1. Collect spruce logs (2 logs provide 8 planks, enough for everything)
+    await mineBlock('spruce_log', 2);
+
+    // 2. Craft planks
+    await craftItem('spruce_planks', 8);
+
+    // 3. Craft sticks
+    await craftItem('stick', 4);
+
+    // 4. Craft crafting table
+    await craftItem('crafting_table', 1);
+
+    // 5. Place the crafting table nearby
+    const referenceBlock = bot.findBlock({
+      matching: b => b.name !== 'air' && b.name !== 'water' && b.name !== 'lava' && b.boundingBox === 'block',
+      maxDistance: 4
+    });
+
+    if (referenceBlock) {
+      await placeItem('crafting_table', referenceBlock.position.x, referenceBlock.position.y + 1, referenceBlock.position.z);
+    } else {
+      const pos = bot.entity.position.offset(1, 0, 0).floored();
+      await placeItem('crafting_table', pos.x, pos.y, pos.z);
     }
-    
-    const pos = bot.entity.position;
-    await placeItem("crafting_table", Math.floor(pos.x) + 1, Math.floor(pos.y), Math.floor(pos.z));
-    
-    await craftItem("wooden_hoe", 1);
-    bot.chat("Successfully crafted a wooden hoe!");
-  } catch (err) {
-    bot.chat("Error crafting hoe: " + err.message);
+
+    // 6. Craft the wooden hoe
+    await craftItem('wooden_hoe', 1);
+  } catch (error) {
+    console.error("Error crafting wooden hoe:", error);
   }
 }

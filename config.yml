@@ -34,6 +34,13 @@ affinity:
   hostileThreshold: 20
   trustThreshold: 70
 
+instincts:
+  enabled: true
+  attackCooldownMs: 12000
+  lowHealthThreshold: 8
+  fleeDistance: 14
+  fightRange: 3
+
 voyager:
   enabled: true
   taskCooldownMs: 10000
@@ -45,7 +52,7 @@ voyager:
 llm:
   provider: "gemini"
   model: "gemini-3.1-pro-preview"
-  temperature: 0.9
+  temperature: 0.7
   chatMaxTokens: 1024
   codeGenMaxTokens: 4096
   maxConcurrentRequests: 3

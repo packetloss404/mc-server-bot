@@ -1,6 +1,6 @@
 import { Task } from './CurriculumAgent';
 
-export type TaskKind = 'harvest' | 'craft' | 'smelt' | 'movement' | 'combat' | 'chat' | 'general';
+export type TaskKind = 'harvest' | 'craft' | 'smelt' | 'movement' | 'combat' | 'chat' | 'build' | 'general';
 
 export interface TaskSpec {
   kind: TaskKind;
@@ -32,6 +32,9 @@ export function inferTaskSpec(task: Task): TaskSpec {
   }
   if (lower.includes('chat') || lower.includes('announce') || lower.includes('say') || lower.includes('talk') || lower.includes('wisdom')) {
     return { kind: 'chat', count: 1 };
+  }
+  if (lower.includes('build') || lower.includes('construct') || lower.includes('house') || lower.includes('wall') || lower.includes('tower') || lower.includes('bridge') || lower.includes('place')) {
+    return { kind: 'build', target: inferTarget(lower), count };
   }
   return { kind: 'general', target: inferTarget(lower), count };
 }

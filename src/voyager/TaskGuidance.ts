@@ -78,6 +78,20 @@ export function buildTaskGuidance(task: Task): TaskGuidance {
     };
   }
 
+  if (spec.kind === 'build') {
+    return {
+      category: 'build',
+      prompt: task.description,
+      guidance: [
+        'Use giveItem() to obtain all building materials you need before starting.',
+        'Plan dimensions relative to bot.entity.position.',
+        'Use fillBlocks() for large flat surfaces (floors, walls, ceilings).',
+        'Use setBlock() for detailed or individual block placement.',
+        'Build systematically: foundation first, then walls, then roof, then details.',
+      ],
+    };
+  }
+
   return {
     category: 'general',
     prompt: task.description,

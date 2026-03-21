@@ -237,6 +237,14 @@ export class CodeExecutor {
         logs.push(`[primitive] fillBlocks("${name}", ${x1},${y1},${z1} -> ${x2},${y2},${z2}, ${mode})`);
         await new Promise((r) => setTimeout(r, 100));
       },
+      giveItem: async (name: string, count = 1) => {
+        const safeName = String(name).replace(/[^a-z0-9_]/g, '');
+        const safeCount = Math.min(Math.max(1, Math.floor(count)), 64);
+        bot.chat(`/give ${bot.username} minecraft:${safeName} ${safeCount}`);
+        logs.push(`[primitive] giveItem("${safeName}", ${safeCount})`);
+        pushEvent('primitive_start', `giveItem ${safeName} x${safeCount}`, { primitive: 'giveItem', name: safeName, count: safeCount });
+        await new Promise((r) => setTimeout(r, 100));
+      },
       killMob: async (name: string, maxDuration = 30000) => {
         throwIfInterrupted();
         logs.push(`[primitive] killMob("${name}")`);

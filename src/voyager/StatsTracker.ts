@@ -83,6 +83,10 @@ export class StatsTracker {
     ].join(' | ');
   }
 
+  getStats(botName: string): BotStats {
+    return this.ensure(botName);
+  }
+
   private ensure(botName: string): BotStats {
     if (!this.stats[botName]) {
       this.stats[botName] = {

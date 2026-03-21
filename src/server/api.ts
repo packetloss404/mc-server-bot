@@ -369,5 +369,183 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
+  // ═══════════════════════════════════════
+  //  BOT COMMAND CENTER
+  // ═══════════════════════════════════════
+
+  // Equip bot with full gear and inventory
+  app.post('/api/bots/:name/equip', (req: Request, res: Response) => {
+    const bot = botManager.getBot(req.params.name as string);
+    if (!bot) { res.status(404).json({ error: 'Bot not found' }); return; }
+    if (!bot.bot) { res.status(400).json({ error: 'Bot not connected' }); return; }
+    bot.equip();
+    const event = eventLog.push({ type: 'bot:state', botName: req.params.name as string, description: `${req.params.name} equipped with full gear` });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
+  // Pause voyager loop
+  app.post('/api/bots/:name/pause', (req: Request, res: Response) => {
+    const bot = botManager.getBot(req.params.name as string);
+    if (!bot) { res.status(404).json({ error: 'Bot not found' }); return; }
+    const voyager = bot.getVoyagerLoop();
+    if (!voyager) { res.status(400).json({ error: 'Bot has no voyager loop (not in codegen mode)' }); return; }
+    voyager.pause();
+    const event = eventLog.push({ type: 'bot:state', botName: req.params.name as string, description: 'Voyager paused from dashboard' });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
+  // Resume voyager loop
+  app.post('/api/bots/:name/resume', (req: Request, res: Response) => {
+    const bot = botManager.getBot(req.params.name as string);
+    if (!bot) { res.status(404).json({ error: 'Bot not found' }); return; }
+    const voyager = bot.getVoyagerLoop();
+    if (!voyager) { res.status(400).json({ error: 'Bot has no voyager loop (not in codegen mode)' }); return; }
+    voyager.resume();
+    const event = eventLog.push({ type: 'bot:state', botName: req.params.name as string, description: 'Voyager resumed from dashboard' });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
+  // Follow a player
+  app.post('/api/bots/:name/follow', async (req: Request, res: Response) => {
+    const { playerName } = req.body;
+    if (!playerName) { res.status(400).json({ error: 'playerName is required' }); return; }
+    const botInstance = botManager.getBot(req.params.name as string);
+    if (!botInstance?.bot) { res.status(404).json({ error: 'Bot not found or not connected' }); return; }
+    // Simulate the follow command
+    (botInstance as any).state = 'FOLLOWING';
+    const voyager = botInstance.getVoyagerLoop();
+    if (voyager) voyager.pause();
+    const { followPlayer } = await import('../actions/followPlayer');
+    followPlayer(botInstance.bot, playerName, 600000).finally(() => {
+      if ((botInstance as any).state === 'FOLLOWING') (botInstance as any).state = 'IDLE';
+      if (voyager) voyager.resume();
+    });
+    const event = eventLog.push({ type: 'bot:state', botName: req.params.name as string, description: `Following ${playerName}` });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
+  // Stop / Stay
+  app.post('/api/bots/:name/stop', (req: Request, res: Response) => {
+    const botInstance = botManager.getBot(req.params.name as string);
+    if (!botInstance?.bot) { res.status(404).json({ error: 'Bot not found or not connected' }); return; }
+    if (botInstance.bot.pathfinder.isMoving()) {
+      botInstance.bot.pathfinder.setGoal(null);
+    }
+    (botInstance as any).state = 'IDLE';
+    const event = eventLog.push({ type: 'bot:state', botName: req.params.name as string, description: 'Stopped from dashboard' });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
+  // Walk to coordinates
+  app.post('/api/bots/:name/walkto', async (req: Request, res: Response) => {
+    const { x, y, z } = req.body;
+    if (x === undefined || z === undefined) { res.status(400).json({ error: 'x and z are required' }); return; }
+    const botInstance = botManager.getBot(req.params.name as string);
+    if (!botInstance?.bot) { res.status(404).json({ error: 'Bot not found or not connected' }); return; }
+    const targetY = y ?? botInstance.bot.entity.position.y;
+    (botInstance as any).state = 'EXECUTING_TASK';
+    const voyager = botInstance.getVoyagerLoop();
+    if (voyager) voyager.pause();
+    const { walkTo } = await import('../actions/walkTo');
+    walkTo(botInstance.bot, x, targetY, z).then((result) => {
+      (botInstance as any).state = 'IDLE';
+      if (voyager) voyager.resume();
+      const event = eventLog.push({ type: 'bot:task', botName: req.params.name as string, description: result.message ?? `Walked to ${x}, ${z}` });
+      io.emit('activity', event);
+    });
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  MAP / TERRAIN ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Scan terrain: returns a grid of surface block names for rendering on the map.
+  // Query params: cx, cz (center coords), radius (in blocks, max 128), step (sample every N blocks, default 1)
+  app.get('/api/terrain', (req: Request, res: Response) => {
+    const cx = parseInt(String(req.query.cx ?? '0')) || 0;
+    const cz = parseInt(String(req.query.cz ?? '0')) || 0;
+    const radius = Math.min(parseInt(String(req.query.radius ?? '64')) || 64, 128);
+    const step = Math.max(1, Math.min(parseInt(String(req.query.step ?? '1')) || 1, 8));
+
+    // Use the first connected bot's world for block access
+    const allBots = botManager.getAllBots();
+    const connectedBot = allBots.find((b) => b.bot);
+    if (!connectedBot?.bot) {
+      res.status(503).json({ error: 'No connected bot available for terrain scanning' });
+      return;
+    }
+
+    const bot = connectedBot.bot;
+    const size = Math.floor((radius * 2) / step) + 1;
+    // Pack into a flat array: row-major [z][x], each entry is a block name
+    const blocks: string[] = new Array(size * size);
+    let idx = 0;
+
+    // Reference height: use the first bot's Y position as a starting scan point
+    const refY = bot.entity?.position?.y ? Math.round(bot.entity.position.y) : 64;
+
+    for (let dz = -radius; dz <= radius; dz += step) {
+      for (let dx = -radius; dx <= radius; dx += step) {
+        const worldX = cx + dx;
+        const worldZ = cz + dz;
+        let blockName = 'unknown';
+
+        try {
+          // Scan from refY+16 downward in a tight window — fast for nearby terrain
+          const scanTop = refY + 16;
+          const scanBottom = refY - 32;
+          for (let y = scanTop; y >= scanBottom; y--) {
+            const block = bot.blockAt(bot.entity.position.clone().set(worldX, y, worldZ));
+            if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+              blockName = block.name;
+              break;
+            }
+          }
+        } catch { /* ignore */ }
+
+        blocks[idx++] = blockName;
+      }
+    }
+
+    res.json({
+      cx,
+      cz,
+      radius,
+      step,
+      size,
+      blocks,
+    });
+  });
+
+  // Online players list
+  app.get('/api/players', (_req: Request, res: Response) => {
+    const allBots = botManager.getAllBots();
+    const connectedBot = allBots.find((b) => b.bot);
+    if (!connectedBot?.bot) {
+      res.json({ players: [] });
+      return;
+    }
+
+    const players = Object.values(connectedBot.bot.players)
+      .filter((p) => p.entity)
+      .map((p) => ({
+        name: p.username,
+        position: p.entity ? {
+          x: Math.round(p.entity.position.x),
+          y: Math.round(p.entity.position.y),
+          z: Math.round(p.entity.position.z),
+        } : null,
+        isOnline: true,
+      }));
+
+    res.json({ players });
+  });
+
   return { app, httpServer, io, eventLog };
 }

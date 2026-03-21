@@ -33,6 +33,9 @@ async function exploreUntil(direction, maxTime, callback) // explore until callb
 async function withdrawItem(containerName, itemName, count) // withdraw from chest/barrel/etc
 async function depositItem(containerName, itemName, count)  // deposit into chest/barrel/etc
 async function inspectContainer(containerName) // inspect container contents
+async function giveItem(name, count)     // give yourself items via /give (operator)
+async function setBlock(name, x, y, z, state)  // place a block at exact coords via /setblock
+async function fillBlocks(name, x1, y1, z1, x2, y2, z2, mode) // fill a region via /fill
 \`\`\`
 
 ## Bot state / observation APIs
@@ -58,7 +61,7 @@ These are mainly for observing state or selecting a target.
 4. Use await for all async operations.
 5. Do NOT wrap the entire function body in try/catch. Let errors propagate so they can be detected. Only use try/catch around specific risky operations if needed.
 6. Do NOT call bot.chat(). The bot should work silently.
-7. Keep code concise and reusable. Do not assume the inventory already contains required items.
+7. Keep code concise and reusable. Do not assume the inventory already contains required items — use giveItem(name, count) to obtain what you need.
 8. Do NOT use bot.on() or bot.once() event listeners.
 9. Do NOT write infinite loops or recursive functions.
 10. maxDistance must always be 32 for bot.findBlock().
@@ -81,6 +84,8 @@ These are mainly for observing state or selecting a target.
 - If the target is nearby, use the appropriate primitive.
 - If the target is not nearby, explore outward with exploreUntil(...) and then use the primitive.
 - Do not stop after only locating a target when the task implies going to it, collecting it, or interacting with it.
+- If you need materials you don't have, use giveItem(name, count) to obtain them.
+- For building tasks: use giveItem to get materials, then setBlock for precise placement or fillBlocks for walls/floors/ceilings.
 
 ## Previously saved skills
 You may call previously saved skill functions shown in context. They accept (bot) as parameter.

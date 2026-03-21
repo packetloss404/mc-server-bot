@@ -123,6 +123,7 @@ export class BotInstance {
           this.bot.chat(`/tp ${this.name} ${this.spawnLocation.x} ${this.spawnLocation.y} ${this.spawnLocation.z}`);
         }
 
+        if (this.mode === BotMode.CODEGEN) this.equip();
         this.state = BotState.IDLE;
         this.startHeadTracking();
         if (this.mode !== BotMode.CODEGEN) {
@@ -236,6 +237,11 @@ export class BotInstance {
       onReady();
     };
 
+    const safeChat = (msg: string) => {
+      try { if (bot && typeof bot._client?.chat === 'function') bot.chat(msg); }
+      catch { /* client not ready yet */ }
+    };
+
     const onMessage = (jsonMsg: any) => {
       if (authDone) return;
       const msg = jsonMsg.toString();
@@ -244,10 +250,10 @@ export class BotInstance {
         finish();
       } else if (msg.includes('already registered') || msg.includes('Please log in')) {
         logger.info({ bot: this.name }, 'Already registered, logging in');
-        bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
+        safeChat(`/login ${BotInstance.BOT_PASSWORD}`);
       } else if (msg.includes('Please register') || msg.includes('not registered')) {
         logger.info({ bot: this.name }, 'Registering with DyoAuth');
-        bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
+        safeChat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
       }
     };
 
@@ -255,8 +261,8 @@ export class BotInstance {
 
     // Proactively try register after 1s (in case message event was missed)
     setTimeout(() => {
-      if (!authDone && bot) {
-        bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
+      if (!authDone) {
+        safeChat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
       }
     }, 1000);
 
@@ -290,7 +296,7 @@ export class BotInstance {
     if (this.headTrackingInterval) return;
 
     this.headTrackingInterval = setInterval(() => {
-      if (!this.bot || this.state === BotState.DISCONNECTED) return;
+      if (!this.bot || this.state === BotState.DISCONNECTED || !this.bot.players) return;
 
       const players = Object.values(this.bot.players).filter(
         (p) => p.entity && p.username !== this.bot!.username
@@ -379,6 +385,13 @@ export class BotInstance {
         return;
       }
 
+      // Check for "teach:" prefix — explicit skill teaching
+      const teachMatch = message.match(/^teach:\s*(.+)/i);
+      if (teachMatch && this.voyagerLoop) {
+        await this.handleTeach(teachMatch[1].trim(), username);
+        return;
+      }
+
       // Generate AI chat response
       await this.handleChat(username, message);
     });
@@ -448,6 +461,17 @@ export class BotInstance {
     }
   }
 
+  private async handleTeach(skillDescription: string, playerName: string): Promise<void> {
+    if (!this.bot || !this.voyagerLoop) return;
+
+    logger.info({ bot: this.name, player: playerName, skill: skillDescription }, 'Teach command received');
+    this.bot.chat(`Learning new skill: "${skillDescription}". Generating code...`);
+
+    // Wire up chat callback so the voyager loop can report progress
+    this.voyagerLoop.setChatCallback((msg) => this.sendLongChat(msg));
+    this.voyagerLoop.queuePlayerTask(skillDescription, playerName);
+  }
+
   private async handleChat(playerName: string, message: string): Promise<void> {
     if (!this.bot || !this.llmClient) return;
 
@@ -505,9 +529,10 @@ export class BotInstance {
         'Chat response sent'
       );
 
-      // Queue task in Voyager loop if extracted
+      // Queue task in Voyager loop if extracted (auto-learn: complex commands get saved as skills)
       if (taskDescription && this.voyagerLoop) {
         logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
+        this.voyagerLoop.setChatCallback((msg) => this.sendLongChat(msg));
         this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
       }
     } catch (err: any) {
@@ -580,6 +605,50 @@ export class BotInstance {
     }, delay);
   }
 
+  equip(): void {
+    if (!this.bot) return;
+    const bot = this.bot;
+    const name = this.name;
+
+    let delay = 500;
+    const give = (item: string, count = 1) => {
+      setTimeout(() => {
+        try { if (this.bot && this.state !== BotState.DISCONNECTED) bot.chat(`/give ${name} minecraft:${item} ${count}`); }
+        catch { /* bot disconnected mid-equip */ }
+      }, delay);
+      delay += 100;
+    };
+
+    // Netherite tools
+    give('netherite_pickaxe');
+    give('netherite_axe');
+    give('netherite_shovel');
+    give('netherite_sword');
+
+    // Netherite armor
+    give('netherite_helmet');
+    give('netherite_chestplate');
+    give('netherite_leggings');
+    give('netherite_boots');
+
+    // Builder gets common building blocks
+    if (this.personality === 'builder') {
+      give('stone', 64);
+      give('oak_planks', 64);
+      give('cobblestone', 64);
+      give('glass', 64);
+      give('oak_log', 64);
+      give('smooth_stone', 64);
+      give('stone_bricks', 64);
+      give('oak_stairs', 64);
+      give('oak_slab', 64);
+      give('torch', 64);
+      give('chest', 16);
+    }
+
+    logger.info({ bot: this.name, personality: this.personality }, 'Equipping bot on spawn');
+  }
+
   private startVoyagerIfCodegen(): void {
     if (this.mode !== BotMode.CODEGEN || !this.bot || !this.config.voyager.enabled) return;
 
@@ -590,6 +659,8 @@ export class BotInstance {
       this.config,
       this.llmClient
     );
+    // Wire up chat callback so the bot reports learning progress in-game
+    this.voyagerLoop.setChatCallback((msg) => this.sendLongChat(msg));
     this.voyagerLoop.start();
   }
 
@@ -823,6 +894,12 @@ export class BotInstance {
   getDetailedStatus() {
     const basic = this.getStatus();
 
+    const emptyStats = {
+      mined: {}, crafted: {}, smelted: {}, placed: {}, killed: {},
+      withdrew: {}, deposited: {},
+      deaths: 0, interrupts: 0, movementTimeouts: 0, damageTaken: 0,
+    };
+
     if (!this.bot) {
       return {
         ...basic,
@@ -833,6 +910,12 @@ export class BotInstance {
         inventory: [],
         world: null,
         voyager: null,
+        armor: { helmet: null, chestplate: null, leggings: null, boots: null },
+        offhand: null,
+        hotbar: Array(9).fill(null),
+        experience: { level: 0, points: 0, progress: 0 },
+        stats: this.statsTracker.getStats(this.name) ?? emptyStats,
+        combat: { lastAttackerName: null, lastAttackedAt: 0, instinctActive: false },
       };
     }
 
@@ -869,8 +952,47 @@ export class BotInstance {
         currentTask: this.voyagerLoop.getCurrentTask(),
         completedTasks: this.voyagerLoop.getCompletedTasks(),
         failedTasks: this.voyagerLoop.getFailedTasks(),
+        internalState: this.voyagerLoop.getInternalState(),
+        queuedTaskCount: this.voyagerLoop.getQueuedTaskCount(),
       };
     }
+
+    // Armor & equipment slots
+    const slots = this.bot.inventory.slots;
+    const slotItem = (idx: number) => {
+      const s = slots[idx];
+      return s ? { name: s.name, count: s.count } : null;
+    };
+    const armor = {
+      helmet: slotItem(5),
+      chestplate: slotItem(6),
+      leggings: slotItem(7),
+      boots: slotItem(8),
+    };
+    const offhand = slotItem(45);
+
+    // Hotbar (slots 36-44)
+    const hotbar = Array.from({ length: 9 }, (_, i) => {
+      const s = slots[36 + i];
+      return s ? { name: s.name, count: s.count, slot: 36 + i } : null;
+    });
+
+    // Experience
+    const experience = {
+      level: this.bot.experience?.level ?? 0,
+      points: this.bot.experience?.points ?? 0,
+      progress: this.bot.experience?.progress ?? 0,
+    };
+
+    // Stats
+    const stats = this.statsTracker.getStats(this.name);
+
+    // Combat
+    const combat = {
+      lastAttackerName: this.lastAttackerName,
+      lastAttackedAt: this.lastAttackedAt,
+      instinctActive: this.instinctActive,
+    };
 
     return {
       ...basic,
@@ -881,6 +1003,12 @@ export class BotInstance {
       inventory,
       world,
       voyager,
+      armor,
+      offhand,
+      hotbar,
+      experience,
+      stats,
+      combat,
     };
   }
 

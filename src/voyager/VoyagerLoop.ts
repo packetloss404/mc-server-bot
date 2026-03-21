@@ -11,6 +11,8 @@ import { getProgressionState } from './Progression';
 import { buildTaskPlan, PlannedStep, replanTaskStep } from './TaskPlanner';
 import { StatsTracker } from './StatsTracker';
 
+export type ChatCallback = (message: string) => void;
+
 export class VoyagerLoop {
   private bot: Bot;
   private personality: string;
@@ -26,6 +28,7 @@ export class VoyagerLoop {
   private paused = false;
   private loopTimeout: NodeJS.Timeout | null = null;
   private playerTaskQueue: Task[] = [];
+  private chatCallback: ChatCallback | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -127,6 +130,10 @@ export class VoyagerLoop {
     return this.skillLibrary;
   }
 
+  getQueuedTaskCount(): number {
+    return this.playerTaskQueue.length;
+  }
+
   /** Returns a short summary of what the bot is currently doing, for chat context. */
   getInternalState(): string {
     const parts: string[] = [];
@@ -145,6 +152,17 @@ export class VoyagerLoop {
       parts.push(`Queued tasks: ${this.playerTaskQueue.map(t => t.description).join(', ')}`);
     }
     return parts.join('. ');
+  }
+
+  /** Set a callback to send chat messages to the player during task execution */
+  setChatCallback(callback: ChatCallback | null): void {
+    this.chatCallback = callback;
+  }
+
+  private sendChat(message: string): void {
+    if (this.chatCallback) {
+      this.chatCallback(message);
+    }
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
@@ -210,15 +228,17 @@ export class VoyagerLoop {
       plan: plan.steps.map((step) => step.description),
     }, 'Voyager task proposed');
 
+    const isPlayerRequest = !!playerTask;
+
     for (const step of plan.steps) {
-      const ok = await this.executeTaskStep(step);
+      const ok = await this.executeTaskStep(step, isPlayerRequest);
       if (!ok) {
         const blockers = this.curriculumAgent.getBlockerMemory().getTaskBlockers({ description: step.description, keywords: step.keywords, spec: step.spec });
         const replanned = replanTaskStep({ description: step.description, keywords: step.keywords, spec: step.spec }, blockers, this.curriculumAgent.getWorldMemory());
         if (replanned) {
           logger.info({ bot: this.botName, step: step.description, replanned: replanned.steps.map((s) => s.description) }, 'Adaptive replan triggered');
           for (const replannedStep of replanned.steps) {
-            const replannedOk = await this.executeTaskStep(replannedStep);
+            const replannedOk = await this.executeTaskStep(replannedStep, isPlayerRequest);
             if (!replannedOk) {
               this.currentTask = null;
               return;
@@ -233,7 +253,7 @@ export class VoyagerLoop {
     this.currentTask = null;
   }
 
-  private async executeTaskStep(step: PlannedStep): Promise<boolean> {
+  private async executeTaskStep(step: PlannedStep, verbose = false): Promise<boolean> {
     const task: Task = { description: step.description, keywords: step.keywords, spec: step.spec };
     this.currentTask = task.description;
 
@@ -249,6 +269,15 @@ export class VoyagerLoop {
     const blockerSummary = this.curriculumAgent.getBlockerMemory().summarize(task);
     const worldMemorySummary = this.curriculumAgent.getWorldMemory().summary();
     const useDirectSkill = !!bestSkill && composableSkills.length <= 1;
+
+    if (verbose) {
+      if (useDirectSkill) {
+        this.sendChat(`I know how to do this! Using saved skill...`);
+      } else {
+        this.sendChat(`Generating code for: ${task.description}...`);
+      }
+    }
+
     let generated = useDirectSkill
       ? this.skillToGeneratedCode(bestSkill)
       : await this.actionAgent.generateCode(this.bot, task, this.skillLibrary, undefined, undefined, undefined, undefined, blockerSummary, worldMemorySummary);
@@ -334,6 +363,12 @@ export class VoyagerLoop {
             quality
           );
           this.skillLibrary.recordOutcome(skillName, true);
+          if (verbose && !useDirectSkill) {
+            this.sendChat(`Skill learned and saved! I'll remember how to do this next time.`);
+          }
+        }
+        if (verbose) {
+          this.sendChat(`Done: ${task.description}`);
         }
         this.curriculumAgent.updateProgress(task, true);
         this.curriculumAgent.getBlockerMemory().clearTask(task);
@@ -371,6 +406,9 @@ export class VoyagerLoop {
       events: [],
     }, lastError || 'task failed');
     this.lastFailedTask = task.description;
+    if (verbose) {
+      this.sendChat(`Sorry, I couldn't complete: ${task.description}`);
+    }
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;
   }

@@ -1,10 +1,25 @@
 'use client';
 
-import { useEffect, useState, useMemo } from 'react';
+import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, SchematicInfo, BuildJob } from '@/lib/api';
 import { useBotStore } from '@/lib/store';
 import { PageHeader } from '@/components/PageHeader';
+
+const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+const PERSONALITIES = ['builder', 'merchant', 'guard', 'elder', 'explorer', 'blacksmith', 'farmer'];
+
+function getRecommendation(blockCount: number) {
+  const BLOCKS_PER_BOT_15MIN = 3600; // 4 blocks/sec × 60 × 15
+  const raw = Math.ceil(blockCount / BLOCKS_PER_BOT_15MIN);
+  const count = Math.max(1, Math.min(5, raw));
+  const estimatedMinutes = Math.ceil(blockCount / (count * 4) / 60);
+  const reasoning = blockCount <= BLOCKS_PER_BOT_15MIN
+    ? 'Small build — one bot is sufficient'
+    : `${blockCount.toLocaleString()} blocks at ~15 min target`;
+  return { count, estimatedMinutes, reasoning };
+}
 
 const STATUS_COLORS: Record<string, string> = {
   waiting: '#6B7280',
@@ -53,6 +68,11 @@ export default function BuildPage() {
   const [selectedBots, setSelectedBots] = useState<Set<string>>(new Set());
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [botMode, setBotMode] = useState<'existing' | 'create'>('existing');
+  const [namePrefix, setNamePrefix] = useState('Builder');
+  const [botCount, setBotCount] = useState(1);
+  const [personality, setPersonality] = useState('builder');
+  const [createProgress, setCreateProgress] = useState('');
 
   const botList = useBotStore((s) => s.botList);
   const activeBuild = useBotStore((s) => s.activeBuild);
@@ -79,6 +99,25 @@ export default function BuildPage() {
       .catch(() => {});
   }, [setActiveBuild]);
 
+  const recommendation = useMemo(() => {
+    if (!selectedSchematic) return null;
+    return getRecommendation(selectedSchematic.blockCount);
+  }, [selectedSchematic]);
+
+  useEffect(() => {
+    if (recommendation) setBotCount(recommendation.count);
+  }, [recommendation]);
+
+  const effectiveBotNames = useMemo(() => {
+    if (botMode === 'existing') return Array.from(selectedBots);
+    return Array.from({ length: botCount }, (_, i) => `${namePrefix}${i + 1}`);
+  }, [botMode, selectedBots, botCount, namePrefix]);
+
+  const estimatedMinutes = useMemo(() => {
+    if (!selectedSchematic || effectiveBotNames.length === 0) return 0;
+    return Math.ceil(selectedSchematic.blockCount / (effectiveBotNames.length * 4) / 60);
+  }, [selectedSchematic, effectiveBotNames]);
+
   const toggleBot = (name: string) => {
     setSelectedBots((prev) => {
       const next = new Set(prev);
@@ -89,27 +128,70 @@ export default function BuildPage() {
   };
 
   const layerPreview = useMemo(() => {
-    if (!selectedSchematic || selectedBots.size === 0) return [];
-    const bots = Array.from(selectedBots);
+    if (!selectedSchematic || effectiveBotNames.length === 0) return [];
     const totalY = selectedSchematic.size.y;
-    const layersPerBot = Math.ceil(totalY / bots.length);
-    return bots.map((name, i) => ({
+    const layersPerBot = Math.ceil(totalY / effectiveBotNames.length);
+    return effectiveBotNames.map((name, i) => ({
       botName: name,
       yMin: i * layersPerBot,
       yMax: Math.min((i + 1) * layersPerBot - 1, totalY - 1),
     }));
-  }, [selectedSchematic, selectedBots]);
+  }, [selectedSchematic, effectiveBotNames]);
 
   const handleStartBuild = async () => {
-    if (!selectedSchematic || selectedBots.size === 0) return;
+    if (!selectedSchematic) return;
     setStarting(true);
     setError(null);
+    setCreateProgress('');
+
     try {
-      const result = await api.startBuild(
-        selectedSchematic.filename,
-        origin,
-        Array.from(selectedBots),
-      );
+      let botNames: string[];
+
+      if (botMode === 'existing') {
+        if (selectedBots.size === 0) return;
+        botNames = Array.from(selectedBots);
+      } else {
+        botNames = Array.from({ length: botCount }, (_, i) => `${namePrefix}${i + 1}`);
+
+        // Create bots sequentially
+        for (let i = 0; i < botNames.length; i++) {
+          setCreateProgress(`Creating ${botNames[i]}... (${i + 1}/${botNames.length})`);
+          try {
+            await api.createBot(botNames[i], personality, 'codegen');
+          } catch (err: any) {
+            // Bot might already exist — that's ok
+            if (!err.message?.includes('already exists')) throw err;
+          }
+          if (i < botNames.length - 1) await delay(1000);
+        }
+
+        // Wait for bots to connect
+        setCreateProgress('Waiting for bots to connect...');
+        const startTime = Date.now();
+        const TIMEOUT = 90_000;
+
+        while (Date.now() - startTime < TIMEOUT) {
+          await delay(2000);
+          const { bots } = await api.getBots();
+          const created = bots.filter((b) => botNames.includes(b.name));
+          const connected = created.filter(
+            (b) => b.state !== 'DISCONNECTED' && b.state !== 'SPAWNING',
+          );
+          setCreateProgress(`Waiting for bots... (${connected.length}/${botNames.length} connected)`);
+          if (connected.length === botNames.length) break;
+        }
+
+        // Use whatever connected
+        const { bots: finalBots } = await api.getBots();
+        const ready = finalBots
+          .filter((b) => botNames.includes(b.name))
+          .filter((b) => b.state !== 'DISCONNECTED' && b.state !== 'SPAWNING');
+        if (ready.length === 0) throw new Error('No bots connected within 90 seconds');
+        botNames = ready.map((b) => b.name);
+      }
+
+      setCreateProgress('Starting build...');
+      const result = await api.startBuild(selectedSchematic.filename, origin, botNames);
       setActiveBuild(result.build);
       setSelectedSchematic(null);
       setSelectedBots(new Set());
@@ -117,6 +199,7 @@ export default function BuildPage() {
       setError(err.message || 'Failed to start build');
     } finally {
       setStarting(false);
+      setCreateProgress('');
     }
   };
 
@@ -347,40 +430,141 @@ export default function BuildPage() {
                     </div>
                   </div>
 
-                  {/* Bot Selector */}
-                  <div className="space-y-2">
+                  {/* Bot Selector — Tabbed */}
+                  <div className="space-y-3">
                     <label className="text-xs text-zinc-400 font-medium">Assign Bots</label>
-                    {connectedBots.length === 0 ? (
-                      <p className="text-xs text-zinc-600">No connected bots available</p>
-                    ) : (
-                      <div className="flex flex-wrap gap-2">
-                        {connectedBots.map((bot) => {
-                          const checked = selectedBots.has(bot.name);
-                          return (
-                            <button
-                              key={bot.name}
-                              onClick={() => toggleBot(bot.name)}
-                              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                                checked
-                                  ? 'bg-teal-500/15 border border-teal-500/40 text-teal-300'
-                                  : 'bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600/60'
-                              }`}
-                            >
-                              <span
-                                className={`w-3.5 h-3.5 rounded border-2 flex items-center justify-center transition-colors ${
-                                  checked ? 'border-teal-500 bg-teal-500' : 'border-zinc-600'
+                    <div className="flex gap-2">
+                      {(['existing', 'create'] as const).map((mode) => (
+                        <button
+                          key={mode}
+                          onClick={() => setBotMode(mode)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            botMode === mode
+                              ? 'bg-teal-500/15 border border-teal-500/40 text-teal-300'
+                              : 'bg-zinc-800/60 border border-zinc-700/40 text-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          {mode === 'existing' ? 'Use Existing Bots' : 'Create Bots for Task'}
+                        </button>
+                      ))}
+                    </div>
+
+                    {botMode === 'existing' ? (
+                      connectedBots.length === 0 ? (
+                        <p className="text-xs text-zinc-600">No connected bots available</p>
+                      ) : (
+                        <div className="flex flex-wrap gap-2">
+                          {connectedBots.map((bot) => {
+                            const checked = selectedBots.has(bot.name);
+                            return (
+                              <button
+                                key={bot.name}
+                                onClick={() => toggleBot(bot.name)}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                                  checked
+                                    ? 'bg-teal-500/15 border border-teal-500/40 text-teal-300'
+                                    : 'bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600/60'
                                 }`}
                               >
-                                {checked && (
-                                  <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
-                                    <polyline points="20 6 9 17 4 12" />
-                                  </svg>
-                                )}
-                              </span>
-                              {bot.name}
+                                <span
+                                  className={`w-3.5 h-3.5 rounded border-2 flex items-center justify-center transition-colors ${
+                                    checked ? 'border-teal-500 bg-teal-500' : 'border-zinc-600'
+                                  }`}
+                                >
+                                  {checked && (
+                                    <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
+                                      <polyline points="20 6 9 17 4 12" />
+                                    </svg>
+                                  )}
+                                </span>
+                                {bot.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )
+                    ) : (
+                      <div className="space-y-4">
+                        {/* AI Recommendation */}
+                        {recommendation && (
+                          <div className="bg-teal-500/10 border border-teal-500/30 rounded-lg p-3 space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1ABC9C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
+                                </svg>
+                                <span className="text-xs font-semibold text-teal-300">
+                                  Recommended: {recommendation.count} bot{recommendation.count !== 1 ? 's' : ''}
+                                </span>
+                              </div>
+                              {botCount !== recommendation.count && (
+                                <button
+                                  onClick={() => setBotCount(recommendation.count)}
+                                  className="text-[10px] text-teal-400 hover:text-teal-300 font-medium"
+                                >
+                                  Use Recommended
+                                </button>
+                              )}
+                            </div>
+                            <p className="text-[11px] text-zinc-500">{recommendation.reasoning}</p>
+                          </div>
+                        )}
+
+                        {/* Name Prefix */}
+                        <div className="flex items-center gap-4">
+                          <div className="flex-1 space-y-1">
+                            <label className="text-[10px] text-zinc-600 uppercase font-bold">Name Prefix</label>
+                            <input
+                              type="text"
+                              value={namePrefix}
+                              onChange={(e) => setNamePrefix(e.target.value.replace(/\s/g, ''))}
+                              placeholder="Builder"
+                              className="w-full bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-[10px] text-zinc-600 uppercase font-bold">Personality</label>
+                            <select
+                              value={personality}
+                              onChange={(e) => setPersonality(e.target.value)}
+                              className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white"
+                            >
+                              {PERSONALITIES.map((p) => (
+                                <option key={p} value={p}>{p.charAt(0).toUpperCase() + p.slice(1)}</option>
+                              ))}
+                            </select>
+                          </div>
+                        </div>
+
+                        {/* Bot Count Stepper */}
+                        <div className="space-y-1">
+                          <label className="text-[10px] text-zinc-600 uppercase font-bold">Bot Count</label>
+                          <div className="flex items-center gap-3">
+                            <button
+                              onClick={() => setBotCount((c) => Math.max(1, c - 1))}
+                              disabled={botCount <= 1}
+                              className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-white hover:border-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-sm font-bold"
+                            >
+                              -
                             </button>
-                          );
-                        })}
+                            <span className="text-lg font-bold text-white w-8 text-center">{botCount}</span>
+                            <button
+                              onClick={() => setBotCount((c) => Math.min(5, c + 1))}
+                              disabled={botCount >= 5}
+                              className="w-8 h-8 rounded-lg bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-white hover:border-zinc-600 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center text-sm font-bold"
+                            >
+                              +
+                            </button>
+                            <span className="text-xs text-zinc-500 ml-2">
+                              ~{estimatedMinutes} min estimated
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Name Preview */}
+                        <p className="text-[11px] text-zinc-500">
+                          Will create: {effectiveBotNames.join(', ')}
+                        </p>
                       </div>
                     )}
                   </div>
@@ -423,24 +607,34 @@ export default function BuildPage() {
                   )}
 
                   {/* Start Button */}
-                  <button
-                    onClick={handleStartBuild}
-                    disabled={selectedBots.size === 0 || starting}
-                    className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-all ${
-                      selectedBots.size === 0 || starting
-                        ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
-                        : 'bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-lg shadow-teal-900/20'
-                    }`}
-                  >
-                    {starting ? (
-                      <span className="flex items-center justify-center gap-2">
-                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                        Starting Build...
-                      </span>
-                    ) : (
-                      `Start Build with ${selectedBots.size} Bot${selectedBots.size !== 1 ? 's' : ''}`
-                    )}
-                  </button>
+                  {(() => {
+                    const canStart = botMode === 'existing'
+                      ? selectedBots.size > 0
+                      : namePrefix.trim().length > 0 && botCount > 0;
+                    const buttonLabel = botMode === 'existing'
+                      ? `Start Build with ${selectedBots.size} Bot${selectedBots.size !== 1 ? 's' : ''}`
+                      : `Create ${botCount} Bot${botCount !== 1 ? 's' : ''} & Start Build`;
+                    return (
+                      <button
+                        onClick={handleStartBuild}
+                        disabled={!canStart || starting}
+                        className={`w-full py-2.5 rounded-lg text-sm font-semibold transition-all ${
+                          !canStart || starting
+                            ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                            : 'bg-gradient-to-r from-teal-600 to-cyan-600 hover:from-teal-500 hover:to-cyan-500 text-white shadow-lg shadow-teal-900/20'
+                        }`}
+                      >
+                        {starting ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                            {createProgress || 'Starting Build...'}
+                          </span>
+                        ) : (
+                          buttonLabel
+                        )}
+                      </button>
+                    );
+                  })()}
                 </div>
               </motion.div>
             )}

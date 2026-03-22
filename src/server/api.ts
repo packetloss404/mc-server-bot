@@ -383,6 +383,24 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
+  // Online players with positions
+  app.get('/api/players', (_req: Request, res: Response) => {
+    const bots = botManager.getAllBots();
+    const connectedBot = bots.find((b) => b.bot);
+    if (!connectedBot?.bot) {
+      res.json({ players: [] });
+      return;
+    }
+    const players = Object.values(connectedBot.bot.players)
+      .filter((p) => p.username && p.entity)
+      .map((p) => ({
+        name: p.username,
+        position: p.entity ? { x: Math.floor(p.entity.position.x), y: Math.floor(p.entity.position.y), z: Math.floor(p.entity.position.z) } : null,
+        isOnline: true,
+      }));
+    res.json({ players });
+  });
+
   // Resume bot voyager loop
   app.post('/api/bots/:name/resume', (req: Request, res: Response) => {
     const bot = botManager.getBot(req.params.name as string);

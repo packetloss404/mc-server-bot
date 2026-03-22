@@ -71,10 +71,12 @@ export default function BuildPage() {
   const [botMode, setBotMode] = useState<'existing' | 'create'>('existing');
   const [namePrefix, setNamePrefix] = useState('Builder');
   const [botCount, setBotCount] = useState(1);
+  const [createdBotNames, setCreatedBotNames] = useState<string[]>([]);
   const [personality, setPersonality] = useState('builder');
   const [createProgress, setCreateProgress] = useState('');
 
   const botList = useBotStore((s) => s.botList);
+  const playerList = useBotStore((s) => s.playerList);
   const activeBuild = useBotStore((s) => s.activeBuild);
   const setActiveBuild = useBotStore((s) => s.setActiveBuild);
 
@@ -162,7 +164,7 @@ export default function BuildPage() {
             // Bot might already exist — that's ok
             if (!err.message?.includes('already exists')) throw err;
           }
-          if (i < botNames.length - 1) await delay(1000);
+          if (i < botNames.length - 1) await delay(5000);
         }
 
         // Wait for bots to connect
@@ -190,6 +192,9 @@ export default function BuildPage() {
         botNames = ready.map((b) => b.name);
       }
 
+      // Track which bots were created for this build
+      if (botMode === 'create') setCreatedBotNames(botNames);
+
       setCreateProgress('Starting build...');
       const result = await api.startBuild(selectedSchematic.filename, origin, botNames);
       setActiveBuild(result.build);
@@ -207,6 +212,13 @@ export default function BuildPage() {
     if (!activeBuild) return;
     try {
       await api.cancelBuild(activeBuild.id);
+      // Delete bots that were created for this build
+      if (createdBotNames.length > 0) {
+        for (const name of createdBotNames) {
+          try { await api.deleteBot(name); } catch {}
+        }
+        setCreatedBotNames([]);
+      }
       setActiveBuild(null);
     } catch {}
   };
@@ -426,6 +438,36 @@ export default function BuildPage() {
                             className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white w-24 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
                           />
                         </div>
+                      ))}
+                    </div>
+                    {/* Use player/bot position */}
+                    <div className="flex flex-wrap gap-1.5 mt-1.5">
+                      {playerList.filter((p) => p.isOnline && p.position).map((player) => (
+                        <button
+                          key={player.name}
+                          onClick={() => setOrigin({ x: Math.floor(player.position!.x), y: Math.floor(player.position!.y), z: Math.floor(player.position!.z) })}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-medium bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-all"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
+                            <circle cx="12" cy="10" r="3" />
+                          </svg>
+                          {player.name}
+                        </button>
+                      ))}
+                      {connectedBots.map((bot) => bot.position && (
+                        <button
+                          key={bot.name}
+                          onClick={() => setOrigin({ x: Math.floor(bot.position!.x), y: Math.floor(bot.position!.y), z: Math.floor(bot.position!.z) })}
+                          className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-medium bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-teal-300 hover:border-teal-500/40 transition-all"
+                        >
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <rect x="3" y="3" width="18" height="18" rx="2" />
+                            <circle cx="12" cy="10" r="3" />
+                            <path d="M7 21v-2a4 4 0 014-4h2a4 4 0 014 4v2" />
+                          </svg>
+                          {bot.name}
+                        </button>
                       ))}
                     </div>
                   </div>

@@ -58,6 +58,20 @@ export class BotManager {
     const effectiveMode = mode || this.config.bots.defaultMode;
     const botMode = effectiveMode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
+    // Whitelist and OP the new bot using an already-connected bot
+    const connectedBot = this.getAllBots().find((b) => b.bot);
+    if (connectedBot?.bot) {
+      try {
+        connectedBot.bot.chat(`/whitelist add ${name}`);
+        await new Promise((r) => setTimeout(r, 500));
+        connectedBot.bot.chat(`/op ${name}`);
+        logger.info({ bot: name, via: connectedBot.name }, 'Whitelisted and OP\'d new bot');
+        await new Promise((r) => setTimeout(r, 1000));
+      } catch (e) {
+        logger.warn({ bot: name }, 'Failed to whitelist/OP bot — may need manual setup');
+      }
+    }
+
     const instance = new BotInstance({
       name,
       personality,

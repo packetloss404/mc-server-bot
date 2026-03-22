@@ -38,9 +38,10 @@ export interface BotAssignment {
 }
 
 interface BlockEntry {
-  pos: Vec3;
+  // Store as raw numbers instead of Vec3 to save memory
+  wx: number; wy: number; wz: number; // world position
   name: string;
-  properties: Record<string, string>;
+  stateStr: string; // pre-computed block state string
   localY: number;
 }
 
@@ -80,6 +81,14 @@ export class BuildCoordinator {
     const results: SchematicInfo[] = [];
     for (const filename of files) {
       try {
+        // Skip files larger than 1MB to avoid OOM on huge schematics
+        const filePath = path.join(this.schematicsDir, filename);
+        const stat = fs.statSync(filePath);
+        if (stat.size > 1_000_000) {
+          results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
+          logger.info({ filename, sizeBytes: stat.size }, 'Skipping large schematic metadata load');
+          continue;
+        }
         const info = await this.getSchematicInfoAsync(filename);
         if (info) results.push(info);
       } catch (err: any) {
@@ -99,6 +108,14 @@ export class BuildCoordinator {
     const buffer = fs.readFileSync(fullPath);
     const schematic = await Schematic.read(buffer, this.getBotVersion());
     const size = schematic.size;
+
+    // Skip full block counting for huge schematics to avoid OOM
+    const volume = size.x * size.y * size.z;
+    if (volume > 500_000) {
+      // Estimate block count as ~15% of volume (typical for structures)
+      return { filename, size: { x: size.x, y: size.y, z: size.z }, blockCount: Math.round(volume * 0.15) };
+    }
+
     const start = schematic.start();
     const end = schematic.end();
 
@@ -140,32 +157,46 @@ export class BuildCoordinator {
 
     // Load schematic
     const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer);
-    const basePos = new Vec3(origin.x, origin.y, origin.z);
+    const schematic = await Schematic.read(buffer, this.getBotVersion());
+
+    const ox = origin.x, oy = origin.y, oz = origin.z;
     const start = schematic.start();
     const end = schematic.end();
+    const sx = start.x, sy = start.y, sz = start.z;
 
-    // Collect all non-air blocks sorted by Y
+    // Collect all non-air blocks as lightweight objects (no Vec3 to save memory)
     const blocks: BlockEntry[] = [];
+    const tempPos = new Vec3(0, 0, 0); // reuse single Vec3
     for (let y = start.y; y <= end.y; y++) {
       for (let z = start.z; z <= end.z; z++) {
         for (let x = start.x; x <= end.x; x++) {
-          const localPos = new Vec3(x, y, z);
-          const block = schematic.getBlock(localPos);
+          tempPos.x = x; tempPos.y = y; tempPos.z = z;
+          const block = schematic.getBlock(tempPos);
           if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+            const props = block.getProperties ? block.getProperties() : {};
+            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
             blocks.push({
-              pos: basePos.plus(localPos).minus(start),
+              wx: ox + x - sx, wy: oy + y - sy, wz: oz + z - sz,
               name: block.name,
-              properties: block.getProperties ? block.getProperties() : {},
-              localY: y - start.y,
+              stateStr,
+              localY: y - sy,
             });
           }
         }
       }
     }
+    // Free schematic from memory
+    // @ts-ignore
+    buffer.fill(0);
 
     if (blocks.length === 0) {
       throw new Error('Schematic contains no blocks');
+    }
+
+    // Safety limit on actual block count to prevent OOM
+    const MAX_BLOCKS = 50000;
+    if (blocks.length > MAX_BLOCKS) {
+      throw new Error(`Schematic has ${blocks.length.toLocaleString()} blocks. Max supported: ${MAX_BLOCKS.toLocaleString()}.`);
     }
 
     // Determine Y range
@@ -348,6 +379,24 @@ export class BuildCoordinator {
         instance.bot.clearControlStates();
       } catch {}
 
+      // Set creative mode so bot can't die during build, then teleport to site
+      try {
+        const opBot = this.botManager.getAllBots().find((b) => b.bot && b.name !== assignment.botName);
+        const cmds = [
+          `/gamemode creative ${assignment.botName}`,
+          `/tp ${assignment.botName} ${job.origin.x} ${job.origin.y + 50} ${job.origin.z}`,
+        ];
+        for (const cmd of cmds) {
+          if (opBot?.bot) opBot.bot.chat(cmd);
+          instance.bot.chat(cmd);
+          await this.sleep(500);
+        }
+        await this.sleep(1000);
+        logger.info({ bot: assignment.botName }, 'Set creative mode and teleported to build site');
+      } catch (e) {
+        logger.warn({ bot: assignment.botName }, 'Failed to prepare bot for building');
+      }
+
       // Set bot state to BUILDING
       instance.state = BotState.BUILDING;
       assignment.status = 'building';
@@ -376,7 +425,10 @@ export class BuildCoordinator {
         logger.error({ jobId, bot: assignment.botName, err: err.message }, 'Bot assignment failed');
       }
 
-      // Reset bot state and resume voyager
+      // Switch back to survival and reset bot state
+      try {
+        instance.bot.chat(`/gamemode survival ${assignment.botName}`);
+      } catch {}
       instance.state = BotState.IDLE;
       if (voyager) voyager.resume();
 
@@ -430,15 +482,10 @@ export class BuildCoordinator {
         await this.sleep(500);
       }
 
-      // Build the block state string (mirrors buildSchematic.ts lines 94-98)
-      const stateStr = Object.entries(block.properties)
-        .map(([k, v]) => `${k}=${v}`)
-        .join(',');
-      const blockSpec = stateStr ? `${block.name}[${stateStr}]` : block.name;
-
       // Place block using /setblock command
+      const blockSpec = block.stateStr ? `${block.name}[${block.stateStr}]` : block.name;
       bot.chat(
-        `/setblock ${block.pos.x} ${block.pos.y} ${block.pos.z} minecraft:${blockSpec} replace`,
+        `/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`,
       );
 
       // 250ms delay between blocks to avoid server spam kick

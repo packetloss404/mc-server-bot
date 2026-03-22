@@ -51,7 +51,7 @@ voyager:
 
 llm:
   provider: "gemini"
-  model: "gemini-3.1-pro-preview"
+  model: "gemini-3-flash-preview"
   temperature: 0.7
   chatMaxTokens: 1024
   codeGenMaxTokens: 4096

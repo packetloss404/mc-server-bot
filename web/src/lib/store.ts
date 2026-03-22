@@ -153,7 +153,7 @@ export const useBotStore = create<BotStore>((set) => ({
 
   updateBuildProgress: (buildId, botName, blocksPlaced, currentY) =>
     set((state) => {
-      if (!state.activeBuild || state.activeBuild.id !== buildId) return {};
+      if (!state.activeBuild || state.activeBuild.id !== buildId || !state.activeBuild.assignments) return {};
       const assignments = state.activeBuild.assignments.map((a) =>
         a.botName === botName ? { ...a, blocksPlaced, currentY } : a,
       );
@@ -165,7 +165,7 @@ export const useBotStore = create<BotStore>((set) => ({
 
   updateBuildBotStatus: (buildId, botName, status) =>
     set((state) => {
-      if (!state.activeBuild || state.activeBuild.id !== buildId) return {};
+      if (!state.activeBuild || state.activeBuild.id !== buildId || !state.activeBuild.assignments) return {};
       const assignments = state.activeBuild.assignments.map((a) =>
         a.botName === botName ? { ...a, status: status as any } : a,
       );

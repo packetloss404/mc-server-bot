@@ -145,7 +145,7 @@ export default function BuildPage() {
   };
 
   const overallPct = activeBuild && activeBuild.totalBlocks > 0
-    ? Math.round((activeBuild.placedBlocks / activeBuild.totalBlocks) * 100)
+    ? Math.round(((activeBuild.placedBlocks ?? 0) / activeBuild.totalBlocks) * 100)
     : 0;
 
   return (
@@ -215,15 +215,15 @@ export default function BuildPage() {
               <div className="flex items-center justify-between text-xs">
                 <span className="text-zinc-400">Overall Progress</span>
                 <span className="text-white font-medium">
-                  {activeBuild.placedBlocks.toLocaleString()} / {activeBuild.totalBlocks.toLocaleString()} blocks ({overallPct}%)
+                  {(activeBuild.placedBlocks ?? 0).toLocaleString()} / {(activeBuild.totalBlocks ?? 0).toLocaleString()} blocks ({overallPct}%)
                 </span>
               </div>
-              <ProgressBar value={activeBuild.placedBlocks} max={activeBuild.totalBlocks} />
+              <ProgressBar value={activeBuild.placedBlocks ?? 0} max={activeBuild.totalBlocks ?? 0} />
             </div>
 
             {/* Per-Bot Assignments */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {activeBuild.assignments.map((assignment) => {
+              {(activeBuild.assignments ?? []).map((assignment) => {
                 const botPct = assignment.blocksTotal > 0
                   ? Math.round((assignment.blocksPlaced / assignment.blocksTotal) * 100)
                   : 0;

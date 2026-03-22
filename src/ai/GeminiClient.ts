@@ -7,12 +7,16 @@ export class GeminiClient implements LLMClient {
   private temperature: number;
   private defaultMaxTokens: number;
   private baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  private supportsThinking: boolean;
 
   constructor(opts: { apiKey: string; model: string; temperature: number; maxTokens: number }) {
     this.apiKey = opts.apiKey;
     this.model = opts.model;
     this.temperature = opts.temperature;
     this.defaultMaxTokens = opts.maxTokens;
+    // Only models with "thinking" or "3.1" in name support thinkingConfig
+    this.supportsThinking = /thinking|3\.1/i.test(this.model);
+    logger.info({ model: this.model, supportsThinking: this.supportsThinking }, 'Gemini client initialized');
   }
 
   async chat(systemPrompt: string, contents: any[], maxTokens?: number): Promise<LLMResponse> {
@@ -24,9 +28,7 @@ export class GeminiClient implements LLMClient {
       generationConfig: {
         temperature: this.temperature,
         maxOutputTokens: maxTokens || this.defaultMaxTokens,
-        thinkingConfig: {
-          thinkingBudget: 128, // Minimal thinking for fast chat responses
-        },
+        ...(this.supportsThinking && { thinkingConfig: { thinkingBudget: 128 } }),
       },
     };
 
@@ -71,9 +73,7 @@ export class GeminiClient implements LLMClient {
       generationConfig: {
         temperature: this.temperature,
         maxOutputTokens: maxTokens || this.defaultMaxTokens,
-        thinkingConfig: {
-          thinkingBudget: 2048,
-        },
+        ...(this.supportsThinking && { thinkingConfig: { thinkingBudget: 2048 } }),
       },
     };
 

@@ -64,7 +64,13 @@ export class BuildCoordinator {
 
   // ── Schematic listing ───────────────────────────────────
 
-  listSchematics(): SchematicInfo[] {
+  private getBotVersion(): string {
+    const bots = this.botManager.getAllBots();
+    const connected = bots.find((b) => b.bot);
+    return connected?.bot?.version ?? '1.21.11';
+  }
+
+  async listSchematics(): Promise<SchematicInfo[]> {
     if (!fs.existsSync(this.schematicsDir)) return [];
 
     const files = fs.readdirSync(this.schematicsDir).filter(
@@ -74,58 +80,14 @@ export class BuildCoordinator {
     const results: SchematicInfo[] = [];
     for (const filename of files) {
       try {
-        const info = this.getSchematicInfo(filename);
+        const info = await this.getSchematicInfoAsync(filename);
         if (info) results.push(info);
       } catch (err: any) {
         logger.warn({ filename, err: err.message }, 'Failed to read schematic metadata');
+        results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
       }
     }
     return results;
-  }
-
-  getSchematicInfo(filename: string): SchematicInfo | null {
-    const { Schematic } = require('prismarine-schematic');
-    const fullPath = path.join(this.schematicsDir, filename);
-
-    if (!fs.existsSync(fullPath)) return null;
-
-    const buffer = fs.readFileSync(fullPath);
-    // Schematic.read is async but we need sync info — parse header only
-    // We use a cached synchronous approach: read returns a promise, so we
-    // load via the underlying NBT synchronously where possible.
-    // For simplicity and correctness, we'll cache results from async loads.
-    // However, since listSchematics is called from sync API handlers,
-    // we do a synchronous read using the internal API.
-    let schematic: any;
-    try {
-      // prismarine-schematic exposes a sync parser for basic NBT schematics
-      schematic = Schematic.readSync(buffer);
-    } catch {
-      // Fallback: return basic info from filename
-      return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };
-    }
-
-    const size = schematic.size;
-    const start = schematic.start();
-    const end = schematic.end();
-
-    let blockCount = 0;
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          const block = schematic.getBlock(new Vec3(x, y, z));
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            blockCount++;
-          }
-        }
-      }
-    }
-
-    return {
-      filename,
-      size: { x: size.x, y: size.y, z: size.z },
-      blockCount,
-    };
   }
 
   async getSchematicInfoAsync(filename: string): Promise<SchematicInfo | null> {
@@ -135,7 +97,7 @@ export class BuildCoordinator {
     if (!fs.existsSync(fullPath)) return null;
 
     const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer);
+    const schematic = await Schematic.read(buffer, this.getBotVersion());
     const size = schematic.size;
     const start = schematic.start();
     const end = schematic.end();

@@ -12,6 +12,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
     incrementUnreadChats,
     setActiveBuild, updateBuildProgress, updateBuildBotStatus,
+    setChains, updateChainStage, updateChainStatus,
   } = useBotStore();
 
   useEffect(() => {
@@ -111,6 +112,31 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       setActiveBuild(null);
     });
 
+    // Chain events
+    socket.on('chain:started', () => {
+      api.getChains().then((data) => setChains(data.chains)).catch(() => {});
+    });
+
+    socket.on('chain:stage-update', (data: { chainId: string; stageIndex: number; stage: any }) => {
+      updateChainStage(data.chainId, data.stageIndex, data.stage);
+    });
+
+    socket.on('chain:completed', (data: { chainId: string }) => {
+      updateChainStatus(data.chainId, 'completed');
+    });
+
+    socket.on('chain:failed', (data: { chainId: string }) => {
+      updateChainStatus(data.chainId, 'failed');
+    });
+
+    socket.on('chain:paused', (data: { chainId: string }) => {
+      updateChainStatus(data.chainId, 'paused');
+    });
+
+    socket.on('chain:cancelled', () => {
+      api.getChains().then((data) => setChains(data.chains)).catch(() => {});
+    });
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -133,6 +159,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('build:bot-status');
       socket.off('build:completed');
       socket.off('build:cancelled');
+      socket.off('chain:started');
+      socket.off('chain:stage-update');
+      socket.off('chain:completed');
+      socket.off('chain:failed');
+      socket.off('chain:paused');
+      socket.off('chain:cancelled');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,
@@ -140,6 +172,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
     incrementUnreadChats,
     setActiveBuild, updateBuildProgress, updateBuildBotStatus,
+    setChains, updateChainStage, updateChainStatus,
   ]);
 
   return <>{children}</>;

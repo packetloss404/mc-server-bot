@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState, BuildJob } from './api';
+import type { BotStatus, BotEvent, WorldState, BuildJob, SupplyChain } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -43,6 +43,10 @@ interface BotStore {
   setActiveBuild: (build: BuildJob | null) => void;
   updateBuildProgress: (buildId: string, botName: string, blocksPlaced: number, currentY: number) => void;
   updateBuildBotStatus: (buildId: string, botName: string, status: string) => void;
+  chains: SupplyChain[];
+  setChains: (chains: SupplyChain[]) => void;
+  updateChainStage: (chainId: string, stageIndex: number, stage: any) => void;
+  updateChainStatus: (chainId: string, status: string) => void;
 }
 
 function toBotList(byId: Record<string, BotLiveData>): BotLiveData[] {
@@ -169,4 +173,24 @@ export const useBotStore = create<BotStore>((set) => ({
         activeBuild: { ...state.activeBuild, assignments },
       };
     }),
+
+  chains: [],
+
+  setChains: (chains) => set({ chains }),
+
+  updateChainStage: (chainId, stageIndex, stage) =>
+    set((state) => ({
+      chains: state.chains.map((c) =>
+        c.id === chainId
+          ? { ...c, stages: c.stages.map((s, i) => (i === stageIndex ? { ...s, ...stage } : s)), currentStageIndex: stageIndex }
+          : c,
+      ),
+    })),
+
+  updateChainStatus: (chainId, status) =>
+    set((state) => ({
+      chains: state.chains.map((c) =>
+        c.id === chainId ? { ...c, status: status as any } : c,
+      ),
+    })),
 }));

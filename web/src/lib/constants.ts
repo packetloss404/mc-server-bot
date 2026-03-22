@@ -90,4 +90,7 @@ export const EVENT_CONFIG: Record<string, { icon: string; label: string; color: 
   'build:started': { icon: '\u25B6', label: 'Build Started', color: '#1ABC9C' },
   'build:completed': { icon: '\u2713', label: 'Build Complete', color: '#10B981' },
   'build:cancelled': { icon: '\u25A0', label: 'Build Cancelled', color: '#EF4444' },
+  'chain:started': { icon: '\u26D3', label: 'Chain Started', color: '#F59E0B' },
+  'chain:completed': { icon: '\u26D3', label: 'Chain Complete', color: '#10B981' },
+  'chain:failed': { icon: '\u26D3', label: 'Chain Failed', color: '#EF4444' },
 };

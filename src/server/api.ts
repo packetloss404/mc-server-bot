@@ -7,6 +7,7 @@ import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
 import { logger } from '../util/logger';
 import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 
 export interface APIServerResult {
   app: express.Application;
@@ -14,6 +15,7 @@ export interface APIServerResult {
   io: SocketIOServer;
   eventLog: EventLog;
   buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -472,5 +474,99 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog, buildCoordinator };
+  // ═══════════════════════════════════════
+  //  SUPPLY CHAIN COORDINATOR + ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
+
+  // List all available chain templates
+  app.get('/api/chain-templates', (_req: Request, res: Response) => {
+    const templates = chainCoordinator.getTemplates();
+    res.json({ templates });
+  });
+
+  // List all supply chains
+  app.get('/api/chains', (_req: Request, res: Response) => {
+    const chains = chainCoordinator.getAllChains();
+    res.json({ chains });
+  });
+
+  // Get single supply chain
+  app.get('/api/chains/:id', (req: Request, res: Response) => {
+    const chain = chainCoordinator.getChain(req.params.id as string);
+    if (!chain) {
+      res.status(404).json({ error: 'Supply chain not found' });
+      return;
+    }
+    res.json({ chain });
+  });
+
+  // Create a supply chain
+  app.post('/api/chains', (req: Request, res: Response) => {
+    const { name, description, templateId, stages, loop, botAssignments, chestLocations } = req.body;
+
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+
+    try {
+      const chain = chainCoordinator.createChain({
+        name,
+        description,
+        templateId,
+        stages,
+        loop,
+        botAssignments,
+        chestLocations,
+      });
+      res.status(201).json({ chain });
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to create supply chain');
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Delete a supply chain
+  app.delete('/api/chains/:id', (req: Request, res: Response) => {
+    const success = chainCoordinator.deleteChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Supply chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Start a supply chain
+  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
+    const success = chainCoordinator.startChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Supply chain not found or already running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Pause a supply chain
+  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
+    const success = chainCoordinator.pauseChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Supply chain not found or not running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Cancel a supply chain
+  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
+    const success = chainCoordinator.cancelChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Supply chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };
 }

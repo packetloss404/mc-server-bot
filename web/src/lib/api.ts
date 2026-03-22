@@ -160,6 +160,42 @@ export interface BuildJob {
   assignments: BotAssignment[];
 }
 
+export interface ChestLocation { x: number; y: number; z: number; label: string; }
+
+export interface ChainStage {
+  id: string;
+  botName: string;
+  task: string;
+  inputChest?: ChestLocation;
+  outputChest?: ChestLocation;
+  inputItems?: { item: string; count: number }[];
+  outputItems?: { item: string; count: number }[];
+  status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
+  startedAt?: number;
+  completedAt?: number;
+  retries: number;
+  error?: string;
+}
+
+export interface SupplyChain {
+  id: string;
+  name: string;
+  description?: string;
+  stages: ChainStage[];
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  currentStageIndex: number;
+  loop: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChainTemplate {
+  id: string;
+  name: string;
+  description: string;
+  stages: { task: string; inputItems?: { item: string; count: number }[]; outputItems?: { item: string; count: number }[] }[];
+}
+
 // API functions
 export const api = {
   // Bots
@@ -245,4 +281,14 @@ export const api = {
   cancelBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/cancel`, { method: 'POST' }),
   pauseBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/pause`, { method: 'POST' }),
   resumeBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/resume`, { method: 'POST' }),
+
+  // Supply Chains
+  getChainTemplates: () => fetchJSON<{ templates: ChainTemplate[] }>('/api/chain-templates'),
+  getChains: () => fetchJSON<{ chains: SupplyChain[] }>('/api/chains'),
+  getChain: (id: string) => fetchJSON<{ chain: SupplyChain }>(`/api/chains/${id}`),
+  createChain: (data: any) => fetchJSON<{ success: boolean; chain: SupplyChain }>('/api/chains', { method: 'POST', body: JSON.stringify(data) }),
+  deleteChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}`, { method: 'DELETE' }),
+  startChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/start`, { method: 'POST' }),
+  pauseChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/pause`, { method: 'POST' }),
+  cancelChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/cancel`, { method: 'POST' }),
 };

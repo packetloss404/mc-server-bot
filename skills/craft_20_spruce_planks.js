@@ -1,14 +1,10 @@
-async function craftSprucePlanks(bot) {
-  let planks = bot.inventory.items().find(i => i.name === 'spruce_planks');
-  let currentPlanks = planks ? planks.count : 0;
-  if (currentPlanks >= 20) return;
-  const neededPlanks = 20 - currentPlanks;
-  const neededLogs = Math.ceil(neededPlanks / 4);
+async function craftTwentySprucePlanks(bot) {
+  const craftsNeeded = 5; // 5 crafts * 4 planks/craft = 20 planks
+
   let logs = bot.inventory.items().find(i => i.name === 'spruce_log');
-  let currentLogs = logs ? logs.count : 0;
-  if (currentLogs < neededLogs) {
-    const logsToMine = neededLogs - currentLogs;
-    await mineBlock('spruce_log', logsToMine);
+  let logCount = logs ? logs.count : 0;
+  if (logCount < craftsNeeded) {
+    await mineBlock('spruce_log', craftsNeeded - logCount);
   }
-  await craftItem('spruce_planks', neededPlanks);
+  await craftItem('spruce_planks', craftsNeeded);
 }

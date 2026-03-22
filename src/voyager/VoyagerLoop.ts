@@ -343,14 +343,26 @@ export class VoyagerLoop {
     for (const item of this.bot.inventory.items()) {
       inventoryCounts.set(item.name, (inventoryCounts.get(item.name) || 0) + item.count);
     }
-    const placeableNow = batch.filter((placement) => (inventoryCounts.get(placement.block) || 0) > 0);
+    const placeableNow = batch.filter((placement) => {
+      if (placement.block === 'any_block') {
+        return !!this.chooseAvailableBuildBlock();
+      }
+      return (inventoryCounts.get(placement.block) || 0) > 0;
+    });
     let placedCount = 0;
     let lastError: string | null = null;
     for (const placement of (placeableNow.length > 0 ? placeableNow : batch)) {
-      const result = await placeBlock(this.bot, placement.block, placement.x, placement.y, placement.z);
+      const blockToPlace = placement.block === 'any_block'
+        ? this.chooseAvailableBuildBlock()
+        : placement.block;
+      if (!blockToPlace) {
+        lastError = 'No suitable building block available';
+        continue;
+      }
+      const result = await placeBlock(this.bot, blockToPlace, placement.x, placement.y, placement.z);
       if (result.success) {
         placedCount++;
-        inventoryCounts.set(placement.block, Math.max(0, (inventoryCounts.get(placement.block) || 0) - 1));
+        inventoryCounts.set(blockToPlace, Math.max(0, (inventoryCounts.get(blockToPlace) || 0) - 1));
       } else {
         lastError = result.message || 'placement failed';
         if (!result.message?.includes('No ') && !result.message?.includes('inventory')) {
@@ -395,6 +407,10 @@ export class VoyagerLoop {
 
   private createGatherTaskForBlock(blockName?: string): Task | null {
     if (!blockName) return null;
+    if (blockName === 'any_block') {
+      const preferred = this.choosePreferredGatherMaterial();
+      return this.createGatherTaskForBlock(preferred);
+    }
     if (blockName === 'cobblestone') {
       return { description: 'Mine 20 cobblestone', keywords: ['mine', 'cobblestone', 'stone'] };
     }
@@ -435,11 +451,43 @@ export class VoyagerLoop {
 
   private findNeededBlockForGather(batch: Array<{ block: string }>, inventoryCounts: Map<string, number>): string | undefined {
     for (const placement of batch) {
+      if (placement.block === 'any_block') {
+        if (!this.chooseAvailableBuildBlock()) return 'any_block';
+        continue;
+      }
       if ((inventoryCounts.get(placement.block) || 0) <= 0) {
         return placement.block;
       }
     }
     return undefined;
+  }
+
+  private chooseAvailableBuildBlock(): string | null {
+    const buildable = [
+      'oak_planks',
+      'spruce_planks',
+      'birch_planks',
+      'cobblestone',
+      'dirt',
+      'stone',
+    ];
+    const inventory = new Map<string, number>();
+    for (const item of this.bot.inventory.items()) {
+      inventory.set(item.name, (inventory.get(item.name) || 0) + item.count);
+    }
+    for (const block of buildable) {
+      if ((inventory.get(block) || 0) > 0) return block;
+    }
+    return null;
+  }
+
+  private choosePreferredGatherMaterial(): string {
+    const inventory = new Set(this.bot.inventory.items().map((item) => item.name));
+    if (inventory.has('oak_log') || this.curriculumAgent.getWorldMemory().findNearest('oak_log', 'resource')) return 'oak_planks';
+    if (inventory.has('spruce_log') || this.curriculumAgent.getWorldMemory().findNearest('spruce_log', 'resource')) return 'spruce_planks';
+    if (inventory.has('birch_log') || this.curriculumAgent.getWorldMemory().findNearest('birch_log', 'resource')) return 'birch_planks';
+    if (inventory.has('cobblestone')) return 'cobblestone';
+    return 'oak_planks';
   }
 
   private async executeTaskStep(step: PlannedStep): Promise<boolean> {

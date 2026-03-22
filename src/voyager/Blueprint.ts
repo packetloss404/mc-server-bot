@@ -9,6 +9,7 @@ export interface Blueprint {
   palette: Record<string, string>;
   layers: string[][];
   defaultBlock?: string;
+  materialMode?: 'explicit' | 'any';
 }
 
 export interface BlueprintPlacement {
@@ -16,6 +17,7 @@ export interface BlueprintPlacement {
   y: number;
   z: number;
   block: string;
+  required: boolean;
 }
 
 export interface BlueprintValidationResult {
@@ -60,8 +62,8 @@ export function validateBlueprint(bot: Bot, blueprint: Blueprint): BlueprintVali
     }
   }
 
-  if (Object.values(blueprint.palette).includes('any_block') && !blueprint.defaultBlock) {
-    errors.push('Blueprints using any_block must define defaultBlock');
+  if (Object.values(blueprint.palette).includes('any_block') && blueprint.materialMode !== 'any' && !blueprint.defaultBlock) {
+    errors.push('Blueprints using any_block must define defaultBlock unless materialMode is any');
   }
 
   for (let y = 0; y < blueprint.layers.length; y++) {
@@ -93,7 +95,13 @@ export function countBlueprintMaterials(blueprint: Blueprint): Record<string, nu
     for (const row of layer) {
       for (const ch of row) {
         let block = blueprint.palette[ch];
-        if (block === 'any_block') block = blueprint.defaultBlock || 'oak_planks';
+        if (block === 'any_block') {
+          if (blueprint.materialMode === 'any') {
+            counts.any_block = (counts.any_block || 0) + 1;
+            continue;
+          }
+          block = blueprint.defaultBlock || 'oak_planks';
+        }
         if (!block || block === 'air') continue;
         counts[block] = (counts[block] || 0) + 1;
       }
@@ -110,7 +118,8 @@ export function generateSimpleHouseBlueprint(bot: Bot, request: string, worldMem
     version: 1,
     name,
     size: { x: 5, y: 4, z: 5 },
-    defaultBlock: material,
+    defaultBlock: explicitMaterial ? material : undefined,
+    materialMode: explicitMaterial ? 'explicit' : 'any',
     palette: {
       '.': 'air',
       M: explicitMaterial ? material : 'any_block',
@@ -158,17 +167,16 @@ export function getMissingBlueprintPlacements(bot: Bot, blueprint: Blueprint, or
         const symbol = row[x];
         const worldPos = { x: origin.x + x, y: origin.y + y, z: origin.z + z };
         let block = blueprint.palette[symbol];
+        const existing = bot.blockAt(new Vec3(worldPos.x, worldPos.y, worldPos.z));
         if (block === 'any_block') {
-          const existingSolid = bot.blockAt(new Vec3(worldPos.x, worldPos.y, worldPos.z));
-          if (existingSolid && !['air', 'cave_air', 'void_air'].includes(existingSolid.name)) {
-            continue;
+          if (!existing || ['air', 'cave_air', 'void_air'].includes(existing.name)) {
+            missing.push({ ...worldPos, block: 'any_block', required: false });
           }
-          block = blueprint.defaultBlock || 'oak_planks';
+          continue;
         }
         if (!block || block === 'air') continue;
-        const existing = bot.blockAt(new Vec3(worldPos.x, worldPos.y, worldPos.z));
         if (!existing || existing.name !== block) {
-          missing.push({ ...worldPos, block });
+          missing.push({ ...worldPos, block, required: true });
         }
       }
     }

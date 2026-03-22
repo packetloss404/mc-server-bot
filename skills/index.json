@@ -456,6 +456,9 @@
     "file": "mine_3_coal_ore_at.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "mine3blocksofgrass",
     "description": "mine_3_blocks_of_grass",
     "keywords": [
@@ -463,10 +466,7 @@
       "grass",
       "seeds"
     ],
-    "file": "mine3blocksofgrass.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "mine3blocksofgrass.js"
   },
   {
     "name": "craft_20_spruce_planks",
@@ -477,6 +477,19 @@
       "wood"
     ],
     "file": "craft_20_spruce_planks.js",
+    "quality": 0.9,
+    "successCount": 5,
+    "failureCount": 0
+  },
+  {
+    "name": "mine_6_spruce_logs",
+    "description": "Mine 6 spruce logs",
+    "keywords": [
+      "mine",
+      "spruce_log",
+      "wood"
+    ],
+    "file": "mine_6_spruce_logs.js",
     "quality": 0.9,
     "successCount": 1,
     "failureCount": 0

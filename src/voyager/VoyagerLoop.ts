@@ -32,6 +32,10 @@ export class VoyagerLoop {
   private lastCompletedTask: string | null = null;
   private lastFailedTask: string | null = null;
 
+  // Optional callbacks for task lifecycle events
+  onTaskSuccess?: (taskDescription: string) => void;
+  onTaskFailure?: (taskDescription: string) => void;
+
   constructor(
     bot: Bot,
     botName: string,
@@ -338,6 +342,7 @@ export class VoyagerLoop {
         this.curriculumAgent.updateProgress(task, true);
         this.curriculumAgent.getBlockerMemory().clearTask(task);
         this.lastCompletedTask = task.description;
+        if (this.onTaskSuccess) this.onTaskSuccess(task.description);
         return true;
       }
 
@@ -371,6 +376,7 @@ export class VoyagerLoop {
       events: [],
     }, lastError || 'task failed');
     this.lastFailedTask = task.description;
+    if (this.onTaskFailure) this.onTaskFailure(task.description);
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;
   }

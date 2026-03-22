@@ -7,6 +7,8 @@ import { logger } from '../util/logger';
 import { LLMClient } from '../ai/LLMClient';
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
+import { SocialMemory } from '../social/SocialMemory';
+import { BotComms } from '../social/BotComms';
 
 interface SavedBot {
   name: string;
@@ -22,6 +24,8 @@ export class BotManager {
   private llmClient: LLMClient | null;
   private affinityManager: AffinityManager;
   private conversationManager: ConversationManager;
+  private socialMemory: SocialMemory;
+  private botComms: BotComms;
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -29,6 +33,8 @@ export class BotManager {
     this.llmClient = llmClient;
     this.affinityManager = new AffinityManager(config.affinity, path.join(process.cwd(), 'data'));
     this.conversationManager = new ConversationManager();
+    this.socialMemory = new SocialMemory();
+    this.botComms = new BotComms();
   }
 
   async spawnBot(
@@ -61,6 +67,9 @@ export class BotManager {
       llmClient: this.llmClient,
       affinityManager: this.affinityManager,
       conversationManager: this.conversationManager,
+      socialMemory: this.socialMemory,
+      botComms: this.botComms,
+      botManager: this,
     });
 
     this.bots.set(key, instance);
@@ -109,6 +118,29 @@ export class BotManager {
 
   getConversationManager(): ConversationManager {
     return this.conversationManager;
+  }
+
+  getSocialMemory(): SocialMemory {
+    return this.socialMemory;
+  }
+
+  getBotComms(): BotComms {
+    return this.botComms;
+  }
+
+  getNearbyBotInfo(botName: string, radius: number = 64): { name: string; personality: string; activity: string }[] {
+    const bot = this.getBot(botName);
+    if (!bot?.bot?.entity) return [];
+    const botPos = bot.bot.entity.position;
+
+    return this.getAllBots()
+      .filter(b => b.name !== botName && b.bot?.entity)
+      .filter(b => b.bot!.entity.position.distanceTo(botPos) <= radius)
+      .map(b => ({
+        name: b.name,
+        personality: b.personality,
+        activity: b.getVoyagerLoop()?.getCurrentTask() || 'idle',
+      }));
   }
 
   setMode(name: string, mode: string): boolean {

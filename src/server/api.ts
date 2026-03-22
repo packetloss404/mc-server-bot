@@ -382,7 +382,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // List all available schematics
   app.get('/api/schematics', async (_req: Request, res: Response) => {
     try {
-      const schematics = buildCoordinator.listSchematics();
+      const schematics = await buildCoordinator.listSchematics();
       res.json({ schematics });
     } catch (err: any) {
       logger.error({ err }, 'Failed to list schematics');
@@ -420,8 +420,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
 
     try {
-      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames);
-      res.status(201).json({ job });
+      const build = await buildCoordinator.startBuild(schematicFile, origin, botNames);
+      res.status(201).json({ success: true, build });
     } catch (err: any) {
       logger.error({ err }, 'Failed to start build');
       res.status(400).json({ error: err.message });
@@ -566,6 +566,37 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
     res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  SOCIAL MEMORY + BOT COMMS ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Social Memory
+  app.get('/api/bots/:name/memories', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const memories = botManager.getSocialMemory().getRecentMemories(name, 20);
+    const reflections = botManager.getSocialMemory().getReflections(name, 5);
+    const emotional = botManager.getSocialMemory().getEmotionalState(name);
+    res.json({ memories, reflections, emotionalState: emotional });
+  });
+
+  // Bot Communications
+  app.get('/api/bots/:name/messages', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const messages = botManager.getBotComms().getRecentMessages(name, 20);
+    res.json({ messages });
+  });
+
+  // Send a message between bots (from dashboard)
+  app.post('/api/bots/:name/bot-message', (req: Request, res: Response) => {
+    const { to, content } = req.body;
+    if (!to || !content) {
+      res.status(400).json({ error: 'to and content required' });
+      return;
+    }
+    const msg = botManager.getBotComms().sendMessage(req.params.name as string, to, content, 'chat');
+    res.json({ success: true, message: msg });
   });
 
   return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };

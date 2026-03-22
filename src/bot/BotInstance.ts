@@ -137,6 +137,8 @@ export class BotInstance {
         const movements = new Movements(this.bot);
         movements.canDig = false; // Don't destroy blocks while pathfinding
         this.bot.pathfinder.setMovements(movements);
+        this.bot.pathfinder.searchRadius = 64; // Cap A* search to prevent OOM on unreachable goals
+        this.bot.pathfinder.thinkTimeout = 2000; // Reduce from 5s default to limit node accumulation
         logger.info({ bot: this.name, canDig: movements.canDig }, 'Pathfinder movements configured');
 
         // Auto-dismount to prevent physicsTick from stopping (matches original Voyager)

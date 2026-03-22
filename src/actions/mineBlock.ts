@@ -1,5 +1,6 @@
 import { Bot } from 'mineflayer';
 import { ActionResult } from './types';
+import { logger } from '../util/logger';
 
 export async function mineBlock(bot: Bot, blockType: string, count = 1): Promise<ActionResult> {
   if (typeof blockType !== 'string') {
@@ -18,8 +19,15 @@ export async function mineBlock(bot: Bot, blockType: string, count = 1): Promise
   const positions = bot.findBlocks({
     matching: [blockInfo.id],
     maxDistance: 32,
-    count: 1024,
+    count: 64,
   });
+
+  logger.info({
+    bot: bot.username,
+    blockType,
+    requestedCount: count,
+    candidatePositions: positions.length,
+  }, 'mineBlock candidate scan complete');
 
   if (positions.length === 0) {
     return {
@@ -31,7 +39,20 @@ export async function mineBlock(bot: Bot, blockType: string, count = 1): Promise
 
   const targets = positions
     .map((pos: any) => bot.blockAt(pos))
-    .filter((block: any) => block);
+    .filter((block: any) => block)
+    .sort((a: any, b: any) =>
+      a.position.distanceTo(bot.entity.position) - b.position.distanceTo(bot.entity.position))
+    .slice(0, Math.min(count, 16));
+
+  logger.info({
+    bot: bot.username,
+    blockType,
+    requestedCount: count,
+    resolvedTargets: targets.length,
+    closestDistance: targets.length > 0
+      ? Number(Math.min(...targets.map((block: any) => block.position.distanceTo(bot.entity.position))).toFixed(2))
+      : null,
+  }, 'mineBlock targets prepared');
 
   if (targets.length === 0) {
     return {

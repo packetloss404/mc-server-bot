@@ -1,4 +1,6 @@
 import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
 import v8 from 'v8';
 import { loadConfig } from './config';
 import { BotManager } from './bot/BotManager';
@@ -53,6 +55,9 @@ async function main() {
 
   const botManager = new BotManager(config, llmClient);
   let memoryInterval: NodeJS.Timeout | null = null;
+  const snapshotDir = path.join(process.cwd(), 'diagnostics', 'heapsnapshots');
+  const snapshotThresholdsMb = [512, 1024, 2048, 3072];
+  const writtenSnapshotThresholds = new Set<number>();
 
   // Restore previously saved bots
   await botManager.loadSavedBots();
@@ -64,15 +69,30 @@ async function main() {
   setupSocketEvents(botManager, io, eventLog);
 
   const formatMb = (bytes: number) => Number((bytes / 1024 / 1024).toFixed(1));
+  const captureHeapSnapshot = (thresholdMb: number, heapUsedMb: number) => {
+    try {
+      if (!fs.existsSync(snapshotDir)) {
+        fs.mkdirSync(snapshotDir, { recursive: true });
+      }
+      const timestamp = new Date().toISOString().replace(/[.:]/g, '-');
+      const filePath = path.join(snapshotDir, `heap-${thresholdMb}mb-${timestamp}.heapsnapshot`);
+      const writtenPath = v8.writeHeapSnapshot(filePath);
+      logger.warn({ thresholdMb, heapUsedMb, filePath: writtenPath }, 'Heap snapshot captured');
+    } catch (err: any) {
+      logger.error({ thresholdMb, heapUsedMb, err: err?.message || String(err) }, 'Failed to capture heap snapshot');
+    }
+  };
+
   const startMemoryDiagnostics = () => {
     memoryInterval = setInterval(() => {
       const memory = process.memoryUsage();
       const heap = v8.getHeapStatistics();
       const diagnostics = botManager.getDiagnosticsSnapshot();
+      const heapUsedMb = formatMb(memory.heapUsed);
 
       logger.info({
         rssMb: formatMb(memory.rss),
-        heapUsedMb: formatMb(memory.heapUsed),
+        heapUsedMb,
         heapTotalMb: formatMb(memory.heapTotal),
         externalMb: formatMb(memory.external),
         arrayBuffersMb: formatMb(memory.arrayBuffers),
@@ -103,7 +123,15 @@ async function main() {
             : null,
         })),
       }, 'Memory diagnostics');
-    }, 30000);
+
+      for (const thresholdMb of snapshotThresholdsMb) {
+        if (heapUsedMb >= thresholdMb && !writtenSnapshotThresholds.has(thresholdMb)) {
+          writtenSnapshotThresholds.add(thresholdMb);
+          logger.warn({ thresholdMb, heapUsedMb }, 'Heap threshold exceeded');
+          captureHeapSnapshot(thresholdMb, heapUsedMb);
+        }
+      }
+    }, 10000);
   };
 
   startMemoryDiagnostics();

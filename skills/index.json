@@ -14288,6 +14288,9 @@
     "file": "build_me_a_dirt_house.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "challenge_stranger_barley_to_combat",
     "description": "Challenge stranger Barley to combat",
     "keywords": [
@@ -14296,12 +14299,12 @@
       "combat",
       "player_interaction"
     ],
-    "file": "challenge_stranger_barley_to_combat.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "challenge_stranger_barley_to_combat.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "build_a_5block_tall_dirt",
     "description": "Build a 5-block tall dirt tower at current position to create a guard watchtower",
     "keywords": [
@@ -14310,12 +14313,12 @@
       "territory_control",
       "guard_duty"
     ],
-    "file": "build_a_5block_tall_dirt.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "build_a_5block_tall_dirt.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "craft_12_oak_planks_from",
     "description": "Craft 12 oak planks from 3 oak logs at crafting table (824,63,444)",
     "keywords": [
@@ -14324,8 +14327,62 @@
       "guard_tower",
       "building_materials"
     ],
-    "file": "craft_12_oak_planks_from.js",
-    "quality": 0.9,
+    "file": "craft_12_oak_planks_from.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "patrol_square_pattern_around_current",
+    "description": "Patrol square pattern around current position for 2 minutes",
+    "keywords": [
+      "patrol",
+      "guard",
+      "defense",
+      "territory"
+    ],
+    "file": "patrol_square_pattern_around_current.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "build_a_3block_overhang_using",
+    "description": "Build a 3-block overhang using stone slabs on the north side of your dirt watchtower at 705,63,554",
+    "keywords": [
+      "defense",
+      "watchtower",
+      "overhang",
+      "guard"
+    ],
+    "file": "build_a_3block_overhang_using.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "build_a_3x3_platform_using",
+    "description": "Build a 3x3 platform using stone slabs at watchtower top (705,65,553) for better sightlines",
+    "keywords": [
+      "build",
+      "platform",
+      "defense",
+      "watchtower"
+    ],
+    "file": "build_a_3x3_platform_using.js"
+  },
+  {
+    "name": "approach_crisisact_to_within_melee",
+    "description": "Approach CrisisAct to within melee range",
+    "keywords": [
+      "approach",
+      "crisisact",
+      "within",
+      "melee",
+      "range"
+    ],
+    "file": "approach_crisisact_to_within_melee.js",
+    "quality": 0.8,
     "successCount": 1,
     "failureCount": 0
   }

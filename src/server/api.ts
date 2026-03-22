@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
+import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
@@ -29,6 +30,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   }));
 
   app.use(express.json());
+
+  const dashboardDir = path.join(process.cwd(), 'dashboard');
+  app.use('/dashboard', express.static(dashboardDir));
+  app.get('/', (_req: Request, res: Response) => {
+    res.redirect('/dashboard/');
+  });
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
@@ -240,6 +247,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     res.json({
       currentTask: voyager.getCurrentTask(),
+      queuedTasks: voyager.getQueuedTasks(),
+      longTermGoal: voyager.getLongTermGoal(),
       completedTasks: voyager.getCompletedTasks(),
       failedTasks: voyager.getFailedTasks(),
     });

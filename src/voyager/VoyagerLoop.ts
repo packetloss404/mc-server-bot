@@ -10,6 +10,10 @@ import { logger } from '../util/logger';
 import { getProgressionState } from './Progression';
 import { buildTaskPlan, PlannedStep, replanTaskStep } from './TaskPlanner';
 import { StatsTracker } from './StatsTracker';
+import { completeLongTermSubtask, goalSummary, LongTermGoal, longTermGoalToTask, makeLongTermGoal, popLongTermSubtask } from './LongTermGoal';
+import { countBlueprintMaterials, generateSimpleHouseBlueprint, getMissingBlueprintPlacements, validateBlueprint } from './Blueprint';
+import { placeBlock } from '../actions/placeBlock';
+import { Vec3 } from 'vec3';
 
 export class VoyagerLoop {
   private bot: Bot;
@@ -26,6 +30,7 @@ export class VoyagerLoop {
   private paused = false;
   private loopTimeout: NodeJS.Timeout | null = null;
   private playerTaskQueue: Task[] = [];
+  private activeLongTermGoal: LongTermGoal | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -122,6 +127,26 @@ export class VoyagerLoop {
     return this.curriculumAgent.getFailedTasks();
   }
 
+  getQueuedTasks(): string[] {
+    return this.playerTaskQueue.map((task) => task.description);
+  }
+
+  getLongTermGoal() {
+    if (!this.activeLongTermGoal) return null;
+    return {
+      id: this.activeLongTermGoal.id,
+      requestedBy: this.activeLongTermGoal.requestedBy,
+      rawRequest: this.activeLongTermGoal.rawRequest,
+      kind: this.activeLongTermGoal.spec.kind,
+      status: this.activeLongTermGoal.status,
+      buildState: this.activeLongTermGoal.buildState ?? null,
+      materialRequirements: this.activeLongTermGoal.materialRequirements ?? null,
+      pendingSubtasks: this.activeLongTermGoal.pendingSubtasks.map((task) => task.description),
+      completedSubtasks: [...this.activeLongTermGoal.completedSubtasks],
+      updatedAt: this.activeLongTermGoal.updatedAt,
+    };
+  }
+
   /** Get the skill library instance */
   getSkillLibrary(): SkillLibrary {
     return this.skillLibrary;
@@ -144,7 +169,17 @@ export class VoyagerLoop {
     if (this.playerTaskQueue.length > 0) {
       parts.push(`Queued tasks: ${this.playerTaskQueue.map(t => t.description).join(', ')}`);
     }
+    if (this.activeLongTermGoal) {
+      parts.push(`Long-term goal: ${goalSummary(this.activeLongTermGoal)}`);
+    }
     return parts.join('. ');
+  }
+
+  queueLongTermGoal(description: string, requestedBy: string): void {
+    this.decomposeAndSetLongTermGoal(description, requestedBy).catch((err) => {
+      logger.warn({ err: err.message, goal: description }, 'Long-term goal decomposition failed, falling back to task queue');
+      this.queuePlayerTask(description, requestedBy);
+    });
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
@@ -173,6 +208,42 @@ export class VoyagerLoop {
     }, subtasks.length > 1 ? 'Player goal decomposed and queued' : 'Player task queued');
   }
 
+  private async decomposeAndSetLongTermGoal(description: string, requestedBy: string): Promise<void> {
+    const goal = makeLongTermGoal(description, requestedBy, []);
+    if (goal.spec.kind === 'build_structure') {
+      goal.buildState = 'blueprint_pending';
+      const blueprint = generateSimpleHouseBlueprint(this.bot, description, this.curriculumAgent.getWorldMemory());
+      const validation = validateBlueprint(this.bot, blueprint);
+      if (!validation.valid) {
+        throw new Error(`Generated blueprint invalid: ${validation.errors.join('; ')}`);
+      }
+      goal.blueprint = blueprint;
+      goal.materialRequirements = countBlueprintMaterials(blueprint);
+      goal.origin = this.findGroundedBuildOrigin();
+      goal.buildState = 'blueprint_ready';
+      this.activeLongTermGoal = goal;
+      logger.info({
+        bot: this.botName,
+        goal: description,
+        requestedBy,
+        blueprint: blueprint.name,
+        materialRequirements: goal.materialRequirements,
+        origin: goal.origin,
+      }, 'Long-term build goal set');
+      return;
+    }
+
+    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
+    goal.pendingSubtasks = subtasks;
+    this.activeLongTermGoal = goal;
+    logger.info({
+      bot: this.botName,
+      goal: description,
+      requestedBy,
+      subtasks: subtasks.map((t) => t.description),
+    }, 'Long-term goal set');
+  }
+
   private scheduleNext(): void {
     if (!this.running || this.paused) return;
 
@@ -191,8 +262,13 @@ export class VoyagerLoop {
 
   private async runOneCycle(): Promise<void> {
     if (this.paused) return;
+    if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
+      await this.runBuildGoalCycle();
+      return;
+    }
     // 1. Get task from player queue or curriculum
-    const playerTask = this.playerTaskQueue.shift();
+    const goalTask = this.activeLongTermGoal ? longTermGoalToTask(this.activeLongTermGoal) : null;
+    const playerTask = goalTask || this.playerTaskQueue.shift();
     const task = playerTask || await this.curriculumAgent.proposeTask(
       this.bot,
       this.personality,
@@ -206,7 +282,7 @@ export class VoyagerLoop {
     logger.info({
       bot: this.botName,
       task: task.description,
-      source: playerTask ? 'player-request' : 'autonomous',
+      source: goalTask ? 'long-term-goal' : playerTask ? 'player-request' : 'autonomous',
       plan: plan.steps.map((step) => step.description),
     }, 'Voyager task proposed');
 
@@ -226,11 +302,144 @@ export class VoyagerLoop {
           }
           continue;
         }
+        if (goalTask && this.activeLongTermGoal) {
+          this.activeLongTermGoal.status = 'blocked';
+          this.activeLongTermGoal.updatedAt = Date.now();
+        }
         this.currentTask = null;
         return;
       }
     }
+    if (goalTask && this.activeLongTermGoal) {
+      const completedTask = popLongTermSubtask(this.activeLongTermGoal);
+      if (completedTask) completeLongTermSubtask(this.activeLongTermGoal, completedTask);
+      if (this.activeLongTermGoal.status === 'completed') {
+        logger.info({ bot: this.botName, goal: this.activeLongTermGoal.rawRequest }, 'Long-term goal completed');
+        this.activeLongTermGoal = null;
+      }
+    }
     this.currentTask = null;
+  }
+
+  private async runBuildGoalCycle(): Promise<void> {
+    const goal = this.activeLongTermGoal;
+    if (!goal || !goal.blueprint || !goal.origin) return;
+    this.currentTask = goal.rawRequest;
+    goal.buildState = 'building';
+
+    const missing = getMissingBlueprintPlacements(this.bot, goal.blueprint, goal.origin);
+    if (missing.length === 0) {
+      goal.status = 'completed';
+      goal.buildState = 'completed';
+      if (this.bot.chat) this.bot.chat('The build is finished.');
+      logger.info({ bot: this.botName, goal: goal.rawRequest }, 'Long-term build goal completed');
+      this.activeLongTermGoal = null;
+      this.currentTask = null;
+      return;
+    }
+
+    const batch = missing.slice(0, 8);
+    const inventoryCounts = new Map<string, number>();
+    for (const item of this.bot.inventory.items()) {
+      inventoryCounts.set(item.name, (inventoryCounts.get(item.name) || 0) + item.count);
+    }
+    const placeableNow = batch.filter((placement) => (inventoryCounts.get(placement.block) || 0) > 0);
+    let placedCount = 0;
+    let lastError: string | null = null;
+    for (const placement of (placeableNow.length > 0 ? placeableNow : batch)) {
+      const result = await placeBlock(this.bot, placement.block, placement.x, placement.y, placement.z);
+      if (result.success) {
+        placedCount++;
+        inventoryCounts.set(placement.block, Math.max(0, (inventoryCounts.get(placement.block) || 0) - 1));
+      } else {
+        lastError = result.message || 'placement failed';
+        if (!result.message?.includes('No ') && !result.message?.includes('inventory')) {
+          logger.warn({ bot: this.botName, placement, error: result.message }, 'Build placement failed without material shortage');
+          continue;
+        }
+      }
+    }
+
+    if (placedCount > 0) {
+      logger.info({ bot: this.botName, placedCount, remaining: missing.length - placedCount, goal: goal.rawRequest }, 'Build goal placed blueprint blocks');
+      goal.updatedAt = Date.now();
+      this.currentTask = null;
+      return;
+    }
+
+    const neededBlock = this.findNeededBlockForGather(batch, inventoryCounts) || missing[0]?.block;
+    const gatherTask = this.createGatherTaskForBlock(neededBlock);
+    if (gatherTask) {
+      const now = Date.now();
+      if (!goal.lastResourceNoticeAt || now - goal.lastResourceNoticeAt > 30000) {
+        this.bot.chat('I need to gather more resources.');
+        goal.lastResourceNoticeAt = now;
+      }
+      goal.buildState = 'gathering';
+      logger.info({ bot: this.botName, neededBlock, task: gatherTask.description, error: lastError }, 'Build goal executing resource gathering task');
+      const gatherOk = await this.executeTaskStep({ description: gatherTask.description, keywords: gatherTask.keywords, spec: gatherTask.spec });
+      if (!gatherOk) {
+        goal.status = 'blocked';
+        goal.buildState = 'blocked';
+        logger.warn({ bot: this.botName, goal: goal.rawRequest, gatherTask: gatherTask.description }, 'Build goal blocked while gathering resources');
+      }
+      this.currentTask = null;
+      return;
+    }
+
+    goal.status = 'blocked';
+    goal.buildState = 'blocked';
+    logger.warn({ bot: this.botName, goal: goal.rawRequest, error: lastError }, 'Build goal blocked');
+    this.currentTask = null;
+  }
+
+  private createGatherTaskForBlock(blockName?: string): Task | null {
+    if (!blockName) return null;
+    if (blockName === 'cobblestone') {
+      return { description: 'Mine 20 cobblestone', keywords: ['mine', 'cobblestone', 'stone'] };
+    }
+    if (blockName === 'oak_planks') {
+      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'oak_log');
+      return hasLogs
+        ? { description: 'Craft 20 oak planks', keywords: ['craft', 'oak_planks', 'wood'] }
+        : { description: 'Mine 6 oak logs', keywords: ['mine', 'oak_log', 'wood'] };
+    }
+    if (blockName === 'spruce_planks') {
+      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'spruce_log');
+      return hasLogs
+        ? { description: 'Craft 20 spruce planks', keywords: ['craft', 'spruce_planks', 'wood'] }
+        : { description: 'Mine 6 spruce logs', keywords: ['mine', 'spruce_log', 'wood'] };
+    }
+    if (blockName === 'birch_planks') {
+      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'birch_log');
+      return hasLogs
+        ? { description: 'Craft 20 birch planks', keywords: ['craft', 'birch_planks', 'wood'] }
+        : { description: 'Mine 6 birch logs', keywords: ['mine', 'birch_log', 'wood'] };
+    }
+    return null;
+  }
+
+  private findGroundedBuildOrigin(): { x: number; y: number; z: number } {
+    const base = this.bot.entity.position.floored();
+    const startX = Math.round(base.x + 2);
+    const startZ = Math.round(base.z + 2);
+    for (let y = Math.floor(base.y); y >= Math.max(1, Math.floor(base.y) - 20); y--) {
+      const below = this.bot.blockAt(new Vec3(startX, y, startZ));
+      const above = this.bot.blockAt(new Vec3(startX, y + 1, startZ));
+      if (below && !['air', 'cave_air', 'void_air'].includes(below.name) && (!above || ['air', 'cave_air', 'void_air'].includes(above.name))) {
+        return { x: startX, y: y + 1, z: startZ };
+      }
+    }
+    return { x: Math.round(base.x + 2), y: Math.round(base.y), z: Math.round(base.z + 2) };
+  }
+
+  private findNeededBlockForGather(batch: Array<{ block: string }>, inventoryCounts: Map<string, number>): string | undefined {
+    for (const placement of batch) {
+      if ((inventoryCounts.get(placement.block) || 0) <= 0) {
+        return placement.block;
+      }
+    }
+    return undefined;
   }
 
   private async executeTaskStep(step: PlannedStep): Promise<boolean> {

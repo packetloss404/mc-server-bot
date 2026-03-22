@@ -28,14 +28,23 @@ export function parseCommand(message: string): { command: string; args: string }
   return null;
 }
 
-// Extract >>>TASK: tag from LLM response (also handles legacy [TASK:] format)
-export function extractTask(response: string): { cleanText: string; taskDescription: string | null } {
+// Extract >>>TASK / >>>GOAL tags from LLM response (also handles legacy [TASK:] format)
+export function extractTask(response: string): { cleanText: string; taskDescription: string | null; goalDescription: string | null } {
+  const goalMatch = response.match(/\n?>>>GOAL:\s*(.+?)\s*$/);
+  if (goalMatch) {
+    return {
+      cleanText: response.replace(/\n?>>>GOAL:\s*.+?\s*$/, '').trim(),
+      taskDescription: null,
+      goalDescription: goalMatch[1].trim(),
+    };
+  }
   // New format: >>>TASK: description
   const newMatch = response.match(/\n?>>>TASK:\s*(.+?)\s*$/);
   if (newMatch) {
     return {
       cleanText: response.replace(/\n?>>>TASK:\s*.+?\s*$/, '').trim(),
       taskDescription: newMatch[1].trim(),
+      goalDescription: null,
     };
   }
   // Legacy format: [TASK: description]
@@ -44,7 +53,8 @@ export function extractTask(response: string): { cleanText: string; taskDescript
     return {
       cleanText: response.replace(/\n?\[TASK:\s*.+?\]\s*$/, '').trim(),
       taskDescription: oldMatch[1].trim(),
+      goalDescription: null,
     };
   }
-  return { cleanText: response, taskDescription: null };
+  return { cleanText: response, taskDescription: null, goalDescription: null };
 }

@@ -29,6 +29,7 @@ export interface BotOptions {
 }
 
 export class BotInstance {
+  private static OWNER_PLAYER = 'Nerdfuryz';
   readonly name: string;
   readonly personality: string;
   mode: BotMode;
@@ -129,7 +130,6 @@ export class BotInstance {
           this.startWandering(); // Voyager owns movement in codegen mode
         }
         this.startChatListener();
-        this.scheduleAmbientChat();
         this.startVoyagerIfCodegen();
       });
     });
@@ -362,6 +362,7 @@ export class BotInstance {
       // Check if player is within conversation radius
       const player = this.bot.players[username];
       if (!player?.entity) return;
+      if (username.toLowerCase() !== BotInstance.OWNER_PLAYER.toLowerCase()) return;
 
       const dist = player.entity.position.distanceTo(this.bot.entity.position);
       if (dist > this.config.behavior.conversationRadius) return;
@@ -379,9 +380,19 @@ export class BotInstance {
         return;
       }
 
+      if (!this.isDirectlyAddressed(message)) {
+        logger.info({ bot: this.name, player: username, message }, 'Ignoring non-direct owner chat');
+        return;
+      }
+
       // Generate AI chat response
       await this.handleChat(username, message);
     });
+  }
+
+  private isDirectlyAddressed(message: string): boolean {
+    const lower = message.toLowerCase();
+    return lower.includes(this.name.toLowerCase());
   }
 
   private async handleCommand(
@@ -483,7 +494,7 @@ export class BotInstance {
       }
 
       // Extract >>>TASK: tag if present (codegen mode)
-      const { cleanText, taskDescription } = extractTask(response.text);
+      const { cleanText, taskDescription, goalDescription } = extractTask(response.text);
       // Collapse newlines (Minecraft truncates at first \n) and cap length
       const flatText = this.sanitizeOutput(cleanText).replace(/\n+/g, ' ').trim().slice(0, 200);
 
@@ -506,7 +517,10 @@ export class BotInstance {
       );
 
       // Queue task in Voyager loop if extracted
-      if (taskDescription && this.voyagerLoop) {
+      if (goalDescription && this.voyagerLoop) {
+        logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
+        this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
+      } else if (taskDescription && this.voyagerLoop) {
         logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
         this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
       }
@@ -867,6 +881,8 @@ export class BotInstance {
         isRunning: this.voyagerLoop.isRunning(),
         isPaused: this.voyagerLoop.isPaused(),
         currentTask: this.voyagerLoop.getCurrentTask(),
+        queuedTasks: this.voyagerLoop.getQueuedTasks(),
+        longTermGoal: this.voyagerLoop.getLongTermGoal(),
         completedTasks: this.voyagerLoop.getCompletedTasks(),
         failedTasks: this.voyagerLoop.getFailedTasks(),
       };

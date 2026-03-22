@@ -65,6 +65,7 @@ export class BotInstance {
   private lastAttackerName: string | null = null;
   private statsTracker = new StatsTracker('./data');
   private static CHAT_COOLDOWN_MS = 3000;
+  private lastPathResetLog: { reason: string; at: number; suppressed: number } | null = null;
 
   constructor(options: BotOptions) {
     this.name = options.name;
@@ -229,7 +230,23 @@ export class BotInstance {
     });
 
     this.bot.on('path_reset', (reason: any) => {
-      logger.warn({ bot: this.name, reason: String(reason || 'unknown') }, 'Pathfinder reset');
+      const normalizedReason = String(reason || 'unknown');
+      const now = Date.now();
+      if (this.lastPathResetLog && this.lastPathResetLog.reason === normalizedReason && now - this.lastPathResetLog.at < 5000) {
+        this.lastPathResetLog.suppressed += 1;
+        return;
+      }
+
+      if (this.lastPathResetLog?.suppressed) {
+        logger.warn({
+          bot: this.name,
+          reason: this.lastPathResetLog.reason,
+          suppressed: this.lastPathResetLog.suppressed,
+        }, 'Suppressed repeated pathfinder resets');
+      }
+
+      this.lastPathResetLog = { reason: normalizedReason, at: now, suppressed: 0 };
+      logger.warn({ bot: this.name, reason: normalizedReason }, 'Pathfinder reset');
     });
 
     this.bot.on('path_stop', () => {

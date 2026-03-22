@@ -14275,6 +14275,9 @@
     "file": "mine_1_dirt_block.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "build_me_a_dirt_house",
     "description": "build me a dirt house",
     "keywords": [
@@ -14282,8 +14285,47 @@
       "dirt",
       "house"
     ],
-    "file": "build_me_a_dirt_house.js",
+    "file": "build_me_a_dirt_house.js"
+  },
+  {
+    "name": "challenge_stranger_barley_to_combat",
+    "description": "Challenge stranger Barley to combat",
+    "keywords": [
+      "challenge",
+      "guard",
+      "combat",
+      "player_interaction"
+    ],
+    "file": "challenge_stranger_barley_to_combat.js",
     "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0
+  },
+  {
+    "name": "build_a_5block_tall_dirt",
+    "description": "Build a 5-block tall dirt tower at current position to create a guard watchtower",
+    "keywords": [
+      "building",
+      "defense",
+      "territory_control",
+      "guard_duty"
+    ],
+    "file": "build_a_5block_tall_dirt.js",
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0
+  },
+  {
+    "name": "craft_12_oak_planks_from",
+    "description": "Craft 12 oak planks from 3 oak logs at crafting table (824,63,444)",
+    "keywords": [
+      "crafting",
+      "oak_planks",
+      "guard_tower",
+      "building_materials"
+    ],
+    "file": "craft_12_oak_planks_from.js",
+    "quality": 0.9,
     "successCount": 1,
     "failureCount": 0
   }

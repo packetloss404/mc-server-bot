@@ -17,6 +17,8 @@ import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
 
 export class VoyagerLoop {
+  private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
+  private static MAX_FAILURE_OUTPUT_CHARS = 1200;
   private bot: Bot;
   private personality: string;
   private botName: string;
@@ -641,11 +643,16 @@ export class VoyagerLoop {
       }, 'Execution result');
       logger.debug({
         bot: this.botName,
-        execOutput: execResult.output,
-        execEvents: execResult.events,
+        execOutput: execResult.output.slice(0, 4000),
+        execEvents: execResult.events.slice(0, 40),
+        execEventsTruncated: Math.max(0, execResult.events.length - 40),
       }, 'Execution result details');
       this.statsTracker.trackExecution(this.botName, execResult.events);
-      eventLog = execResult.events.map((event) => `${event.type}: ${event.message}`).join(' | ');
+      eventLog = execResult.events
+        .slice(0, 30)
+        .map((event) => `${event.type}: ${event.message}`)
+        .join(' | ')
+        .slice(0, VoyagerLoop.MAX_RETRY_EVENT_LOG_CHARS);
       this.lastExecutionMetrics = {
         attempt: attempt + 1,
         task: task.description,
@@ -730,7 +737,7 @@ export class VoyagerLoop {
     this.curriculumAgent.updateProgress(task, false);
     this.curriculumAgent.getBlockerMemory().recordTaskFailure(task, {
       success: false,
-      output: eventLog,
+      output: eventLog.slice(0, VoyagerLoop.MAX_FAILURE_OUTPUT_CHARS),
       error: lastError,
       events: [],
     }, lastError || 'task failed');

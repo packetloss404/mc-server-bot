@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import type { BotLiveData } from '@/lib/store';
+import { useControlStore } from '@/lib/store';
 import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 
 function HealthBar({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
@@ -30,16 +31,41 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
   const stateLabel = STATE_LABELS[bot.state] ?? bot.state;
   const isActive = !['IDLE', 'DISCONNECTED', 'SPAWNING'].includes(bot.state);
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
+  const isSelected = useControlStore((s) => s.selectedBotIds.has(bot.name));
+  const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
 
   return (
     <motion.div
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.3, delay: index * 0.05 }}
+      className="relative"
     >
+      {/* Selection checkbox */}
+      <button
+        onClick={(e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          toggleBotSelection(bot.name);
+        }}
+        className={`absolute top-3 right-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-all duration-150 ${
+          isSelected
+            ? 'bg-emerald-500 border-emerald-500'
+            : 'bg-zinc-800/80 border-zinc-600 hover:border-zinc-400'
+        }`}
+        title={isSelected ? 'Deselect bot' : 'Select bot'}
+      >
+        {isSelected && (
+          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
+            <polyline points="20 6 9 17 4 12" />
+          </svg>
+        )}
+      </button>
       <Link
         href={`/bots/${bot.name}`}
-        className="group block bg-zinc-900/80 border border-zinc-800/60 rounded-xl hover:border-zinc-600/60 transition-all duration-200 overflow-hidden hover:shadow-lg hover:shadow-black/20"
+        className={`group block bg-zinc-900/80 border rounded-xl hover:border-zinc-600/60 transition-all duration-200 overflow-hidden hover:shadow-lg hover:shadow-black/20 ${
+          isSelected ? 'border-emerald-500/40 ring-1 ring-emerald-500/20' : 'border-zinc-800/60'
+        }`}
       >
         {/* Accent gradient bar */}
         <div

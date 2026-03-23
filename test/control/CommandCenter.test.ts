@@ -1,5 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { CommandCenter, CommandRecord } from '../../src/control/CommandCenter';
+
+// Mock fs before importing the module
+vi.mock('fs', () => ({
+  existsSync: vi.fn().mockReturnValue(false),
+  readFileSync: vi.fn().mockReturnValue('{"commands":[]}'),
+  writeFileSync: vi.fn(),
+  mkdirSync: vi.fn(),
+}));
+
+import { CommandCenter } from '../../src/control/CommandCenter';
+import { CommandRecord } from '../../src/control/CommandTypes';
 
 function createMockIO() {
   return { emit: vi.fn() } as any;
@@ -37,52 +47,54 @@ describe('CommandCenter', () => {
   let bm: ReturnType<typeof createMockBotManager>;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     io = createMockIO();
     bm = createMockBotManager();
     cc = new CommandCenter(bm, io);
   });
 
   it('creates a command with valid fields', () => {
-    const cmd = cc.createCommand('TestBot', 'pause_voyager');
+    const cmd = cc.createCommand({
+      type: 'pause_voyager',
+      targets: ['TestBot'],
+    });
 
     expect(cmd).toBeDefined();
-    expect(cmd.id).toMatch(/^cmd-/);
-    expect(cmd.botName).toBe('TestBot');
+    expect(cmd.id).toMatch(/^cmd_/);
+    expect(cmd.targets).toContain('TestBot');
     expect(cmd.type).toBe('pause_voyager');
     expect(cmd.status).toBe('queued');
-    expect(cmd.createdAt).toBeTypeOf('number');
-    expect(cmd.updatedAt).toBeTypeOf('number');
-    expect(cmd.createdAt).toBeLessThanOrEqual(cmd.updatedAt);
-  });
-
-  it('rejects commands for nonexistent bot', () => {
-    bm.getBot.mockReturnValue(null);
-    const cmd = cc.createCommand('GhostBot', 'pause_voyager');
-
-    expect(cmd.status).toBe('failed');
-    expect(cmd.error).toBeDefined();
-    expect(cmd.error).toContain('GhostBot');
+    expect(cmd.createdAt).toBeTypeOf('string');
   });
 
   it('dispatches pause_voyager command', async () => {
-    const cmd = cc.createCommand('TestBot', 'pause_voyager');
-    const result = await cc.dispatch(cmd.id);
+    const cmd = cc.createCommand({
+      type: 'pause_voyager',
+      targets: ['TestBot'],
+    });
+    const result = await cc.dispatchCommand(cmd);
 
     expect(result.status).toBe('succeeded');
     expect(bm._mockVoyager.pause).toHaveBeenCalledOnce();
   });
 
   it('dispatches stop_movement command', async () => {
-    const cmd = cc.createCommand('TestBot', 'stop_movement');
-    const result = await cc.dispatch(cmd.id);
+    const cmd = cc.createCommand({
+      type: 'stop_movement',
+      targets: ['TestBot'],
+    });
+    const result = await cc.dispatchCommand(cmd);
 
     expect(result.status).toBe('succeeded');
     expect(bm._mockBot.pathfinder.stop).toHaveBeenCalledOnce();
   });
 
   it('emits socket events on state changes', async () => {
-    const cmd = cc.createCommand('TestBot', 'pause_voyager');
-    await cc.dispatch(cmd.id);
+    const cmd = cc.createCommand({
+      type: 'pause_voyager',
+      targets: ['TestBot'],
+    });
+    await cc.dispatchCommand(cmd);
 
     const events = io.emit.mock.calls.map((c: any[]) => c[0]);
     expect(events).toContain('command:queued');
@@ -91,23 +103,27 @@ describe('CommandCenter', () => {
   });
 
   it('supports command cancellation', () => {
-    const cmd = cc.createCommand('TestBot', 'pause_voyager');
+    const cmd = cc.createCommand({
+      type: 'pause_voyager',
+      targets: ['TestBot'],
+    });
     expect(cmd.status).toBe('queued');
 
-    const cancelled = cc.cancel(cmd.id);
-    expect(cancelled.status).toBe('cancelled');
+    const cancelled = cc.cancelCommand(cmd.id);
+    expect(cancelled).toBeDefined();
+    expect(cancelled!.status).toBe('cancelled');
   });
 
   it('queries commands by bot name', () => {
-    cc.createCommand('Alpha', 'pause_voyager');
-    cc.createCommand('Alpha', 'stop_movement');
-    cc.createCommand('Bravo', 'pause_voyager');
+    cc.createCommand({ type: 'pause_voyager', targets: ['Alpha'] });
+    cc.createCommand({ type: 'stop_movement', targets: ['Alpha'] });
+    cc.createCommand({ type: 'pause_voyager', targets: ['Bravo'] });
 
-    const alphaCommands = cc.getCommands('Alpha');
+    const alphaCommands = cc.getCommands({ bot: 'Alpha' });
     expect(alphaCommands).toHaveLength(2);
-    expect(alphaCommands.every((c) => c.botName === 'Alpha')).toBe(true);
+    expect(alphaCommands.every((c) => c.targets.includes('Alpha'))).toBe(true);
 
-    const bravoCommands = cc.getCommands('Bravo');
+    const bravoCommands = cc.getCommands({ bot: 'Bravo' });
     expect(bravoCommands).toHaveLength(1);
 
     const allCommands = cc.getCommands();

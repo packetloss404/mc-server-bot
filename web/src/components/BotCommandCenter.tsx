@@ -52,7 +52,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   const [lastCommandId, setLastCommandId] = useState<string | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
 
-  const pushCommand = useControlStore((s) => s.pushCommand);
+  const pushCommand = useControlStore((s) => s.upsertCommand);
   const recentCommands = useControlStore((s) =>
     s.commandHistory.filter((c) => c.targets.includes(botName)).slice(0, 5)
   );

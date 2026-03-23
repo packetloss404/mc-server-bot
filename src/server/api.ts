@@ -6,6 +6,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
+import { RoleManager } from '../control/RoleManager';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  roleManager: RoleManager;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -402,5 +404,72 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - ROLE ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const roleManager = new RoleManager(io);
+
+  // List all role assignments
+  app.get('/api/roles', (_req: Request, res: Response) => {
+    res.json({ assignments: roleManager.getAssignments() });
+  });
+
+  // Create a role assignment
+  app.post('/api/roles/assignments', (req: Request, res: Response) => {
+    const { botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes } = req.body;
+    if (!botName || !role || !autonomyLevel) {
+      res.status(400).json({ error: 'botName, role, and autonomyLevel are required' });
+      return;
+    }
+    // Validate that the bot exists
+    if (!botManager.getBot(botName)) {
+      res.status(404).json({ error: `Bot "${botName}" not found` });
+      return;
+    }
+    try {
+      const assignment = roleManager.createAssignment({
+        botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes,
+      });
+      res.status(201).json({ assignment });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Get single role assignment
+  app.get('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const assignment = roleManager.getAssignment(req.params.id as string);
+    if (!assignment) {
+      res.status(404).json({ error: 'Assignment not found' });
+      return;
+    }
+    res.json({ assignment });
+  });
+
+  // Update a role assignment
+  app.patch('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    try {
+      const updated = roleManager.updateAssignment(req.params.id as string, req.body);
+      if (!updated) {
+        res.status(404).json({ error: 'Assignment not found' });
+        return;
+      }
+      res.json({ assignment: updated });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Delete a role assignment
+  app.delete('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const deleted = roleManager.deleteAssignment(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Assignment not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, roleManager };
 }

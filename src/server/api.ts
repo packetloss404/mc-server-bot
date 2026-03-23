@@ -7,12 +7,14 @@ import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
 import { logger } from '../util/logger';
+import { SquadManager } from '../control/SquadManager';
 
 export interface APIServerResult {
   app: express.Application;
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  squadManager: SquadManager;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -402,5 +404,90 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - SQUAD ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const squadManager = new SquadManager(io);
+
+  // List all squads
+  app.get('/api/squads', (_req: Request, res: Response) => {
+    res.json({ squads: squadManager.getSquads() });
+  });
+
+  // Create a squad
+  app.post('/api/squads', (req: Request, res: Response) => {
+    const { name, botNames, defaultRole, homeMarkerId } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const squad = squadManager.createSquad({
+      name,
+      botNames: botNames ?? [],
+      defaultRole,
+      homeMarkerId,
+    });
+    res.status(201).json({ squad });
+  });
+
+  // Get single squad
+  app.get('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.getSquad(req.params.id as string);
+    if (!squad) {
+      res.status(404).json({ error: 'Squad not found' });
+      return;
+    }
+    res.json({ squad });
+  });
+
+  // Update a squad
+  app.patch('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.updateSquad(req.params.id as string, req.body);
+    if (!squad) {
+      res.status(404).json({ error: 'Squad not found' });
+      return;
+    }
+    res.json({ squad });
+  });
+
+  // Delete a squad
+  app.delete('/api/squads/:id', (req: Request, res: Response) => {
+    const deleted = squadManager.deleteSquad(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Squad not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Add bot to squad
+  app.post('/api/squads/:id/members', (req: Request, res: Response) => {
+    const { botName } = req.body;
+    if (!botName) {
+      res.status(400).json({ error: 'botName is required' });
+      return;
+    }
+    const added = squadManager.addBotToSquad(req.params.id as string, botName);
+    if (!added) {
+      res.status(404).json({ error: 'Squad not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Remove bot from squad
+  app.delete('/api/squads/:id/members/:botName', (req: Request, res: Response) => {
+    const removed = squadManager.removeBotFromSquad(
+      req.params.id as string,
+      req.params.botName as string,
+    );
+    if (!removed) {
+      res.status(404).json({ error: 'Squad not found or bot not a member' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, squadManager };
 }

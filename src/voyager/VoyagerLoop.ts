@@ -52,6 +52,10 @@ export class VoyagerLoop {
   private lastCompletedTask: string | null = null;
   private lastFailedTask: string | null = null;
 
+  // Optional callbacks for task lifecycle events
+  onTaskSuccess?: (taskDescription: string) => void;
+  onTaskFailure?: (taskDescription: string) => void;
+
   constructor(
     bot: Bot,
     botName: string,
@@ -144,6 +148,47 @@ export class VoyagerLoop {
 
   getQueuedTasks(): string[] {
     return this.playerTaskQueue.map((task) => task.description);
+  }
+
+  /** Get queue length */
+  getQueueLength(): number {
+    return this.playerTaskQueue.length;
+  }
+
+  /** Get queued tasks with IDs */
+  getQueuedTasksDetailed(): { id: string; description: string; queuedAt: number }[] {
+    return this.playerTaskQueue.map((task, index) => ({
+      id: (task as any)._id || `qt_${index}`,
+      description: task.description,
+      queuedAt: (task as any)._queuedAt || Date.now(),
+    }));
+  }
+
+  /** Remove a task from queue by index */
+  removeQueuedTask(index: number): boolean {
+    if (index < 0 || index >= this.playerTaskQueue.length) return false;
+    this.playerTaskQueue.splice(index, 1);
+    return true;
+  }
+
+  /** Insert a task at the front of the queue (do next) */
+  insertTaskAtFront(description: string, requestedBy: string): void {
+    const keywords = description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+    this.playerTaskQueue.unshift({ description, keywords });
+  }
+
+  /** Reorder queue: move item at fromIndex to toIndex */
+  reorderQueue(fromIndex: number, toIndex: number): boolean {
+    if (fromIndex < 0 || fromIndex >= this.playerTaskQueue.length) return false;
+    if (toIndex < 0 || toIndex >= this.playerTaskQueue.length) return false;
+    const [item] = this.playerTaskQueue.splice(fromIndex, 1);
+    this.playerTaskQueue.splice(toIndex, 0, item);
+    return true;
+  }
+
+  /** Clear all queued tasks */
+  clearQueue(): void {
+    this.playerTaskQueue = [];
   }
 
   getLongTermGoal() {
@@ -704,6 +749,7 @@ export class VoyagerLoop {
         this.curriculumAgent.updateProgress(task, true);
         this.curriculumAgent.getBlockerMemory().clearTask(task);
         this.lastCompletedTask = task.description;
+        if (this.onTaskSuccess) this.onTaskSuccess(task.description);
         this.blackboardManager?.postMessage(this.botName, 'completion', `Finished ${task.description}.`);
         return true;
       }
@@ -742,6 +788,7 @@ export class VoyagerLoop {
       events: [],
     }, lastError || 'task failed');
     this.lastFailedTask = task.description;
+    if (this.onTaskFailure) this.onTaskFailure(task.description);
     this.blackboardManager?.postMessage(this.botName, 'blocker', `${task.description} failed: ${lastError || 'unknown error'}`);
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;

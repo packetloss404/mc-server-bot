@@ -128,6 +128,10 @@ export class BotManager {
     return this.blackboardManager;
   }
 
+  getLLMClient(): LLMClient | null {
+    return this.llmClient;
+  }
+
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
     const bots = this.getAllBots().filter((bot) => bot.getVoyagerLoop());
     for (const bot of bots) {

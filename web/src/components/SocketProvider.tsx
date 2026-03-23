@@ -2,8 +2,9 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore, useMissionStore } from '@/lib/store';
 import { api } from '@/lib/api';
+import type { CommandRecord, MissionRecord } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
@@ -86,6 +87,28 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
+    // Command lifecycle events
+    const handleCommand = (data: CommandRecord | { command: CommandRecord }) => {
+      const record = 'command' in data ? data.command : data;
+      useControlStore.getState().upsertCommand(record);
+    };
+    socket.on('command:queued', handleCommand);
+    socket.on('command:started', handleCommand);
+    socket.on('command:succeeded', handleCommand);
+    socket.on('command:failed', handleCommand);
+    socket.on('command:cancelled', handleCommand);
+
+    // Mission lifecycle events
+    const handleMission = (data: MissionRecord | { mission: MissionRecord }) => {
+      const record = 'mission' in data ? data.mission : data;
+      useMissionStore.getState().upsertMission(record);
+    };
+    socket.on('mission:created', handleMission);
+    socket.on('mission:updated', handleMission);
+    socket.on('mission:completed', handleMission);
+    socket.on('mission:failed', handleMission);
+    socket.on('mission:cancelled', handleMission);
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -103,6 +126,16 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
+      socket.off('command:queued', handleCommand);
+      socket.off('command:started', handleCommand);
+      socket.off('command:succeeded', handleCommand);
+      socket.off('command:failed', handleCommand);
+      socket.off('command:cancelled', handleCommand);
+      socket.off('mission:created', handleMission);
+      socket.off('mission:updated', handleMission);
+      socket.off('mission:completed', handleMission);
+      socket.off('mission:failed', handleMission);
+      socket.off('mission:cancelled', handleMission);
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

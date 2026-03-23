@@ -133,6 +133,34 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Command and Mission records for control/mission stores
+export interface CommandRecord {
+  id: string;
+  botName: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled';
+  result?: string;
+  error?: string;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+}
+
+export interface MissionRecord {
+  id: string;
+  name: string;
+  description: string;
+  status: 'pending' | 'active' | 'completed' | 'failed' | 'cancelled';
+  botNames: string[];
+  progress: number;
+  steps: { label: string; done: boolean }[];
+  createdAt: number;
+  updatedAt: number;
+  completedAt?: number;
+  error?: string;
+}
+
 // API functions
 export const api = {
   // Bots

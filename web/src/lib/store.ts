@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, CommandRecord, MissionRecord } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +138,107 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// ---------------------------------------------------------------------------
+// Control Store – commands & bot selection
+// ---------------------------------------------------------------------------
+
+interface ControlStore {
+  // Commands
+  commandsById: Record<string, CommandRecord>;
+  commandHistory: CommandRecord[];
+  pendingCommands: CommandRecord[];
+
+  // Selection
+  selectedBotIds: Set<string>;
+
+  // Actions
+  upsertCommand: (command: CommandRecord) => void;
+  addCommandToHistory: (command: CommandRecord) => void;
+  setSelectedBotIds: (ids: Set<string>) => void;
+  toggleBotSelection: (id: string) => void;
+  clearSelection: () => void;
+}
+
+export const useControlStore = create<ControlStore>((set) => ({
+  commandsById: {},
+  commandHistory: [],
+  pendingCommands: [],
+  selectedBotIds: new Set<string>(),
+
+  upsertCommand: (command) =>
+    set((state) => {
+      const updated = { ...state.commandsById, [command.id]: command };
+      const pending = Object.values(updated).filter(
+        (c) => c.status === 'queued' || c.status === 'started',
+      );
+      const history = Object.values(updated)
+        .filter((c) => c.status !== 'queued' && c.status !== 'started')
+        .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt))
+        .slice(0, 100);
+      return { commandsById: updated, pendingCommands: pending, commandHistory: history };
+    }),
+
+  addCommandToHistory: (command) =>
+    set((state) => ({
+      commandHistory: [command, ...state.commandHistory].slice(0, 100),
+    })),
+
+  setSelectedBotIds: (ids) => set({ selectedBotIds: ids }),
+
+  toggleBotSelection: (id) =>
+    set((state) => {
+      const next = new Set(state.selectedBotIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedBotIds: next };
+    }),
+
+  clearSelection: () => set({ selectedBotIds: new Set<string>() }),
+}));
+
+// ---------------------------------------------------------------------------
+// Mission Store
+// ---------------------------------------------------------------------------
+
+interface MissionStore {
+  missionsById: Record<string, MissionRecord>;
+  missionList: MissionRecord[];
+
+  upsertMission: (mission: MissionRecord) => void;
+  removeMission: (id: string) => void;
+  setMissions: (missions: MissionRecord[]) => void;
+}
+
+export const useMissionStore = create<MissionStore>((set) => ({
+  missionsById: {},
+  missionList: [],
+
+  upsertMission: (mission) =>
+    set((state) => {
+      const updated = { ...state.missionsById, [mission.id]: mission };
+      return {
+        missionsById: updated,
+        missionList: Object.values(updated).sort((a, b) => b.updatedAt - a.updatedAt),
+      };
+    }),
+
+  removeMission: (id) =>
+    set((state) => {
+      const { [id]: _, ...rest } = state.missionsById;
+      return {
+        missionsById: rest,
+        missionList: Object.values(rest).sort((a, b) => b.updatedAt - a.updatedAt),
+      };
+    }),
+
+  setMissions: (missions) => {
+    const byId: Record<string, MissionRecord> = {};
+    for (const m of missions) byId[m.id] = m;
+    return set({
+      missionsById: byId,
+      missionList: [...missions].sort((a, b) => b.updatedAt - a.updatedAt),
+    });
+  },
 }));

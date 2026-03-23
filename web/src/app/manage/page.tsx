@@ -18,8 +18,6 @@ export default function ManagePage() {
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
-  const [taskBot, setTaskBot] = useState<string | null>(null);
-  const [taskDesc, setTaskDesc] = useState('');
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -51,17 +49,6 @@ export default function ManagePage() {
     const mode = currentMode === 'codegen' ? 'primitive' : 'codegen';
     try {
       await api.setMode(name, mode);
-    } catch (e: any) {
-      setError(e.message);
-    }
-  };
-
-  const handleQueueTask = async (botName: string) => {
-    if (!taskDesc.trim()) return;
-    try {
-      await api.queueTask(botName, taskDesc.trim());
-      setTaskDesc('');
-      setTaskBot(null);
     } catch (e: any) {
       setError(e.message);
     }
@@ -103,7 +90,7 @@ export default function ManagePage() {
         <h2 className="text-sm font-semibold text-white mb-4">Create New Bot</h2>
 
         {/* Personality picker */}
-        <div className="grid grid-cols-7 gap-2 mb-4">
+        <div className="grid grid-cols-4 sm:grid-cols-7 gap-2 mb-4">
           {PERSONALITIES.map((p) => {
             const color = getPersonalityColor(p);
             const isSelected = newPersonality === p;
@@ -231,15 +218,17 @@ export default function ManagePage() {
                       >
                         {bot.mode}
                       </button>
-                      <button
-                        onClick={() => setTaskBot(taskBot === bot.name ? null : bot.name)}
+                      <Link
+                        href={`/bots/${bot.name}`}
                         className="text-xs text-zinc-500 hover:text-emerald-400 px-2 py-1 rounded-md hover:bg-zinc-800 transition-colors"
-                        title="Queue task"
+                        title="Open bot detail"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M12 5v14M5 12h14" />
+                          <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+                          <polyline points="15 3 21 3 21 9" />
+                          <line x1="10" y1="14" x2="21" y2="3" />
                         </svg>
-                      </button>
+                      </Link>
                       <button
                         onClick={() => handleDelete(bot.name)}
                         className="text-xs text-zinc-600 hover:text-red-400 px-2 py-1 rounded-md hover:bg-zinc-800 transition-colors"
@@ -251,30 +240,6 @@ export default function ManagePage() {
                       </button>
                     </div>
                   </div>
-                  {/* Task input */}
-                  {taskBot === bot.name && (
-                    <motion.div
-                      initial={{ height: 0, opacity: 0 }}
-                      animate={{ height: 'auto', opacity: 1 }}
-                      className="flex gap-2 mt-3 pl-13"
-                    >
-                      <input
-                        value={taskDesc}
-                        onChange={(e) => setTaskDesc(e.target.value)}
-                        onKeyDown={(e) => e.key === 'Enter' && handleQueueTask(bot.name)}
-                        placeholder={`Queue a task for ${bot.name}...`}
-                        className="flex-1 bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600"
-                        autoFocus
-                      />
-                      <button
-                        onClick={() => handleQueueTask(bot.name)}
-                        disabled={!taskDesc.trim()}
-                        className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-                      >
-                        Queue
-                      </button>
-                    </motion.div>
-                  )}
                 </motion.div>
               );
             })}

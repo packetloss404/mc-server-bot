@@ -24,8 +24,6 @@ export default function BotProfilePage() {
   const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
   const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [taskInput, setTaskInput] = useState('');
-  const [sendingTask, setSendingTask] = useState(false);
   const [chatMsg, setChatMsg] = useState('');
   const [chatPlayer, setChatPlayer] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
@@ -46,13 +44,6 @@ export default function BotProfilePage() {
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, [name]);
-
-  const handleQueueTask = async () => {
-    if (!taskInput.trim()) return;
-    setSendingTask(true);
-    try { await api.queueTask(name, taskInput.trim()); setTaskInput(''); } catch { /* ignore */ }
-    setSendingTask(false);
-  };
 
   const handleSendChat = async () => {
     if (!chatMsg.trim()) return;
@@ -209,25 +200,11 @@ export default function BotProfilePage() {
             mode={bot.mode}
           />
 
-          {/* Task Queue */}
-          <Section title="Task Queue">
-            <div className="flex gap-2 mb-3">
-              <input
-                value={taskInput}
-                onChange={(e) => setTaskInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleQueueTask()}
-                placeholder="Queue a task..."
-                className="flex-1 bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600"
-              />
-              <button
-                onClick={handleQueueTask}
-                disabled={sendingTask || !taskInput.trim()}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-              >
-                Queue
-              </button>
-            </div>
-
+          {/* Task History */}
+          <Section title="Task History">
+            {!bot.voyager || (bot.voyager.completedTasks.length === 0 && bot.voyager.failedTasks.length === 0) ? (
+              <p className="text-xs text-zinc-600 text-center py-3">No task history yet</p>
+            ) : null}
             {bot.voyager && (
               <>
                 {bot.voyager.completedTasks.length > 0 && (

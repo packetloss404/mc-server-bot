@@ -1,5 +1,6 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useBotStore } from '@/lib/store';
@@ -130,9 +131,47 @@ export function Sidebar() {
   const botCount = useBotStore((s) => s.botList.length);
   const playerCount = useBotStore((s) => s.playerList.filter((p) => p.isOnline).length);
   const unreadChats = useBotStore((s) => s.unreadChats);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Close mobile sidebar on route change
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [pathname]);
 
   return (
-    <aside className="w-[220px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col shrink-0 h-screen sticky top-0">
+    <>
+      {/* Mobile toggle button */}
+      <button
+        onClick={() => setMobileOpen(!mobileOpen)}
+        className="fixed top-4 left-4 z-50 md:hidden bg-zinc-900 border border-zinc-800/60 rounded-lg p-2 text-zinc-400 hover:text-white transition-colors"
+        aria-label="Toggle menu"
+      >
+        {mobileOpen ? (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M18 6L6 18M6 6l12 12" />
+          </svg>
+        ) : (
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        )}
+      </button>
+
+      {/* Backdrop for mobile */}
+      {mobileOpen && (
+        <div
+          className="fixed inset-0 bg-black/60 z-30 md:hidden"
+          onClick={() => setMobileOpen(false)}
+        />
+      )}
+
+    <aside className={`
+      w-[220px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col shrink-0 h-screen top-0
+      fixed z-40 transition-transform duration-200 md:sticky md:translate-x-0
+      ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
+    `}>
       {/* Logo */}
       <div className="px-5 py-5 border-b border-zinc-800/60">
         <div className="flex items-center gap-2.5">
@@ -206,5 +245,6 @@ export function Sidebar() {
         <p className="text-[10px] text-zinc-600">DyoCraft v0.1.0</p>
       </div>
     </aside>
+    </>
   );
 }

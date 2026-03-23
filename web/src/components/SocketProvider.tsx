@@ -2,9 +2,8 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore, useControlStore, useMissionStore } from '@/lib/store';
+import { useBotStore, useWorldStore, useFleetStore, useRoleStore } from '@/lib/store';
 import { api } from '@/lib/api';
-import type { CommandRecord, MissionRecord } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
@@ -19,6 +18,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+
+    // World planning, fleet, and role initial fetches
+    api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {});
+    api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {});
+    api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {});
+    api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
+    api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
 
     // Poll bots every 5s as a fallback
     const pollInterval = setInterval(() => {
@@ -87,27 +93,29 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
-    // Command lifecycle events
-    const handleCommand = (data: CommandRecord | { command: CommandRecord }) => {
-      const record = 'command' in data ? data.command : data;
-      useControlStore.getState().upsertCommand(record);
-    };
-    socket.on('command:queued', handleCommand);
-    socket.on('command:started', handleCommand);
-    socket.on('command:succeeded', handleCommand);
-    socket.on('command:failed', handleCommand);
-    socket.on('command:cancelled', handleCommand);
+    // World planning events
+    socket.on('marker:created', (data: any) => {
+      useWorldStore.getState().upsertMarker(data);
+    });
+    socket.on('marker:updated', (data: any) => {
+      useWorldStore.getState().upsertMarker(data);
+    });
+    socket.on('zone:updated', (data: any) => {
+      useWorldStore.getState().upsertZone(data);
+    });
+    socket.on('route:updated', (data: any) => {
+      useWorldStore.getState().upsertRoute(data);
+    });
 
-    // Mission lifecycle events
-    const handleMission = (data: MissionRecord | { mission: MissionRecord }) => {
-      const record = 'mission' in data ? data.mission : data;
-      useMissionStore.getState().upsertMission(record);
-    };
-    socket.on('mission:created', handleMission);
-    socket.on('mission:updated', handleMission);
-    socket.on('mission:completed', handleMission);
-    socket.on('mission:failed', handleMission);
-    socket.on('mission:cancelled', handleMission);
+    // Fleet events
+    socket.on('squad:updated', () => {
+      api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
+    });
+
+    // Role events
+    socket.on('role:updated', () => {
+      api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
+    });
 
     return () => {
       clearInterval(pollInterval);
@@ -126,16 +134,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
-      socket.off('command:queued', handleCommand);
-      socket.off('command:started', handleCommand);
-      socket.off('command:succeeded', handleCommand);
-      socket.off('command:failed', handleCommand);
-      socket.off('command:cancelled', handleCommand);
-      socket.off('mission:created', handleMission);
-      socket.off('mission:updated', handleMission);
-      socket.off('mission:completed', handleMission);
-      socket.off('mission:failed', handleMission);
-      socket.off('mission:cancelled', handleMission);
+      socket.off('marker:created');
+      socket.off('marker:updated');
+      socket.off('zone:updated');
+      socket.off('route:updated');
+      socket.off('squad:updated');
+      socket.off('role:updated');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

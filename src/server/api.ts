@@ -116,6 +116,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
   });
 
+  // Metrics endpoint
+  app.get('/api/metrics', (_req: Request, res: Response) => {
+    res.json({
+      commands: typeof commandCenter.getMetrics === 'function' ? commandCenter.getMetrics() : {},
+      missions: typeof missionManager.getMetrics === 'function' ? missionManager.getMetrics() : {},
+    });
+  });
+
   // List all bots (basic status)
   app.get('/api/bots', (_req: Request, res: Response) => {
     const bots = botManager.getAllBots().map((b) => b.getStatus());

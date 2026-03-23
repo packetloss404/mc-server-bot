@@ -3,25 +3,22 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
-import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
+import { STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
-
-const MIN_SCALE = 0.5;
-const MAX_SCALE = 10;
-const TRAIL_LENGTH = 80;
-const TERRAIN_RADIUS = 96;
-const TERRAIN_STEP = 2;
-const ZOOM_SENSITIVITY = 0.002; // Normalized zoom speed
-
-interface MapEntity {
-  name: string;
-  x: number;
-  z: number;
-  color: string;
-  type: 'bot' | 'player';
-  state?: string;
-  personality?: string;
-}
+import { MapToolbar } from '@/components/map/MapToolbar';
+import { MapEntitySidebar } from '@/components/map/MapEntitySidebar';
+import {
+  MIN_SCALE,
+  MAX_SCALE,
+  TRAIL_LENGTH,
+  TERRAIN_RADIUS,
+  TERRAIN_STEP,
+  ZOOM_SENSITIVITY,
+  collectEntities,
+  type MapEntity,
+  type MapMode,
+  type ShowState,
+} from '@/components/map/mapDrawing';
 
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
@@ -36,7 +33,7 @@ export default function MapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
+  const showRef = useRef<ShowState>({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
@@ -45,15 +42,26 @@ export default function MapPage() {
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
 
+  // Interaction mode state — only 'navigate' and 'select' are active for now
+  const [mapMode, setMapMode] = useState<MapMode>('navigate');
+  const mapModeRef = useRef<MapMode>(mapMode);
+
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
   const kick = () => forceRender((n) => n + 1);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
-  // Keep refs in sync with zustand
-  botsRef.current = bots;
-  playersRef.current = players;
+  // Keep refs in sync with zustand — inside useEffect, not during render
+  useEffect(() => {
+    botsRef.current = bots;
+    playersRef.current = players;
+  }, [bots, players]);
+
+  // Keep mapMode ref in sync
+  useEffect(() => {
+    mapModeRef.current = mapMode;
+  }, [mapMode]);
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -147,8 +155,8 @@ export default function MapPage() {
       const offset = offsetRef.current;
       const scale = scaleRef.current;
       const show = showRef.current;
-      const bots = botsRef.current;
-      const players = playersRef.current;
+      const currentBots = botsRef.current;
+      const currentPlayers = playersRef.current;
       const hovered = hoveredRef.current;
       const selected = selectedRef.current;
 
@@ -215,21 +223,7 @@ export default function MapPage() {
       }
 
       // Collect entities
-      const entities: MapEntity[] = [];
-      const drawnNames = new Set<string>();
-      if (show.bots) {
-        for (const bot of bots) {
-          if (!bot.position) continue;
-          drawnNames.add(bot.name.toLowerCase());
-          entities.push({ name: bot.name, x: bot.position.x, z: bot.position.z, color: getPersonalityColor(bot.personality), type: 'bot', state: bot.state, personality: bot.personality });
-        }
-      }
-      if (show.players) {
-        for (const player of players) {
-          if (!player.isOnline || !player.position || drawnNames.has(player.name.toLowerCase())) continue;
-          entities.push({ name: player.name, x: player.position.x, z: player.position.z, color: PLAYER_COLOR, type: 'player' });
-        }
-      }
+      const entities = collectEntities(currentBots, currentPlayers, show.bots, show.players);
 
       entityPositions.current.clear();
 
@@ -323,13 +317,17 @@ export default function MapPage() {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    for (const [name, pos] of entityPositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        selectedRef.current = selectedRef.current === name ? null : name;
-        kick();
-        return;
+    // In navigate or select mode, clicking an entity selects it
+    const mode = mapModeRef.current;
+    if (mode === 'navigate' || mode === 'select') {
+      for (const [name, pos] of entityPositions.current) {
+        const dx = mx - pos.sx;
+        const dy = my - pos.sy;
+        if (dx * dx + dy * dy < pos.radius * pos.radius) {
+          selectedRef.current = selectedRef.current === name ? null : name;
+          kick();
+          return;
+        }
       }
     }
 
@@ -421,103 +419,41 @@ export default function MapPage() {
   };
 
   // Sidebar entities
-  const botNames = new Set(bots.map((b) => b.name.toLowerCase()));
-  const allEntities: MapEntity[] = [
-    ...bots.filter((b) => b.position).map((bot) => ({
-      name: bot.name, x: bot.position!.x, z: bot.position!.z,
-      color: getPersonalityColor(bot.personality), type: 'bot' as const,
-      state: bot.state, personality: bot.personality,
-    })),
-    ...players.filter((p) => p.isOnline && p.position && !botNames.has(p.name.toLowerCase())).map((player) => ({
-      name: player.name, x: player.position!.x, z: player.position!.z,
-      color: PLAYER_COLOR, type: 'player' as const,
-    })),
-  ];
+  const allEntities = collectEntities(bots, players, true, true);
 
   const show = showRef.current;
-  const toggleShow = (key: keyof typeof show) => { showRef.current = { ...show, [key]: !show[key] }; kick(); };
+  const toggleShow = (key: keyof ShowState) => { showRef.current = { ...show, [key]: !show[key] }; kick(); };
+
+  const handleEntitySelect = (entity: MapEntity) => {
+    centerOn(entity.x, entity.z);
+    selectedRef.current = entity.name;
+    kick();
+  };
 
   return (
     <div className="h-screen flex flex-col">
       {/* Toolbar */}
-      <div className="px-4 py-2.5 border-b border-zinc-800/60 flex items-center justify-between bg-zinc-950/80 backdrop-blur-sm shrink-0">
-        <div className="flex items-center gap-4">
-          <h1 className="text-sm font-bold text-white">World Map</h1>
-          <div className="flex items-center gap-1.5 text-[11px]">
-            <ToggleBtn active={show.terrain} onClick={() => toggleShow('terrain')} label="Terrain" color="#5B8C33" />
-            <ToggleBtn active={show.grid} onClick={() => toggleShow('grid')} label="Grid" />
-            <ToggleBtn active={show.trails} onClick={() => toggleShow('trails')} label="Trails" />
-            <ToggleBtn active={show.coords} onClick={() => toggleShow('coords')} label="Coords" />
-            <span className="w-px h-4 bg-zinc-800 mx-1" />
-            <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
-            <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
-          </div>
-          {terrainStatus === 'loading' && (
-            <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-              <span className="w-3 h-3 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
-              Loading terrain...
-            </span>
-          )}
-          {terrainStatus === 'error' && <span className="text-[10px] text-red-400/70">Terrain unavailable</span>}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => {
-              terrainMeta.current = null;
-              terrainCanvas.current = null;
-              loadTerrain(-offsetRef.current.x / scaleRef.current, -offsetRef.current.y / scaleRef.current);
-            }}
-            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
-            title="Reload terrain"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <polyline points="23 4 23 10 17 10" />
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-            </svg>
-          </button>
-          <span className="w-px h-4 bg-zinc-800" />
-          <button
-            onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
-            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-          >+</button>
-          <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
-          <button
-            onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
-            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-          >-</button>
-        </div>
-      </div>
+      <MapToolbar
+        show={show}
+        toggleShow={toggleShow}
+        scale={scaleRef.current}
+        onZoomIn={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
+        onZoomOut={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
+        terrainStatus={terrainStatus}
+        onReloadTerrain={() => {
+          terrainMeta.current = null;
+          terrainCanvas.current = null;
+          loadTerrain(-offsetRef.current.x / scaleRef.current, -offsetRef.current.y / scaleRef.current);
+        }}
+      />
 
       <div className="flex-1 flex min-h-0">
         {/* Entity sidebar */}
-        <div className="w-52 border-r border-zinc-800/60 bg-zinc-950/50 overflow-y-auto shrink-0">
-          <div className="p-3">
-            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-              Entities ({allEntities.length})
-            </p>
-            <div className="space-y-0.5">
-              {allEntities.map((entity) => (
-                <button
-                  key={`${entity.type}-${entity.name}`}
-                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; kick(); }}
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
-                    selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                  }`}
-                >
-                  <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-medium text-zinc-300 truncate">{entity.name}</p>
-                    <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(entity.x)}, {Math.round(entity.z)}</p>
-                  </div>
-                  <span className="text-[9px] text-zinc-600 uppercase shrink-0">
-                    {entity.type === 'bot' ? entity.personality?.slice(0, 3) : 'PLR'}
-                  </span>
-                </button>
-              ))}
-              {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
-            </div>
-          </div>
-        </div>
+        <MapEntitySidebar
+          entities={allEntities}
+          selectedEntity={selectedRef.current}
+          onSelect={handleEntitySelect}
+        />
 
         {/* Canvas */}
         <div
@@ -550,16 +486,6 @@ export default function MapPage() {
         </div>
       </div>
     </div>
-  );
-}
-
-function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick: () => void; label: string; color?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-600 hover:text-zinc-400'}`}
-      style={active && color ? { color } : undefined}
-    >{label}</button>
   );
 }
 

@@ -36,17 +36,44 @@ interface CommandFilters {
 const DATA_PATH = path.join(process.cwd(), 'data', 'commands.json');
 const MAX_PERSISTED = 500;
 
+/** Command types that involve pathfinder-based movement */
+const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
+  'walk_to_coords',
+  'move_to_marker',
+  'follow_player',
+  'patrol_route',
+  'guard_zone',
+]);
+
+/** How long a command may stay in 'started' before being auto-failed (ms) */
+const COMMAND_TIMEOUT_MS = 60_000;
+
+/** Interval at which we check for timed-out commands (ms) */
+const TIMEOUT_CHECK_INTERVAL_MS = 10_000;
+
 export class CommandCenter {
   private commands: Map<string, CommandRecord> = new Map();
   private botManager: BotManager;
   private io: SocketIOServer;
   private markerStore: MarkerStore | null;
+  private timeoutTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(botManager: BotManager, io: SocketIOServer, markerStore?: MarkerStore) {
     this.botManager = botManager;
     this.io = io;
     this.markerStore = markerStore ?? null;
     this.loadFromDisk();
+    this.startTimeoutChecker();
+  }
+
+  // ── Cleanup ─────────────────────────────────────────────
+
+  /** Stop the timeout checker interval (call on shutdown) */
+  destroy(): void {
+    if (this.timeoutTimer) {
+      clearInterval(this.timeoutTimer);
+      this.timeoutTimer = null;
+    }
   }
 
   // ── ID generation ──────────────────────────────────────────
@@ -77,10 +104,7 @@ export class CommandCenter {
     this.emitStatus(command, COMMAND_EVENTS.QUEUED);
     this.persist();
 
-    logger.info(
-      { commandId: command.id, type: command.type, targets: command.targets, source: command.source },
-      'Command created',
-    );
+    this.logLifecycle(command, 'Command created');
 
     return command;
   }
@@ -94,19 +118,34 @@ export class CommandCenter {
       return this.dispatchFanOut(command);
     }
 
+    const botName = command.targets[0];
+    if (!botName) {
+      command.error = { code: 'NO_TARGET', message: 'No target bot specified' };
+      this.updateStatus(command, 'failed');
+      return command;
+    }
+
+    // ── Task 4: Validate bot exists and is connected ──
+    const bot = this.botManager.getBot(botName);
+    if (!bot) {
+      command.error = { code: 'BOT_NOT_FOUND', message: `Bot "${botName}" not found`, botName };
+      this.updateStatus(command, 'failed');
+      return command;
+    }
+
+    if (!bot.bot) {
+      command.error = { code: 'BOT_OFFLINE', message: `Bot "${botName}" is not connected`, botName };
+      this.updateStatus(command, 'failed');
+      return command;
+    }
+
+    // ── Task 3: Concurrent command protection ──
+    // If the bot already has an active (started) command, cancel it first
+    await this.cancelActiveCommandForBot(botName, 'superseded');
+
     this.updateStatus(command, 'started');
 
     try {
-      const botName = command.targets[0];
-      if (!botName) {
-        throw { code: 'NO_TARGET', message: 'No target bot specified' } as CommandError;
-      }
-
-      const bot = this.botManager.getBot(botName);
-      if (!bot) {
-        throw { code: 'BOT_NOT_FOUND', message: `Bot "${botName}" not found`, botName } as CommandError;
-      }
-
       const result = await this.executeHandler(command.type, bot, command.params);
       command.result = result;
       this.updateStatus(command, 'succeeded');
@@ -142,17 +181,85 @@ export class CommandCenter {
     return this.commands.get(id);
   }
 
-  cancelCommand(id: string): CommandRecord | undefined {
+  cancelCommand(id: string, reason?: string): CommandRecord | undefined {
     const command = this.commands.get(id);
     if (!command) return undefined;
 
     if (command.status === 'queued' || command.status === 'started') {
+      // ── Task 1: Stop pathfinder for movement commands that are in-flight ──
+      if (command.status === 'started' && MOVEMENT_COMMAND_TYPES.has(command.type)) {
+        this.stopPathfinderForTargets(command.targets);
+      }
+
+      if (reason) {
+        command.error = { code: 'CANCELLED', message: reason };
+      }
       this.updateStatus(command, 'cancelled');
       return command;
     }
 
     // Already terminal — return as-is
     return command;
+  }
+
+  // ── Task 2: Timeout handling ───────────────────────────────
+
+  /** Check all started commands for timeout. Called on a 10-second interval. */
+  checkTimeouts(): void {
+    const now = Date.now();
+
+    for (const command of this.commands.values()) {
+      if (command.status !== 'started') continue;
+      if (!command.startedAt) continue;
+
+      const startedMs = new Date(command.startedAt).getTime();
+      const elapsed = now - startedMs;
+
+      if (elapsed > COMMAND_TIMEOUT_MS) {
+        // Stop pathfinder if it was a movement command
+        if (MOVEMENT_COMMAND_TYPES.has(command.type)) {
+          this.stopPathfinderForTargets(command.targets);
+        }
+
+        command.error = { code: 'TIMEOUT', message: 'Command timed out' };
+        this.updateStatus(command, 'failed');
+
+        logger.warn(
+          { commandId: command.id, botName: command.targets[0], type: command.type, durationMs: elapsed },
+          'Command timed out',
+        );
+      }
+    }
+  }
+
+  // ── Task 3: Cancel any active command for a specific bot ──
+
+  private async cancelActiveCommandForBot(botName: string, reason: string): Promise<void> {
+    for (const command of this.commands.values()) {
+      if (command.status === 'started' && command.targets.includes(botName)) {
+        this.cancelCommand(command.id, reason);
+        logger.info(
+          { commandId: command.id, botName, type: command.type, reason },
+          'Active command superseded by new command',
+        );
+      }
+    }
+  }
+
+  // ── Pathfinder stop helper ───────────────────────────────
+
+  private stopPathfinderForTargets(targets: string[]): void {
+    for (const botName of targets) {
+      try {
+        const bot = this.botManager.getBot(botName);
+        if (bot?.bot) {
+          bot.bot.pathfinder.stop();
+          logger.debug({ botName }, 'Pathfinder stopped for cancelled/timed-out command');
+        }
+      } catch (err: any) {
+        logger.warn({ botName, err: err?.message }, 'Failed to stop pathfinder');
+      }
+    }
   }
 
   // ── Fan-out ────────────────────────────────────────────────
@@ -565,12 +672,27 @@ export class CommandCenter {
     return { unstuck: true, jumped: true, movedTo: { x: pos.x + dx, z: pos.z + dz } };
   }
 
-  private handleStub(note: string): Record<string, any> {
-    logger.info({ note }, 'Stub command executed');
-    return { stub: true, note };
-  }
-
   // ── Status lifecycle ───────────────────────────────────────
+
+  /** Task 6: Structured logging for every lifecycle transition */
+  private logLifecycle(command: CommandRecord, message: string): void {
+    const durationMs = command.startedAt && command.completedAt
+      ? new Date(command.completedAt).getTime() - new Date(command.startedAt).getTime()
+      : command.startedAt
+        ? Date.now() - new Date(command.startedAt).getTime()
+        : undefined;
+
+    logger.info(
+      {
+        commandId: command.id,
+        botName: command.targets[0],
+        type: command.type,
+        status: command.status,
+        ...(durationMs !== undefined ? { durationMs } : {}),
+      },
+      message,
+    );
+  }
 
   private updateStatus(command: CommandRecord, status: CommandStatus): void {
     command.status = status;
@@ -585,6 +707,9 @@ export class CommandCenter {
     const eventKey = `command:${status}` as string;
     this.emitStatus(command, eventKey);
     this.persist();
+
+    // Task 6: Structured log on every status transition
+    this.logLifecycle(command, `Command ${status}`);
   }
 
   private emitStatus(command: CommandRecord, event: string): void {
@@ -596,6 +721,14 @@ export class CommandCenter {
       error: command.error,
       result: command.result,
     });
+  }
+
+  // ── Timeout checker ────────────────────────────────────────
+
+  private startTimeoutChecker(): void {
+    this.timeoutTimer = setInterval(() => {
+      this.checkTimeouts();
+    }, TIMEOUT_CHECK_INTERVAL_MS);
   }
 
   // ── Persistence ────────────────────────────────────────────

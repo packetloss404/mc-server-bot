@@ -1337,6 +1337,8 @@ export class BotInstance {
             isPaused: this.voyagerLoop.isPaused(),
             currentTask: this.voyagerLoop.getCurrentTask(),
             queuedTasks: this.voyagerLoop.getQueuedTasks().length,
+            queuedTaskCount: this.voyagerLoop.getQueueLength(),
+            queuedTaskPreviews: this.voyagerLoop.getQueuedTasksDetailed().slice(0, 5),
             lastExecution: this.voyagerLoop.getLastExecutionMetrics(),
           }
         : null,

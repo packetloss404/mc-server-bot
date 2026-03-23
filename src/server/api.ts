@@ -8,6 +8,7 @@ import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
 import { CommandCenter } from '../control/CommandCenter';
 import { CommandType } from '../control/CommandTypes';
+import { MissionManager } from '../control/MissionManager';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -16,6 +17,7 @@ export interface APIServerResult {
   io: SocketIOServer;
   eventLog: EventLog;
   commandCenter: CommandCenter;
+  missionManager: MissionManager;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -553,5 +555,135 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog, commandCenter };
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - MISSION ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const missionManager = new MissionManager(botManager, io);
+
+  // Create mission
+  app.post('/api/missions', (req: Request, res: Response) => {
+    const { type, title, description, assigneeType, assigneeIds, priority, source, steps, linkedCommandIds } = req.body;
+    if (!type || !title || !assigneeType || !assigneeIds?.length) {
+      res.status(400).json({ error: 'type, title, assigneeType, and assigneeIds are required' });
+      return;
+    }
+    const mission = missionManager.createMission({
+      type, title, description, assigneeType, assigneeIds, priority, source, steps, linkedCommandIds,
+    });
+    res.status(201).json({ mission });
+  });
+
+  // List missions
+  app.get('/api/missions', (req: Request, res: Response) => {
+    const filters = {
+      bot: req.query.bot ? String(req.query.bot) : undefined,
+      squad: req.query.squad ? String(req.query.squad) : undefined,
+      status: req.query.status ? String(req.query.status) as any : undefined,
+      limit: req.query.limit ? parseInt(String(req.query.limit)) : undefined,
+    };
+    const missions = missionManager.getMissions(filters);
+    res.json({ missions });
+  });
+
+  // Get single mission
+  app.get('/api/missions/:id', (req: Request, res: Response) => {
+    const mission = missionManager.getMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Pause mission
+  app.post('/api/missions/:id/pause', (req: Request, res: Response) => {
+    const mission = missionManager.pauseMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be paused' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Resume mission
+  app.post('/api/missions/:id/resume', (req: Request, res: Response) => {
+    const mission = missionManager.resumeMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be resumed' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Cancel mission
+  app.post('/api/missions/:id/cancel', (req: Request, res: Response) => {
+    const mission = missionManager.cancelMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be cancelled' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Retry mission
+  app.post('/api/missions/:id/retry', (req: Request, res: Response) => {
+    const mission = missionManager.retryMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be retried' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Get bot's combined mission queue (MissionManager + VoyagerLoop)
+  app.get('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const bot = botManager.getBot(name);
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const missions = missionManager.getBotMissionQueue(name);
+    const voyager = bot.getVoyagerLoop();
+    const voyagerTasks = voyager ? voyager.getQueuedTasksDetailed() : [];
+    res.json({ missions, voyagerTasks });
+  });
+
+  // Reorder/remove from bot's VoyagerLoop queue
+  app.patch('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const bot = botManager.getBot(name);
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const voyager = bot.getVoyagerLoop();
+    if (!voyager) {
+      res.status(400).json({ error: 'Bot is not in codegen mode' });
+      return;
+    }
+    const { action, index, fromIndex, toIndex } = req.body;
+    let success = false;
+    switch (action) {
+      case 'remove':
+        success = typeof index === 'number' ? voyager.removeQueuedTask(index) : false;
+        break;
+      case 'reorder':
+        success = typeof fromIndex === 'number' && typeof toIndex === 'number'
+          ? voyager.reorderQueue(fromIndex, toIndex)
+          : false;
+        break;
+      case 'clear':
+        voyager.clearQueue();
+        success = true;
+        break;
+      default:
+        res.status(400).json({ error: 'action must be remove, reorder, or clear' });
+        return;
+    }
+    res.json({ success });
+  });
+
+  return { app, httpServer, io, eventLog, commandCenter, missionManager };
 }

@@ -13,6 +13,7 @@ Guidance for coding agents working in `D:\projects\mc-server-bot`.
 - `src/actions/` primitive bot actions.
 - `src/personality/` affinity and conversation systems.
 - `src/social/` bot-to-bot messaging and memory.
+- `src/control/` fleet control platform (commands, missions, markers, squads, roles, commander).
 - `src/server/` Express + Socket.IO API.
 
 ## Source Of Truth
@@ -66,6 +67,20 @@ Run a specific test file:
 npx vitest run test/control/CommandCenter.test.ts
 ```
 
+Run all control platform tests:
+```bash
+npx vitest run test/control/
+```
+
+Available test files:
+- `test/control/CommandCenter.test.ts` - command dispatch, cancellation, timeout, fan-out
+- `test/control/MissionManager.test.ts` - mission lifecycle, VoyagerLoop bridge, dependencies, queues
+- `test/control/MarkerStore.test.ts` - markers, zones, routes, spatial lookup, zone containment
+- `test/control/SquadManager.test.ts` - squad CRUD, membership, getSquadsForBot
+- `test/control/RoleManager.test.ts` - role assignments, one-role-per-bot, overrides, expiry
+- `test/control/CommanderService.test.ts` - NL parsing (with/without LLM), plan execution
+- `test/control/integration.test.ts` - cross-service integration (commands, missions, markers, squads)
+
 Run frontend tests:
 ```bash
 cd web && npm test
@@ -77,6 +92,98 @@ cd web && npm test
 - List bots: `curl -s http://127.0.0.1:3001/api/bots`
 - Stream logs: `tail -f /tmp/dyobot.log`
 - Filter important backend log events: `grep -E "task proposed|Execution result|task evaluated" /tmp/dyobot.log`
+
+## Control Platform Services (`src/control/`)
+
+The control platform provides centralized fleet management:
+
+- **CommandCenter** (`CommandCenter.ts`) - Dispatches immediate bot commands (pause, resume, stop, move, follow, guard, patrol, unstuck). Handles fan-out for multi-bot commands, timeout detection, concurrent command protection, and cancellation with pathfinder cleanup.
+- **MissionManager** (`MissionManager.ts`) - Manages longer-running missions with full lifecycle (draft, queued, running, paused, completed, failed, cancelled). Bridges to VoyagerLoop for `queue_task` missions, checks command dependencies before starting, detects stale missions, and maintains per-bot priority queues.
+- **MarkerStore** (`MarkerStore.ts`) - Persists world markers (named 3D positions), zones (rectangular or circular 2D areas), and routes (ordered waypoint sequences). Provides spatial helpers: `findNearestMarker` and `isInsideZone`.
+- **SquadManager** (`SquadManager.ts`) - CRUD for squads with bot membership management. Supports `getSquadsForBot` lookup.
+- **RoleManager** (`RoleManager.ts`) - One-role-per-bot assignment system with autonomy levels (manual, assisted, autonomous). Tracks manual overrides with 5-minute auto-expiry.
+- **CommanderService** (`CommanderService.ts`) - Natural language command parsing via LLM. Produces structured plans with confidence scores, then executes plans by dispatching commands and creating missions.
+
+## API Endpoint Summary
+
+### Bot Management
+- `GET /api/status` - server status
+- `GET/POST/DELETE /api/bots` - list, create, delete all bots
+- `GET/DELETE /api/bots/:name` - get or delete a specific bot
+- `POST /api/bots/:name/mode` - change bot mode
+- `GET /api/bots/:name/detailed` - detailed bot info
+- `GET /api/bots/:name/inventory` - bot inventory
+- `GET /api/bots/:name/relationships` - bot relationships
+- `GET /api/bots/:name/conversations` - bot conversation history
+- `GET /api/bots/:name/tasks` - bot task history
+- `POST /api/bots/:name/chat` - send chat as bot
+- `POST /api/bots/:name/task` - queue a task
+
+### Bot Actions (convenience shortcuts)
+- `POST /api/bots/:name/pause` - pause voyager
+- `POST /api/bots/:name/resume` - resume voyager
+- `POST /api/bots/:name/stop` - stop movement
+- `POST /api/bots/:name/follow` - follow a player
+- `POST /api/bots/:name/walkto` - walk to coordinates
+
+### Commands
+- `POST/GET /api/commands` - create and list commands
+- `GET /api/commands/:id` - get a command
+- `POST /api/commands/:id/cancel` - cancel a command
+
+### Missions
+- `POST/GET /api/missions` - create and list missions
+- `GET /api/missions/:id` - get a mission
+- `POST /api/missions/:id/start|pause|resume|cancel|retry` - lifecycle actions
+- `GET/PATCH /api/bots/:name/mission-queue` - per-bot mission queue
+
+### World (Markers, Zones, Routes)
+- `GET/POST /api/markers` - list and create markers
+- `PATCH/DELETE /api/markers/:id` - update and delete
+- `GET/POST /api/zones` - list and create zones
+- `PATCH/DELETE /api/zones/:id` - update and delete
+- `GET/POST /api/routes` - list and create routes
+- `PATCH/DELETE /api/routes/:id` - update and delete
+
+### Squads
+- `GET/POST /api/squads` - list and create squads
+- `GET/PATCH/DELETE /api/squads/:id` - CRUD
+- `POST /api/squads/:id/members` - add bot
+- `DELETE /api/squads/:id/members/:botName` - remove bot
+
+### Roles
+- `GET /api/roles` - list all role assignments
+- `POST /api/roles/assignments` - create assignment
+- `GET/PATCH/DELETE /api/roles/assignments/:id` - CRUD
+- `GET/DELETE /api/bots/:name/override` - get/clear override
+
+### Commander (NL parsing)
+- `POST /api/commander/parse` - parse natural language into a plan
+- `POST /api/commander/execute` - execute a parsed plan
+
+### Other
+- `GET /api/relationships` - all bot relationships
+- `GET /api/skills` - list skills
+- `GET /api/skills/:name` - get a skill
+- `GET /api/world` - world state
+- `GET /api/blackboard` - shared blackboard
+- `GET /api/activity` - activity log
+- `POST /api/swarm` - spawn multiple bots
+- `POST /api/events/chat|player-join|player-leave` - event hooks
+
+## Running the Dashboard
+
+Backend (port 3001):
+```bash
+npm run build && npm start
+```
+
+Frontend (port 3000, in a separate terminal):
+```bash
+npm run dev --prefix web
+```
+
+The frontend connects to the backend API at `http://localhost:3001` and uses Socket.IO for real-time updates.
 
 ## Verified Commands
 

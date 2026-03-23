@@ -65,4 +65,44 @@ describe('SquadManager', () => {
     const botDSquads = sm.getSquadsForBot('BotD');
     expect(botDSquads).toHaveLength(0);
   });
+
+  it('updates a squad', () => {
+    const squad = sm.createSquad({ name: 'Old Name', botNames: ['Bot1'] });
+    const updated = sm.updateSquad(squad.id, { name: 'New Name' });
+
+    expect(updated).toBeDefined();
+    expect(updated!.name).toBe('New Name');
+    expect(updated!.botNames).toEqual(['Bot1']);
+    expect(updated!.updatedAt).toBeGreaterThanOrEqual(squad.createdAt);
+  });
+
+  it('returns null when updating a nonexistent squad', () => {
+    expect(sm.updateSquad('nonexistent', { name: 'X' })).toBeNull();
+  });
+
+  it('deletes a squad', () => {
+    const squad = sm.createSquad({ name: 'Temp', botNames: [] });
+    expect(sm.getSquads()).toHaveLength(1);
+
+    expect(sm.deleteSquad(squad.id)).toBe(true);
+    expect(sm.getSquads()).toHaveLength(0);
+    expect(sm.getSquad(squad.id)).toBeNull();
+  });
+
+  it('returns false when deleting a nonexistent squad', () => {
+    expect(sm.deleteSquad('nonexistent')).toBe(false);
+  });
+
+  it('returns false when adding to nonexistent squad', () => {
+    expect(sm.addBotToSquad('nonexistent', 'Bot1')).toBe(false);
+  });
+
+  it('returns false when removing from nonexistent squad', () => {
+    expect(sm.removeBotFromSquad('nonexistent', 'Bot1')).toBe(false);
+  });
+
+  it('returns false when removing a bot not in the squad', () => {
+    const squad = sm.createSquad({ name: 'Team', botNames: ['Bot1'] });
+    expect(sm.removeBotFromSquad(squad.id, 'Bot2')).toBe(false);
+  });
 });

@@ -98,4 +98,115 @@ describe('MarkerStore', () => {
     expect(all).toHaveLength(1);
     expect(all[0].id).toBe(zone.id);
   });
+
+  it('creates and retrieves routes', () => {
+    const route = store.createRoute({
+      name: 'Patrol Path',
+      waypointIds: ['mkr_a', 'mkr_b', 'mkr_c'],
+      loop: true,
+    });
+
+    expect(route).toBeDefined();
+    expect(route.id).toMatch(/^rte_/);
+    expect(route.name).toBe('Patrol Path');
+    expect(route.waypointIds).toEqual(['mkr_a', 'mkr_b', 'mkr_c']);
+    expect(route.loop).toBe(true);
+
+    const fetched = store.getRoute(route.id);
+    expect(fetched).toEqual(route);
+
+    const allRoutes = store.getRoutes();
+    expect(allRoutes).toHaveLength(1);
+  });
+
+  it('updates and deletes zones', () => {
+    const zone = store.createZone({
+      name: 'Old Zone',
+      mode: 'farm',
+      shape: 'circle',
+      circle: { x: 0, z: 0, radius: 50 },
+    });
+
+    const updated = store.updateZone(zone.id, { name: 'New Zone' });
+    expect(updated).toBeDefined();
+    expect(updated!.name).toBe('New Zone');
+
+    expect(store.deleteZone(zone.id)).toBe(true);
+    expect(store.getZones()).toHaveLength(0);
+    expect(store.deleteZone('nonexistent')).toBe(false);
+  });
+
+  it('updates and deletes routes', () => {
+    const route = store.createRoute({
+      name: 'Old Route',
+      waypointIds: ['a'],
+      loop: false,
+    });
+
+    const updated = store.updateRoute(route.id, { name: 'New Route', loop: true });
+    expect(updated).toBeDefined();
+    expect(updated!.name).toBe('New Route');
+    expect(updated!.loop).toBe(true);
+
+    expect(store.deleteRoute(route.id)).toBe(true);
+    expect(store.getRoutes()).toHaveLength(0);
+    expect(store.deleteRoute('nonexistent')).toBe(false);
+  });
+
+  // ── Spatial helpers ─────────────────────────────────────
+
+  it('findNearestMarker returns the closest marker', () => {
+    store.createMarker({ name: 'Far', kind: 'base', position: { x: 1000, y: 64, z: 1000 } });
+    store.createMarker({ name: 'Near', kind: 'base', position: { x: 5, y: 64, z: 5 } });
+    store.createMarker({ name: 'Medium', kind: 'custom', position: { x: 50, y: 64, z: 50 } });
+
+    const nearest = store.findNearestMarker({ x: 0, y: 64, z: 0 });
+    expect(nearest).toBeDefined();
+    expect(nearest!.name).toBe('Near');
+  });
+
+  it('findNearestMarker filters by kind', () => {
+    store.createMarker({ name: 'Near Custom', kind: 'custom', position: { x: 1, y: 1, z: 1 } });
+    store.createMarker({ name: 'Far Base', kind: 'base', position: { x: 100, y: 64, z: 100 } });
+
+    const nearestBase = store.findNearestMarker({ x: 0, y: 0, z: 0 }, 'base');
+    expect(nearestBase).toBeDefined();
+    expect(nearestBase!.name).toBe('Far Base');
+  });
+
+  it('findNearestMarker returns undefined when no markers exist', () => {
+    const result = store.findNearestMarker({ x: 0, y: 0, z: 0 });
+    expect(result).toBeUndefined();
+  });
+
+  it('isInsideZone checks rectangle containment', () => {
+    const zone = store.createZone({
+      name: 'Rect Zone',
+      mode: 'build',
+      shape: 'rectangle',
+      rectangle: { minX: -50, minZ: -50, maxX: 50, maxZ: 50 },
+    });
+
+    expect(store.isInsideZone(0, 0, zone.id)).toBe(true);
+    expect(store.isInsideZone(50, 50, zone.id)).toBe(true);
+    expect(store.isInsideZone(51, 0, zone.id)).toBe(false);
+    expect(store.isInsideZone(0, -51, zone.id)).toBe(false);
+  });
+
+  it('isInsideZone checks circle containment', () => {
+    const zone = store.createZone({
+      name: 'Circle Zone',
+      mode: 'guard',
+      shape: 'circle',
+      circle: { x: 0, z: 0, radius: 10 },
+    });
+
+    expect(store.isInsideZone(0, 0, zone.id)).toBe(true);
+    expect(store.isInsideZone(7, 7, zone.id)).toBe(true);
+    expect(store.isInsideZone(8, 8, zone.id)).toBe(false);
+  });
+
+  it('isInsideZone returns false for nonexistent zone', () => {
+    expect(store.isInsideZone(0, 0, 'nonexistent')).toBe(false);
+  });
 });

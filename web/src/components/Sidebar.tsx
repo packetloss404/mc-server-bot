@@ -116,8 +116,6 @@ const NAV_ITEMS = [
     ),
   },
   {
-<<<<<<< HEAD
-=======
     href: '/history',
     label: 'History',
     icon: (
@@ -149,7 +147,6 @@ const NAV_ITEMS = [
     ),
   },
   {
->>>>>>> worktree-agent-a31773dc
     href: '/commander',
     label: 'Commander',
     icon: (

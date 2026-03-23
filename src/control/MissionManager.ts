@@ -174,7 +174,7 @@ export class MissionManager {
       else if (m.status === 'failed') t.failed++;
 
       // By bot
-      for (const botName of m.assigneeIds) {
+      for (const botName of (m.assigneeIds || [])) {
         if (!byBot[botName]) {
           byBot[botName] = { count: 0, completed: 0, failed: 0 };
         }

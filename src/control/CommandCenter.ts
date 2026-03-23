@@ -236,7 +236,7 @@ export class CommandCenter {
       }
 
       // By bot (first target)
-      const botName = cmd.targets[0];
+      const botName = cmd.targets?.[0];
       if (botName) {
         if (!byBot[botName]) {
           byBot[botName] = { count: 0, succeeded: 0, failed: 0 };

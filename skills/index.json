@@ -181,6 +181,9 @@
     "file": "mine_3_blocks_of_grass.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 3,
+    "failureCount": 0,
     "name": "mine_1_oak_log",
     "description": "mine 1 oak log",
     "keywords": [
@@ -188,10 +191,7 @@
       "mining",
       "basic"
     ],
-    "file": "mine_1_oak_log.js",
-    "quality": 0.9,
-    "successCount": 3,
-    "failureCount": 0
+    "file": "mine_1_oak_log.js"
   },
   {
     "quality": 0.7,
@@ -207,13 +207,13 @@
     "file": "walk_to_the_nearest_player.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "find_a_water_source",
     "description": "find a water source",
     "keywords": [],
-    "file": "find_a_water_source.js",
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "find_a_water_source.js"
   },
   {
     "quality": 0.7,
@@ -321,13 +321,13 @@
     "file": "walk_to_the_nearest_farmland.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 9,
+    "failureCount": 0,
     "name": "mine_3_oak_logs",
     "description": "Mine 3 oak logs",
     "keywords": [],
-    "file": "mine_3_oak_logs.js",
-    "quality": 0.8,
-    "successCount": 9,
-    "failureCount": 0
+    "file": "mine_3_oak_logs.js"
   },
   {
     "quality": 0.9,
@@ -515,10 +515,10 @@
   },
   {
     "quality": 0.9,
-    "successCount": 10,
+    "successCount": 11,
     "failureCount": 0,
     "name": "craft_1_crafting_table_using",
-    "description": "Craft 1 crafting table using 4 oak planks",
+    "description": "Craft 1 crafting table using 1 oak log",
     "keywords": [],
     "file": "craft_1_crafting_table_using.js"
   },
@@ -558,13 +558,13 @@
     "file": "walk_to_the_chest_at.js"
   },
   {
-    "quality": 0.8,
-    "successCount": 1,
-    "failureCount": 0,
     "name": "mine1oaklog",
     "description": "mine_1_oak_log",
     "keywords": [],
-    "file": "mine1oaklog.js"
+    "file": "mine1oaklog.js",
+    "quality": 0.8,
+    "successCount": 2,
+    "failureCount": 0
   },
   {
     "quality": 0.9,
@@ -707,15 +707,15 @@
     "file": "craft_a_stone_pickaxe.js"
   },
   {
-    "quality": 0.8,
-    "successCount": 1,
+    "quality": 0.9,
+    "successCount": 2,
     "failureCount": 0,
     "name": "mine_1_oak_log_at",
-    "description": "Mine 1 oak log at 847, 68, 199",
+    "description": "Mine 1 oak log at 798, 70, 227",
     "keywords": [
-      "wood",
-      "crafting",
-      "upgrade"
+      "mine",
+      "oak_log",
+      "wood"
     ],
     "file": "mine_1_oak_log_at.js"
   }

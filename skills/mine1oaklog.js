@@ -6,20 +6,19 @@ async function mineOneOakLog(bot) {
     return item ? item.count : 0;
   };
   const initialCount = getCount();
-  let oakLog = bot.findBlock({
+  const findTarget = () => bot.findBlock({
     matching: b => b.name === targetName,
     maxDistance: 32
   });
-  if (!oakLog) {
-    await exploreUntil('north', 60, () => bot.findBlock({
-      matching: b => b.name === targetName,
-      maxDistance: 32
-    }));
+  let target = findTarget();
+  if (!target) {
+    await exploreUntil('north', 60, () => findTarget());
   }
   await mineBlock(targetName, targetCount);
-  const finalCount = getCount();
-  if (finalCount <= initialCount) {
-    // Attempt one more time if inventory didn't increase
+
+  // Check if we actually got the log. If not, try again to handle potential item pick-up delays or failures.
+  const currentCount = getCount();
+  if (currentCount <= initialCount) {
     await mineBlock(targetName, targetCount);
   }
 }

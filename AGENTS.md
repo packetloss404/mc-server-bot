@@ -49,13 +49,27 @@ Guidance for coding agents working in `D:\projects\mc-server-bot`.
 - Lint a single file: `npm run lint --prefix web -- src/app/page.tsx`
 - Lint a folder: `npm run lint --prefix web -- src/components`
 
-### Tests
+### Testing
 
-- There is currently no committed backend or frontend test runner configuration.
-- No `test`, `test:unit`, `vitest`, `jest`, or Playwright script is defined in either `package.json`.
-- There are also no committed `*.test.*` or `*.spec.*` files in the repo.
-- Because of that, there is no supported single-test command today.
-- If you add tests, also add a package script and document a single-test invocation pattern in this file.
+Run all backend tests:
+```bash
+npm test
+```
+
+Run backend tests in watch mode:
+```bash
+npm run test:watch
+```
+
+Run a specific test file:
+```bash
+npx vitest run test/control/CommandCenter.test.ts
+```
+
+Run frontend tests:
+```bash
+cd web && npm test
+```
 
 ### Useful Runtime Checks
 

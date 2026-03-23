@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 import {
   MissionRecord,
@@ -39,11 +41,23 @@ export class MissionManager {
   private botMissionQueues: Map<string, string[]> = new Map(); // botName → ordered mission IDs
   private botManager: BotManager;
   private io: SocketIOServer;
+  private buildCoordinator?: BuildCoordinator;
+  private chainCoordinator?: ChainCoordinator;
 
   constructor(botManager: BotManager, io: SocketIOServer) {
     this.botManager = botManager;
     this.io = io;
     this.load();
+  }
+
+  // ── Coordinator adapters ────────────────────────────
+
+  setBuildCoordinator(bc: BuildCoordinator): void {
+    this.buildCoordinator = bc;
+  }
+
+  setChainCoordinator(cc: ChainCoordinator): void {
+    this.chainCoordinator = cc;
   }
 
   // ── ID generation ──────────────────────────────────
@@ -216,6 +230,88 @@ export class MissionManager {
     mission.completedAt = undefined;
     mission.blockedReason = undefined;
     return this.updateMissionStatus(id, 'queued');
+  }
+
+  // ── Mission execution ────────────────────────────────
+
+  async startMission(id: string): Promise<MissionRecord | undefined> {
+    const mission = this.missions.get(id);
+    if (!mission) return undefined;
+    if (mission.status !== 'queued' && mission.status !== 'paused') {
+      logger.warn({ missionId: id, status: mission.status }, 'Cannot start mission: invalid status');
+      return undefined;
+    }
+
+    switch (mission.type) {
+      case 'build_schematic':
+        return this.executeBuildMission(mission);
+      case 'supply_chain':
+        return this.executeChainMission(mission);
+      default:
+        // For other mission types, just transition to running
+        return this.updateMissionStatus(id, 'running');
+    }
+  }
+
+  private async executeBuildMission(mission: MissionRecord): Promise<MissionRecord | undefined> {
+    if (!this.buildCoordinator) {
+      logger.error({ missionId: mission.id }, 'Cannot execute build mission: BuildCoordinator not set');
+      return this.updateMissionStatus(mission.id, 'failed', { error: 'BuildCoordinator not available' });
+    }
+
+    // Extract build parameters from the first step's payload or from assigneeIds
+    const payload = mission.steps[0]?.payload ?? {};
+    const schematicFile = (payload.schematicFile as string) ?? '';
+    const origin = (payload.origin as { x: number; y: number; z: number }) ?? { x: 0, y: 0, z: 0 };
+    const botNames = (payload.botNames as string[]) ?? mission.assigneeIds;
+
+    if (!schematicFile) {
+      logger.error({ missionId: mission.id }, 'Build mission missing schematicFile in step payload');
+      return this.updateMissionStatus(mission.id, 'failed', { error: 'Missing schematicFile in step payload' });
+    }
+
+    try {
+      const job = await this.buildCoordinator.startBuild(schematicFile, origin, botNames);
+      // Link the build job ID to the mission
+      if (mission.steps[0]) {
+        mission.steps[0].payload.buildJobId = job.id;
+        mission.steps[0].status = 'running';
+      }
+      logger.info({ missionId: mission.id, buildJobId: job.id }, 'Build mission started');
+      return this.updateMissionStatus(mission.id, 'running');
+    } catch (err: any) {
+      logger.error({ missionId: mission.id, err: err.message }, 'Failed to start build mission');
+      return this.updateMissionStatus(mission.id, 'failed', { error: err.message });
+    }
+  }
+
+  private executeChainMission(mission: MissionRecord): MissionRecord | undefined {
+    if (!this.chainCoordinator) {
+      logger.error({ missionId: mission.id }, 'Cannot execute chain mission: ChainCoordinator not set');
+      return this.updateMissionStatus(mission.id, 'failed', { error: 'ChainCoordinator not available' });
+    }
+
+    // Extract chain ID from the first step's payload
+    const payload = mission.steps[0]?.payload ?? {};
+    const chainId = (payload.chainId as string) ?? '';
+
+    if (!chainId) {
+      logger.error({ missionId: mission.id }, 'Chain mission missing chainId in step payload');
+      return this.updateMissionStatus(mission.id, 'failed', { error: 'Missing chainId in step payload' });
+    }
+
+    const started = this.chainCoordinator.startChain(chainId);
+    if (!started) {
+      logger.error({ missionId: mission.id, chainId }, 'Failed to start supply chain');
+      return this.updateMissionStatus(mission.id, 'failed', { error: `Failed to start chain ${chainId}` });
+    }
+
+    if (mission.steps[0]) {
+      mission.steps[0].payload.chainId = chainId;
+      mission.steps[0].status = 'running';
+    }
+    logger.info({ missionId: mission.id, chainId }, 'Supply chain mission started');
+    return this.updateMissionStatus(mission.id, 'running');
   }
 
   // ── Bot mission queue management ───────────────────

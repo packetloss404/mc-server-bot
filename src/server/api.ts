@@ -12,6 +12,8 @@ import { MissionManager } from '../control/MissionManager';
 import { MarkerStore } from '../control/MarkerStore';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -21,6 +23,8 @@ export interface APIServerResult {
   eventLog: EventLog;
   commandCenter: CommandCenter;
   missionManager: MissionManager;
+  buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
   markerStore: MarkerStore;
   squadManager: SquadManager;
   roleManager: RoleManager;
@@ -566,6 +570,24 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // ═══════════════════════════════════════
 
   const missionManager = new MissionManager(botManager, io);
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
+  missionManager.setBuildCoordinator(buildCoordinator);
+  missionManager.setChainCoordinator(chainCoordinator);
+
+  // Start mission (transitions queued → running and triggers executor)
+  app.post('/api/missions/:id/start', async (req: Request, res: Response) => {
+    try {
+      const mission = await missionManager.startMission(req.params.id as string);
+      if (!mission) {
+        res.status(404).json({ error: 'Mission not found or cannot be started' });
+        return;
+      }
+      res.json({ mission });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // Create mission
   app.post('/api/missions', (req: Request, res: Response) => {
@@ -836,5 +858,5 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog, commandCenter, missionManager, markerStore, squadManager, roleManager };
+  return { app, httpServer, io, eventLog, commandCenter, missionManager, buildCoordinator, chainCoordinator, markerStore, squadManager, roleManager };
 }

@@ -4,14 +4,17 @@ import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { api, type BotDetailed, type ChatMessage } from '@/lib/api';
+import { api, type BotDetailed, type ChatMessage, type RoleAssignmentRecord, type OverrideRecord } from '@/lib/api';
 import { getPersonalityColor, getAffinityTier, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 import { formatItemName, getItemCategoryColorByName } from '@/lib/items';
+import { ROLE_COLORS, ROLE_ICONS } from '@/components/RoleAssignmentPanel';
 import { EquipmentDisplay } from '@/components/EquipmentDisplay';
 import { BotActivityPanel } from '@/components/BotActivityPanel';
 import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
+import { MissionQueuePanel } from '@/components/MissionQueuePanel';
+import { CommandHistoryPanel } from '@/components/CommandHistoryPanel';
 
 export default function BotProfilePage() {
   const params = useParams();
@@ -27,12 +30,19 @@ export default function BotProfilePage() {
   const [chatPlayer, setChatPlayer] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
+  const [roleAssignment, setRoleAssignment] = useState<RoleAssignmentRecord | null>(null);
+  const [override, setOverride] = useState<OverrideRecord | null>(null);
 
   useEffect(() => {
     const load = () => {
       api.getBotDetailed(name).then((data) => { setBot(data.bot); setError(null); }).catch((e) => setError(e.message));
       api.getBotRelationships(name).then((data) => setRelationships(data.relationships)).catch(() => {});
       api.getBotConversations(name).then((data) => setConversations(data.conversations)).catch(() => {});
+      api.getRoleAssignments().then((data) => {
+        const match = data.assignments.find((a) => a.botName === name);
+        setRoleAssignment(match || null);
+      }).catch(() => {});
+      api.getBotOverride(name).then((data) => setOverride(data.override)).catch(() => {});
     };
     load();
     const interval = setInterval(load, 5000);
@@ -106,6 +116,41 @@ export default function BotProfilePage() {
                 <h1 className="text-2xl font-bold text-white">{bot.name}</h1>
               </div>
               <p className="text-sm mt-1" style={{ color: accentColor }}>{bot.personalityDisplayName}</p>
+              {roleAssignment && (() => {
+                const roleColor = ROLE_COLORS[roleAssignment.role] || '#6B7280';
+                return (
+                  <div className="flex items-center gap-2 mt-2">
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[11px] font-medium capitalize"
+                      style={{ color: roleColor, backgroundColor: `${roleColor}12`, border: `1px solid ${roleColor}25` }}
+                    >
+                      <span>{ROLE_ICONS[roleAssignment.role] || ''}</span>
+                      {roleAssignment.role.replace('-', ' ')}
+                    </span>
+                    <span className={`text-[10px] font-medium px-2 py-0.5 rounded capitalize ${
+                      roleAssignment.autonomyLevel === 'autonomous' ? 'text-emerald-400 bg-emerald-500/10' :
+                      roleAssignment.autonomyLevel === 'assisted' ? 'text-amber-400 bg-amber-500/10' :
+                      'text-zinc-400 bg-zinc-700/30'
+                    }`}>
+                      {roleAssignment.autonomyLevel}
+                    </span>
+                    {override && (
+                      <span
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium text-orange-400 bg-orange-500/10 border border-orange-500/25 cursor-pointer hover:bg-orange-500/20 transition-colors"
+                        title={`Override active since ${new Date(override.at).toLocaleTimeString()} — ${override.reason}. Click to clear.`}
+                        onClick={() => { api.clearBotOverride(name).then(() => setOverride(null)).catch(() => {}); }}
+                      >
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                          <line x1="12" y1="9" x2="12" y2="13" />
+                          <line x1="12" y1="17" x2="12.01" y2="17" />
+                        </svg>
+                        Override Active
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
               <div className="flex items-center gap-3 mt-2 flex-wrap">
                 <InfoPill label="Mode" value={bot.mode} color={bot.mode === 'codegen' ? '#10B981' : '#F59E0B'} />
                 {bot.position && <InfoPill label="Pos" value={`${Math.round(bot.position.x)}, ${Math.round(bot.position.y)}, ${Math.round(bot.position.z)}`} mono />}
@@ -248,6 +293,48 @@ export default function BotProfilePage() {
               </>
             )}
           </Section>
+
+          {/* Mission Queue */}
+          <MissionQueuePanel botName={bot.name} />
+
+          {/* Command History */}
+          <CommandHistoryPanel botName={bot.name} />
+
+          {/* Diagnostics */}
+          {bot.voyager && (
+            <Section title="Diagnostics">
+              <div className="space-y-2">
+                <DiagRow
+                  label="Internal State"
+                  value={bot.voyager.internalState || 'idle'}
+                  color={bot.voyager.internalState === 'error' ? '#EF4444' : bot.voyager.internalState === 'executing' ? '#3B82F6' : '#6B7280'}
+                />
+                <DiagRow
+                  label="Running"
+                  value={bot.voyager.isRunning ? 'Yes' : 'No'}
+                  color={bot.voyager.isRunning ? '#10B981' : '#6B7280'}
+                />
+                <DiagRow
+                  label="Paused"
+                  value={bot.voyager.isPaused ? 'Yes' : 'No'}
+                  color={bot.voyager.isPaused ? '#F59E0B' : '#6B7280'}
+                />
+                <DiagRow
+                  label="Queued Tasks"
+                  value={String(bot.voyager.queuedTaskCount ?? 0)}
+                  color="#8B5CF6"
+                />
+                {bot.voyager.failedTasks.length > 0 && (
+                  <DiagRow
+                    label="Last Failure"
+                    value={bot.voyager.failedTasks[bot.voyager.failedTasks.length - 1]}
+                    color="#EF4444"
+                    truncate
+                  />
+                )}
+              </div>
+            </Section>
+          )}
 
           {/* Inventory */}
           <Section title={`Inventory (${bot.inventory.length})`}>
@@ -410,6 +497,21 @@ function VitalBar({ label, value, max, color, icon }: { label: string; value: nu
         <motion.div className="h-full rounded-full" style={{ backgroundColor: color }} initial={{ width: 0 }} animate={{ width: `${pct}%` }} transition={{ duration: 0.6 }} />
       </div>
       <span className="text-[11px] text-zinc-400 w-10 text-right tabular-nums font-medium">{value}/{max}</span>
+    </div>
+  );
+}
+
+function DiagRow({ label, value, color, truncate: truncateText }: { label: string; value: string; color: string; truncate?: boolean }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span className="text-[10px] text-zinc-600 uppercase tracking-wider shrink-0">{label}</span>
+      <span
+        className={`text-[11px] font-medium text-right ${truncateText ? 'truncate max-w-[200px]' : ''}`}
+        style={{ color }}
+        title={truncateText ? value : undefined}
+      >
+        {value}
+      </span>
     </div>
   );
 }

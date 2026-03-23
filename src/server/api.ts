@@ -6,6 +6,15 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
+import { CommandCenter } from '../control/CommandCenter';
+import { CommandType } from '../control/CommandTypes';
+import { MissionManager } from '../control/MissionManager';
+import { MarkerStore } from '../control/MarkerStore';
+import { SquadManager } from '../control/SquadManager';
+import { RoleManager } from '../control/RoleManager';
+import { CommanderService } from '../control/CommanderService';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +22,14 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  commandCenter: CommandCenter;
+  missionManager: MissionManager;
+  buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
+  markerStore: MarkerStore;
+  squadManager: SquadManager;
+  roleManager: RoleManager;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -57,6 +74,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
   });
+
+  // Command center — dispatch service for bot commands
+  const commandCenter = new CommandCenter(botManager, io);
 
   // ═══════════════════════════════════════
   //  EXISTING ENDPOINTS (unchanged logic)
@@ -402,5 +422,498 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - COMMAND ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Create and dispatch a command
+  app.post('/api/commands', async (req: Request, res: Response) => {
+    const { type, scope, priority, source, targets, params } = req.body;
+
+    if (!type || !targets || !Array.isArray(targets) || targets.length === 0) {
+      res.status(400).json({ error: 'type and targets[] are required' });
+      return;
+    }
+
+    try {
+      const command = commandCenter.createCommand({
+        type: type as CommandType,
+        scope: scope ?? 'single',
+        priority: priority ?? 'normal',
+        source: source ?? 'dashboard',
+        targets,
+        params: params ?? {},
+      });
+      const result = await commandCenter.dispatchCommand(command);
+      const statusCode = result.status === 'succeeded' ? 200 : result.status === 'failed' ? 422 : 200;
+      res.status(statusCode).json({ command: result });
+    } catch (err: any) {
+      res.status(500).json({ error: err?.message ?? 'Internal error' });
+    }
+  });
+
+  // List commands with optional filters
+  app.get('/api/commands', (req: Request, res: Response) => {
+    const bot = req.query.bot ? String(req.query.bot) : undefined;
+    const status = req.query.status ? String(req.query.status) as any : undefined;
+    const limit = req.query.limit ? parseInt(String(req.query.limit)) : undefined;
+    const commands = commandCenter.getCommands({ bot, status, limit });
+    res.json({ commands });
+  });
+
+  // Get single command
+  app.get('/api/commands/:id', (req: Request, res: Response) => {
+    const command = commandCenter.getCommand(req.params.id as string);
+    if (!command) {
+      res.status(404).json({ error: 'Command not found' });
+      return;
+    }
+    res.json({ command });
+  });
+
+  // Cancel a command
+  app.post('/api/commands/:id/cancel', (req: Request, res: Response) => {
+    const command = commandCenter.cancelCommand(req.params.id as string);
+    if (!command) {
+      res.status(404).json({ error: 'Command not found' });
+      return;
+    }
+    res.json({ command });
+  });
+
+  // ═══════════════════════════════════════
+  //  BOT ACTION SHORTCUTS (via CommandCenter)
+  // ═══════════════════════════════════════
+
+  // Pause voyager
+  app.post('/api/bots/:name/pause', async (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const command = commandCenter.createCommand({
+      type: 'pause_voyager', targets: [name], source: 'dashboard',
+    });
+    await commandCenter.dispatchCommand(command);
+    if (command.status === 'failed') {
+      res.status(422).json({ success: false, error: command.error?.message });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Resume voyager
+  app.post('/api/bots/:name/resume', async (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const command = commandCenter.createCommand({
+      type: 'resume_voyager', targets: [name], source: 'dashboard',
+    });
+    await commandCenter.dispatchCommand(command);
+    if (command.status === 'failed') {
+      res.status(422).json({ success: false, error: command.error?.message });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Stop movement
+  app.post('/api/bots/:name/stop', async (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const command = commandCenter.createCommand({
+      type: 'stop_movement', targets: [name], source: 'dashboard',
+    });
+    await commandCenter.dispatchCommand(command);
+    if (command.status === 'failed') {
+      res.status(422).json({ success: false, error: command.error?.message });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Follow player
+  app.post('/api/bots/:name/follow', async (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const { playerName } = req.body;
+    if (!playerName) {
+      res.status(400).json({ error: 'playerName is required' });
+      return;
+    }
+    const command = commandCenter.createCommand({
+      type: 'follow_player', targets: [name], source: 'dashboard',
+      params: { playerName },
+    });
+    await commandCenter.dispatchCommand(command);
+    if (command.status === 'failed') {
+      res.status(422).json({ success: false, error: command.error?.message });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Walk to coordinates
+  app.post('/api/bots/:name/walkto', async (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const { x, y, z } = req.body;
+    if (x == null || y == null || z == null) {
+      res.status(400).json({ error: 'x, y, z are required' });
+      return;
+    }
+    const command = commandCenter.createCommand({
+      type: 'walk_to_coords', targets: [name], source: 'dashboard',
+      params: { x, y, z },
+    });
+    await commandCenter.dispatchCommand(command);
+    if (command.status === 'failed') {
+      res.status(422).json({ success: false, error: command.error?.message });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - MISSION ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const missionManager = new MissionManager(botManager, io);
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
+  missionManager.setBuildCoordinator(buildCoordinator);
+  missionManager.setChainCoordinator(chainCoordinator);
+
+  // Start mission (transitions queued → running and triggers executor)
+  app.post('/api/missions/:id/start', async (req: Request, res: Response) => {
+    try {
+      const mission = await missionManager.startMission(req.params.id as string);
+      if (!mission) {
+        res.status(404).json({ error: 'Mission not found or cannot be started' });
+        return;
+      }
+      res.json({ mission });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Create mission
+  app.post('/api/missions', (req: Request, res: Response) => {
+    const { type, title, description, assigneeType, assigneeIds, priority, source, steps, linkedCommandIds } = req.body;
+    if (!type || !title || !assigneeType || !assigneeIds?.length) {
+      res.status(400).json({ error: 'type, title, assigneeType, and assigneeIds are required' });
+      return;
+    }
+    const mission = missionManager.createMission({
+      type, title, description, assigneeType, assigneeIds, priority, source, steps, linkedCommandIds,
+    });
+    res.status(201).json({ mission });
+  });
+
+  // List missions
+  app.get('/api/missions', (req: Request, res: Response) => {
+    const filters = {
+      bot: req.query.bot ? String(req.query.bot) : undefined,
+      squad: req.query.squad ? String(req.query.squad) : undefined,
+      status: req.query.status ? String(req.query.status) as any : undefined,
+      limit: req.query.limit ? parseInt(String(req.query.limit)) : undefined,
+    };
+    const missions = missionManager.getMissions(filters);
+    res.json({ missions });
+  });
+
+  // Get single mission
+  app.get('/api/missions/:id', (req: Request, res: Response) => {
+    const mission = missionManager.getMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Pause mission
+  app.post('/api/missions/:id/pause', (req: Request, res: Response) => {
+    const mission = missionManager.pauseMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be paused' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Resume mission
+  app.post('/api/missions/:id/resume', (req: Request, res: Response) => {
+    const mission = missionManager.resumeMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be resumed' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Cancel mission
+  app.post('/api/missions/:id/cancel', (req: Request, res: Response) => {
+    const mission = missionManager.cancelMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be cancelled' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Retry mission
+  app.post('/api/missions/:id/retry', (req: Request, res: Response) => {
+    const mission = missionManager.retryMission(req.params.id as string);
+    if (!mission) {
+      res.status(404).json({ error: 'Mission not found or cannot be retried' });
+      return;
+    }
+    res.json({ mission });
+  });
+
+  // Get bot's combined mission queue (MissionManager + VoyagerLoop)
+  app.get('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const bot = botManager.getBot(name);
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const missions = missionManager.getBotMissionQueue(name);
+    const voyager = bot.getVoyagerLoop();
+    const voyagerTasks = voyager ? voyager.getQueuedTasksDetailed() : [];
+    res.json({ missions, voyagerTasks });
+  });
+
+  // Reorder/remove from bot's VoyagerLoop queue
+  app.patch('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const bot = botManager.getBot(name);
+    if (!bot) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const voyager = bot.getVoyagerLoop();
+    if (!voyager) {
+      res.status(400).json({ error: 'Bot is not in codegen mode' });
+      return;
+    }
+    const { action, index, fromIndex, toIndex } = req.body;
+    let success = false;
+    switch (action) {
+      case 'remove':
+        success = typeof index === 'number' ? voyager.removeQueuedTask(index) : false;
+        break;
+      case 'reorder':
+        success = typeof fromIndex === 'number' && typeof toIndex === 'number'
+          ? voyager.reorderQueue(fromIndex, toIndex)
+          : false;
+        break;
+      case 'clear':
+        voyager.clearQueue();
+        success = true;
+        break;
+      default:
+        res.status(400).json({ error: 'action must be remove, reorder, or clear' });
+        return;
+    }
+    res.json({ success });
+  });
+
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - WORLD PLANNING
+  // ═══════════════════════════════════════
+
+  const markerStore = new MarkerStore(io);
+
+  app.get('/api/markers', (_req: Request, res: Response) => {
+    res.json({ markers: markerStore.getMarkers() });
+  });
+  app.post('/api/markers', (req: Request, res: Response) => {
+    const { name, kind, position } = req.body;
+    if (!name || !kind || !position) { res.status(400).json({ error: 'name, kind, and position are required' }); return; }
+    const marker = markerStore.createMarker({ name, kind, position, tags: req.body.tags, notes: req.body.notes });
+    res.status(201).json({ marker });
+  });
+  app.patch('/api/markers/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateMarker(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ marker: updated });
+  });
+  app.delete('/api/markers/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteMarker(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.get('/api/zones', (_req: Request, res: Response) => {
+    res.json({ zones: markerStore.getZones() });
+  });
+  app.post('/api/zones', (req: Request, res: Response) => {
+    const { name, mode, shape } = req.body;
+    if (!name || !mode || !shape) { res.status(400).json({ error: 'name, mode, and shape are required' }); return; }
+    const zone = markerStore.createZone(req.body);
+    res.status(201).json({ zone });
+  });
+  app.patch('/api/zones/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateZone(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ zone: updated });
+  });
+  app.delete('/api/zones/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteZone(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.get('/api/routes', (_req: Request, res: Response) => {
+    res.json({ routes: markerStore.getRoutes() });
+  });
+  app.post('/api/routes', (req: Request, res: Response) => {
+    const { name, waypointIds, loop } = req.body;
+    if (!name || !Array.isArray(waypointIds)) { res.status(400).json({ error: 'name and waypointIds are required' }); return; }
+    const route = markerStore.createRoute({ name, waypointIds, loop: loop ?? false });
+    res.status(201).json({ route });
+  });
+  app.patch('/api/routes/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateRoute(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ route: updated });
+  });
+  app.delete('/api/routes/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteRoute(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - SQUAD ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const squadManager = new SquadManager(io);
+
+  app.get('/api/squads', (_req: Request, res: Response) => {
+    res.json({ squads: squadManager.getSquads() });
+  });
+  app.post('/api/squads', (req: Request, res: Response) => {
+    const { name, botNames, defaultRole, homeMarkerId } = req.body;
+    if (!name) { res.status(400).json({ error: 'name is required' }); return; }
+    const squad = squadManager.createSquad({ name, botNames: botNames ?? [], defaultRole, homeMarkerId });
+    res.status(201).json({ squad });
+  });
+  app.get('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.getSquad(req.params.id as string);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ squad });
+  });
+  app.patch('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.updateSquad(req.params.id as string, req.body);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ squad });
+  });
+  app.delete('/api/squads/:id', (req: Request, res: Response) => {
+    const deleted = squadManager.deleteSquad(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ success: true });
+  });
+  app.post('/api/squads/:id/members', (req: Request, res: Response) => {
+    const { botName } = req.body;
+    if (!botName) { res.status(400).json({ error: 'botName is required' }); return; }
+    const added = squadManager.addBotToSquad(req.params.id as string, botName);
+    if (!added) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ success: true });
+  });
+  app.delete('/api/squads/:id/members/:botName', (req: Request, res: Response) => {
+    const removed = squadManager.removeBotFromSquad(req.params.id as string, req.params.botName as string);
+    if (!removed) { res.status(404).json({ error: 'Squad not found or bot not a member' }); return; }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - ROLE ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const roleManager = new RoleManager(io);
+  commandCenter.setRoleManager(roleManager);
+
+  // Periodic override expiry check (every 60 seconds)
+  setInterval(() => roleManager.checkOverrideTimeouts(), 60_000);
+
+  app.get('/api/roles', (_req: Request, res: Response) => {
+    res.json({ assignments: roleManager.getAssignments(), overrides: roleManager.getOverrides() });
+  });
+  app.post('/api/roles/assignments', (req: Request, res: Response) => {
+    const { botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes } = req.body;
+    if (!botName || !role || !autonomyLevel) { res.status(400).json({ error: 'botName, role, and autonomyLevel are required' }); return; }
+    if (!botManager.getBot(botName)) { res.status(404).json({ error: `Bot "${botName}" not found` }); return; }
+    try {
+      const assignment = roleManager.createAssignment({ botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes });
+      res.status(201).json({ assignment });
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+  app.get('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const assignment = roleManager.getAssignment(req.params.id as string);
+    if (!assignment) { res.status(404).json({ error: 'Assignment not found' }); return; }
+    res.json({ assignment });
+  });
+  app.patch('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    try {
+      const updated = roleManager.updateAssignment(req.params.id as string, req.body);
+      if (!updated) { res.status(404).json({ error: 'Assignment not found' }); return; }
+      res.json({ assignment: updated });
+    } catch (err: any) { res.status(400).json({ error: err.message }); }
+  });
+  app.delete('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const deleted = roleManager.deleteAssignment(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Assignment not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // Override status for a specific bot
+  app.get('/api/bots/:name/override', (req: Request, res: Response) => {
+    const botName = req.params.name as string;
+    const override = roleManager.getOverride(botName);
+    res.json({ override });
+  });
+
+  // Clear override for a specific bot
+  app.delete('/api/bots/:name/override', (req: Request, res: Response) => {
+    const botName = req.params.name as string;
+    roleManager.clearOverride(botName);
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - COMMANDER ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const commanderService = new CommanderService({
+    llmClient: botManager.getLLMClient?.() ?? null,
+    botManager, commandCenter, missionManager, markerStore,
+  });
+
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    const { input } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' }); return;
+    }
+    try {
+      const plan = await commanderService.parse(input.trim());
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander parse failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    const { planId } = req.body;
+    if (!planId) { res.status(400).json({ error: 'planId is required' }); return; }
+    const plan = commanderService.getPlan(planId);
+    if (!plan) { res.status(404).json({ error: 'Plan not found' }); return; }
+    try {
+      const result = await commanderService.execute(planId);
+      res.json(result);
+    } catch (err: any) {
+      logger.error({ err }, 'Commander execute failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  return { app, httpServer, io, eventLog, commandCenter, missionManager, buildCoordinator, chainCoordinator, markerStore, squadManager, roleManager, commanderService };
 }

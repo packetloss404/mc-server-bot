@@ -133,6 +133,35 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Commander types
+export interface CommanderCommand {
+  type: string;
+  targets: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface CommanderMission {
+  type: string;
+  title: string;
+  assignees: string[];
+}
+
+export interface CommanderPlan {
+  planId: string;
+  intent: string;
+  confidence: number;
+  warnings: string[];
+  commands: CommanderCommand[];
+  missions: CommanderMission[];
+  requiresConfirmation: boolean;
+}
+
+export interface CommanderResult {
+  planId: string;
+  commandResults: { command: CommanderCommand; success: boolean; error?: string }[];
+  missionsCreated: { title: string; assignees: string[] }[];
+}
+
 // API functions
 export const api = {
   // Bots
@@ -203,5 +232,17 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
+    }),
+
+  // Commander
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ result: CommanderResult }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
     }),
 };

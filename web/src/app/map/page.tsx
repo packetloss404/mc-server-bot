@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
+<<<<<<< HEAD
 import { STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
 import { MapToolbar } from '@/components/map/MapToolbar';
@@ -19,10 +20,66 @@ import {
   type MapMode,
   type ShowState,
 } from '@/components/map/mapDrawing';
+=======
+import type { MarkerRecord, MarkerKind, ZoneRecord, RouteRecord } from '@/lib/api';
+import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
+import { getBlockColor } from '@/lib/blockColors';
+import MapContextMenu, { type ContextTarget } from '@/components/map/MapContextMenu';
+import MarkerEditor from '@/components/map/MarkerEditor';
+
+const MIN_SCALE = 0.5;
+const MAX_SCALE = 10;
+const TRAIL_LENGTH = 80;
+const TERRAIN_RADIUS = 96;
+const TERRAIN_STEP = 2;
+const ZOOM_SENSITIVITY = 0.002; // Normalized zoom speed
+
+// Marker kind colors
+const MARKER_KIND_COLORS: Record<string, string> = {
+  base: '#22C55E',
+  storage: '#EAB308',
+  mine: '#9CA3AF',
+  village: '#F97316',
+  'build-site': '#3B82F6',
+  custom: '#E5E7EB',
+};
+
+// Zone mode colors
+const ZONE_MODE_COLORS: Record<string, string> = {
+  guard: '#EF4444',
+  avoid: '#F97316',
+  farm: '#22C55E',
+  build: '#3B82F6',
+  gather: '#A855F7',
+  custom: '#6B7280',
+};
+
+interface MapEntity {
+  name: string;
+  x: number;
+  z: number;
+  color: string;
+  type: 'bot' | 'player';
+  state?: string;
+  personality?: string;
+}
+>>>>>>> worktree-agent-ab88f285
 
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
+  const markers = useBotStore((s) => s.markers);
+  const zones = useBotStore((s) => s.zones);
+  const routes = useBotStore((s) => s.routes);
+  const mapDrawingMode = useBotStore((s) => s.mapDrawingMode);
+  const setMarkers = useBotStore((s) => s.setMarkers);
+  const addMarker = useBotStore((s) => s.addMarker);
+  const removeMarker = useBotStore((s) => s.removeMarker);
+  const updateMarkerInStore = useBotStore((s) => s.updateMarker);
+  const setZones = useBotStore((s) => s.setZones);
+  const setRoutes = useBotStore((s) => s.setRoutes);
+  const setMapDrawingMode = useBotStore((s) => s.setMapDrawingMode);
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -33,11 +90,19 @@ export default function MapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
+<<<<<<< HEAD
   const showRef = useRef<ShowState>({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
+=======
+  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true, markers: true, zones: true, routes: true });
+>>>>>>> worktree-agent-ab88f285
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
+  const markersRef = useRef(markers);
+  const zonesRef = useRef(zones);
+  const routesRef = useRef(routes);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
   const entityPositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
+  const markerPositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
   const terrainCanvas = useRef<OffscreenCanvas | null>(null);
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
@@ -52,6 +117,7 @@ export default function MapPage() {
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
+<<<<<<< HEAD
   // Keep refs in sync with zustand — inside useEffect, not during render
   useEffect(() => {
     botsRef.current = bots;
@@ -62,6 +128,31 @@ export default function MapPage() {
   useEffect(() => {
     mapModeRef.current = mapMode;
   }, [mapMode]);
+=======
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ target: ContextTarget; screenX: number; screenY: number } | null>(null);
+
+  // Marker editor state
+  const [markerEditor, setMarkerEditor] = useState<{
+    marker?: MarkerRecord;
+    defaultX?: number;
+    defaultZ?: number;
+  } | null>(null);
+
+  // Keep refs in sync with zustand
+  botsRef.current = bots;
+  playersRef.current = players;
+  markersRef.current = markers;
+  zonesRef.current = zones;
+  routesRef.current = routes;
+
+  // Load markers, zones, routes on mount
+  useEffect(() => {
+    api.getMarkers().then((r) => setMarkers(r.markers)).catch(() => {});
+    api.getZones().then((r) => setZones(r.zones)).catch(() => {});
+    api.getRoutes().then((r) => setRoutes(r.routes)).catch(() => {});
+  }, [setMarkers, setZones, setRoutes]);
+>>>>>>> worktree-agent-ab88f285
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -123,6 +214,20 @@ export default function MapPage() {
     }
   }, [bots, players, loadTerrain]);
 
+  // Helper: screen coords to world coords
+  const screenToWorld = useCallback((screenX: number, screenY: number) => {
+    const container = containerRef.current;
+    if (!container) return { x: 0, z: 0 };
+    const rect = container.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const mx = screenX - rect.left;
+    const my = screenY - rect.top;
+    const worldX = (mx - cx - offsetRef.current.x) / scaleRef.current;
+    const worldZ = (my - cy - offsetRef.current.y) / scaleRef.current;
+    return { x: worldX, z: worldZ };
+  }, []);
+
   // Single stable draw loop — never restarts
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -155,8 +260,16 @@ export default function MapPage() {
       const offset = offsetRef.current;
       const scale = scaleRef.current;
       const show = showRef.current;
+<<<<<<< HEAD
       const currentBots = botsRef.current;
       const currentPlayers = playersRef.current;
+=======
+      const curBots = botsRef.current;
+      const curPlayers = playersRef.current;
+      const curMarkers = markersRef.current;
+      const curZones = zonesRef.current;
+      const curRoutes = routesRef.current;
+>>>>>>> worktree-agent-ab88f285
       const hovered = hoveredRef.current;
       const selected = selectedRef.current;
 
@@ -222,10 +335,119 @@ export default function MapPage() {
         }
       }
 
+      // --- Draw zones ---
+      if (show.zones) {
+        for (const zone of curZones) {
+          const zoneColor = zone.color || ZONE_MODE_COLORS[zone.mode] || '#6B7280';
+          const zsx = cx + zone.cx * scale + offset.x;
+          const zsy = cy + zone.cz * scale + offset.y;
+
+          if (zone.shape === 'circle' && zone.radius) {
+            const sr = zone.radius * scale;
+            ctx.beginPath();
+            ctx.arc(zsx, zsy, sr, 0, Math.PI * 2);
+            ctx.fillStyle = zoneColor + '18';
+            ctx.fill();
+            ctx.strokeStyle = zoneColor + '60';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 4]);
+            ctx.stroke();
+            ctx.setLineDash([]);
+          } else if (zone.shape === 'rectangle' && zone.width && zone.height) {
+            const sw = zone.width * scale;
+            const sh = zone.height * scale;
+            ctx.fillStyle = zoneColor + '18';
+            ctx.fillRect(zsx - sw / 2, zsy - sh / 2, sw, sh);
+            ctx.strokeStyle = zoneColor + '60';
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(zsx - sw / 2, zsy - sh / 2, sw, sh);
+            ctx.setLineDash([]);
+          }
+
+          // Zone label
+          ctx.save();
+          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
+          ctx.fillStyle = zoneColor + 'B0';
+          ctx.font = '10px system-ui, sans-serif';
+          ctx.textAlign = 'center';
+          ctx.fillText(zone.name, zsx, zsy + 4);
+          ctx.restore();
+        }
+      }
+
+      // --- Draw routes ---
+      if (show.routes) {
+        const markerById = new Map(curMarkers.map((m) => [m.id, m]));
+        for (const route of curRoutes) {
+          const waypoints = route.markerIds
+            .map((id) => markerById.get(id))
+            .filter((m): m is MarkerRecord => !!m);
+
+          if (waypoints.length < 2) continue;
+
+          ctx.save();
+          ctx.setLineDash([8, 6]);
+          ctx.strokeStyle = '#A78BFA90';
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+
+          for (let i = 0; i < waypoints.length; i++) {
+            const sx = cx + waypoints[i].x * scale + offset.x;
+            const sy = cx + waypoints[i].z * scale + offset.y;
+            if (i === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+          ctx.setLineDash([]);
+
+          // Draw arrows along route segments
+          for (let i = 0; i < waypoints.length - 1; i++) {
+            const ax = cx + waypoints[i].x * scale + offset.x;
+            const ay = cy + waypoints[i].z * scale + offset.y;
+            const bx = cx + waypoints[i + 1].x * scale + offset.x;
+            const by = cy + waypoints[i + 1].z * scale + offset.y;
+            const midX = (ax + bx) / 2;
+            const midY = (ay + by) / 2;
+            const angle = Math.atan2(by - ay, bx - ax);
+            const arrowSize = 6;
+
+            ctx.beginPath();
+            ctx.moveTo(midX + Math.cos(angle) * arrowSize, midY + Math.sin(angle) * arrowSize);
+            ctx.lineTo(midX + Math.cos(angle + 2.5) * arrowSize, midY + Math.sin(angle + 2.5) * arrowSize);
+            ctx.lineTo(midX + Math.cos(angle - 2.5) * arrowSize, midY + Math.sin(angle - 2.5) * arrowSize);
+            ctx.closePath();
+            ctx.fillStyle = '#A78BFAB0';
+            ctx.fill();
+          }
+
+          ctx.restore();
+        }
+      }
+
       // Collect entities
+<<<<<<< HEAD
       const entities = collectEntities(currentBots, currentPlayers, show.bots, show.players);
+=======
+      const entities: MapEntity[] = [];
+      const drawnNames = new Set<string>();
+      if (show.bots) {
+        for (const bot of curBots) {
+          if (!bot.position) continue;
+          drawnNames.add(bot.name.toLowerCase());
+          entities.push({ name: bot.name, x: bot.position.x, z: bot.position.z, color: getPersonalityColor(bot.personality), type: 'bot', state: bot.state, personality: bot.personality });
+        }
+      }
+      if (show.players) {
+        for (const player of curPlayers) {
+          if (!player.isOnline || !player.position || drawnNames.has(player.name.toLowerCase())) continue;
+          entities.push({ name: player.name, x: player.position.x, z: player.position.z, color: PLAYER_COLOR, type: 'player' });
+        }
+      }
+>>>>>>> worktree-agent-ab88f285
 
       entityPositions.current.clear();
+      markerPositions.current.clear();
 
       // Trails
       if (show.trails) {
@@ -292,6 +514,52 @@ export default function MapPage() {
         }
       }
 
+      // --- Draw markers (diamond/pin shapes) ---
+      if (show.markers) {
+        for (const marker of curMarkers) {
+          const sx = cx + marker.x * scale + offset.x;
+          const sy = cy + marker.z * scale + offset.y;
+          if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
+
+          const color = MARKER_KIND_COLORS[marker.kind] || '#E5E7EB';
+          const isHov = hovered === `marker:${marker.id}`;
+          const size = isHov ? 8 : 6;
+
+          markerPositions.current.set(marker.id, { sx, sy, radius: size + 4 });
+
+          // Draw diamond shape
+          ctx.save();
+          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
+          ctx.beginPath();
+          ctx.moveTo(sx, sy - size);
+          ctx.lineTo(sx + size * 0.7, sy);
+          ctx.lineTo(sx, sy + size);
+          ctx.lineTo(sx - size * 0.7, sy);
+          ctx.closePath();
+          ctx.fillStyle = color;
+          ctx.fill();
+          ctx.strokeStyle = '#ffffffb0';
+          ctx.lineWidth = 1.5;
+          ctx.stroke();
+          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
+          ctx.restore();
+
+          // Label (always show name, show details on hover)
+          ctx.save();
+          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
+          ctx.fillStyle = color;
+          ctx.font = `${isHov ? 'bold ' : ''}10px system-ui, sans-serif`;
+          ctx.textAlign = 'center';
+          ctx.fillText(marker.name, sx, sy - size - 5);
+          if (isHov) {
+            ctx.fillStyle = '#ffffff70';
+            ctx.font = '9px monospace';
+            ctx.fillText(`${Math.round(marker.x)}, ${Math.round(marker.z)}`, sx, sy + size + 12);
+          }
+          ctx.restore();
+        }
+      }
+
       // HUD overlays
       if (show.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
@@ -309,14 +577,39 @@ export default function MapPage() {
     return () => cancelAnimationFrame(animFrame);
   }, []); // Empty deps — loop runs forever, reads from refs
 
+  // Find what's under a given screen position
+  const hitTest = useCallback((mx: number, my: number): { type: 'entity'; name: string } | { type: 'marker'; id: string } | null => {
+    // Check entities first
+    for (const [name, pos] of entityPositions.current) {
+      const dx = mx - pos.sx;
+      const dy = my - pos.sy;
+      if (dx * dx + dy * dy < pos.radius * pos.radius) {
+        return { type: 'entity', name };
+      }
+    }
+    // Check markers
+    for (const [id, pos] of markerPositions.current) {
+      const dx = mx - pos.sx;
+      const dy = my - pos.sy;
+      if (dx * dx + dy * dy < pos.radius * pos.radius) {
+        return { type: 'marker', id };
+      }
+    }
+    return null;
+  }, []);
+
   // Input handlers — all mutate refs directly, no state updates during drag/hover
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (e.button === 2) return; // handled by context menu
+    setContextMenu(null); // close context menu on left click
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
+<<<<<<< HEAD
     // In navigate or select mode, clicking an entity selects it
     const mode = mapModeRef.current;
     if (mode === 'navigate' || mode === 'select') {
@@ -328,7 +621,23 @@ export default function MapPage() {
           kick();
           return;
         }
+=======
+    // Check if clicking in add-marker mode
+    if (mapDrawingMode === 'add-marker') {
+      const world = screenToWorld(e.clientX, e.clientY);
+      setMarkerEditor({ defaultX: world.x, defaultZ: world.z });
+      setMapDrawingMode('none');
+      return;
+    }
+
+    const hit = hitTest(mx, my);
+    if (hit) {
+      if (hit.type === 'entity') {
+        selectedRef.current = selectedRef.current === hit.name ? null : hit.name;
+>>>>>>> worktree-agent-ab88f285
       }
+      kick();
+      return;
     }
 
     draggingRef.current = true;
@@ -348,10 +657,19 @@ export default function MapPage() {
     const my = e.clientY - rect.top;
 
     let found: string | null = null;
+    // Check entities
     for (const [name, pos] of entityPositions.current) {
       const dx = mx - pos.sx;
       const dy = my - pos.sy;
       if (dx * dx + dy * dy < pos.radius * pos.radius) { found = name; break; }
+    }
+    // Check markers
+    if (!found) {
+      for (const [id, pos] of markerPositions.current) {
+        const dx = mx - pos.sx;
+        const dy = my - pos.sy;
+        if (dx * dx + dy * dy < pos.radius * pos.radius) { found = `marker:${id}`; break; }
+      }
     }
     hoveredRef.current = found;
   };
@@ -367,6 +685,119 @@ export default function MapPage() {
       }
       kick();
     }
+  };
+
+  // Right-click handler for context menu
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+
+    const hit = hitTest(mx, my);
+    let target: ContextTarget;
+
+    if (hit?.type === 'entity') {
+      const entity = [...botsRef.current, ...playersRef.current].find(
+        (e) => e.name === hit.name
+      );
+      if (entity?.position) {
+        const isBot = botsRef.current.some((b) => b.name === hit.name);
+        target = {
+          type: isBot ? 'bot' : 'player',
+          name: hit.name,
+          worldX: entity.position.x,
+          worldZ: entity.position.z,
+        };
+      } else {
+        const world = screenToWorld(e.clientX, e.clientY);
+        target = { type: 'terrain', worldX: world.x, worldZ: world.z };
+      }
+    } else if (hit?.type === 'marker') {
+      const marker = markersRef.current.find((m) => m.id === hit.id);
+      if (marker) {
+        target = { type: 'marker', marker };
+      } else {
+        const world = screenToWorld(e.clientX, e.clientY);
+        target = { type: 'terrain', worldX: world.x, worldZ: world.z };
+      }
+    } else {
+      const world = screenToWorld(e.clientX, e.clientY);
+      target = { type: 'terrain', worldX: world.x, worldZ: world.z };
+    }
+
+    setContextMenu({ target, screenX: e.clientX, screenY: e.clientY });
+  };
+
+  // Context menu action handlers
+  const getSelectedBot = (): string | null => {
+    const sel = selectedRef.current;
+    if (!sel) return null;
+    const bot = botsRef.current.find((b) => b.name === sel);
+    return bot ? bot.name : null;
+  };
+
+  const handleWalkHere = (x: number, z: number) => {
+    const botName = getSelectedBot();
+    if (botName) {
+      api.walkTo(botName, Math.round(x), null, Math.round(z)).catch(() => {});
+    }
+  };
+
+  const handleCreateMarker = (x: number, z: number) => {
+    setMarkerEditor({ defaultX: x, defaultZ: z });
+  };
+
+  const handleCopyCoords = (x: number, z: number) => {
+    navigator.clipboard.writeText(`${Math.round(x)}, ${Math.round(z)}`).catch(() => {});
+  };
+
+  const handleFollow = (targetName: string) => {
+    const botName = getSelectedBot();
+    if (botName) {
+      api.followPlayer(botName, targetName).catch(() => {});
+    }
+  };
+
+  const handleEditMarker = (marker: MarkerRecord) => {
+    setMarkerEditor({ marker });
+  };
+
+  const handleDeleteMarker = (marker: MarkerRecord) => {
+    api.deleteMarker(marker.id).then(() => removeMarker(marker.id)).catch(() => {
+      // If the API doesn't exist yet, still remove locally
+      removeMarker(marker.id);
+    });
+  };
+
+  const handleSaveMarker = async (data: { name: string; kind: MarkerKind; x: number; y: number; z: number; tags: string[]; notes: string }) => {
+    if (markerEditor?.marker) {
+      // Update existing
+      try {
+        const result = await api.updateMarker(markerEditor.marker.id, data);
+        updateMarkerInStore(markerEditor.marker.id, result.marker);
+      } catch {
+        // If API doesn't exist, update locally
+        updateMarkerInStore(markerEditor.marker.id, data);
+      }
+    } else {
+      // Create new
+      try {
+        const result = await api.createMarker(data);
+        addMarker(result.marker);
+      } catch {
+        // If API doesn't exist, create locally with generated id
+        const localMarker: MarkerRecord = {
+          ...data,
+          id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          createdAt: Date.now(),
+        };
+        addMarker(localMarker);
+      }
+    }
+    setMarkerEditor(null);
   };
 
   // Zoom toward cursor with normalized sensitivity
@@ -430,9 +861,18 @@ export default function MapPage() {
     kick();
   };
 
+  const cursorClass = mapDrawingMode === 'add-marker'
+    ? 'cursor-crosshair'
+    : draggingRef.current
+      ? 'cursor-grabbing'
+      : hoveredRef.current
+        ? 'cursor-pointer'
+        : 'cursor-grab';
+
   return (
     <div className="h-screen flex flex-col">
       {/* Toolbar */}
+<<<<<<< HEAD
       <MapToolbar
         show={show}
         toggleShow={toggleShow}
@@ -454,11 +894,141 @@ export default function MapPage() {
           selectedEntity={selectedRef.current}
           onSelect={handleEntitySelect}
         />
+=======
+      <div className="px-4 py-2.5 border-b border-zinc-800/60 flex items-center justify-between bg-zinc-950/80 backdrop-blur-sm shrink-0">
+        <div className="flex items-center gap-4">
+          <h1 className="text-sm font-bold text-white">World Map</h1>
+          <div className="flex items-center gap-1.5 text-[11px]">
+            <ToggleBtn active={show.terrain} onClick={() => toggleShow('terrain')} label="Terrain" color="#5B8C33" />
+            <ToggleBtn active={show.grid} onClick={() => toggleShow('grid')} label="Grid" />
+            <ToggleBtn active={show.trails} onClick={() => toggleShow('trails')} label="Trails" />
+            <ToggleBtn active={show.coords} onClick={() => toggleShow('coords')} label="Coords" />
+            <span className="w-px h-4 bg-zinc-800 mx-1" />
+            <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
+            <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
+            <span className="w-px h-4 bg-zinc-800 mx-1" />
+            <ToggleBtn active={show.markers} onClick={() => toggleShow('markers')} label="Markers" color="#EAB308" />
+            <ToggleBtn active={show.zones} onClick={() => toggleShow('zones')} label="Zones" color="#A855F7" />
+            <ToggleBtn active={show.routes} onClick={() => toggleShow('routes')} label="Routes" color="#A78BFA" />
+          </div>
+          {terrainStatus === 'loading' && (
+            <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
+              <span className="w-3 h-3 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+              Loading terrain...
+            </span>
+          )}
+          {terrainStatus === 'error' && <span className="text-[10px] text-red-400/70">Terrain unavailable</span>}
+        </div>
+        <div className="flex items-center gap-2">
+          {/* Drawing mode buttons */}
+          <button
+            onClick={() => setMapDrawingMode(mapDrawingMode === 'add-marker' ? 'none' : 'add-marker')}
+            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
+              mapDrawingMode === 'add-marker'
+                ? 'bg-emerald-600 text-white'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+            }`}
+            title="Click on map to place a marker"
+          >
+            + Marker
+          </button>
+          <span className="w-px h-4 bg-zinc-800" />
+          <button
+            onClick={() => {
+              terrainMeta.current = null;
+              terrainCanvas.current = null;
+              loadTerrain(-offsetRef.current.x / scaleRef.current, -offsetRef.current.y / scaleRef.current);
+            }}
+            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
+            title="Reload terrain"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="23 4 23 10 17 10" />
+              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+            </svg>
+          </button>
+          <span className="w-px h-4 bg-zinc-800" />
+          <button
+            onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
+            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
+          >+</button>
+          <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
+          <button
+            onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
+            className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
+          >-</button>
+        </div>
+      </div>
+
+      <div className="flex-1 flex min-h-0">
+        {/* Entity sidebar */}
+        <div className="w-52 border-r border-zinc-800/60 bg-zinc-950/50 overflow-y-auto shrink-0">
+          <div className="p-3">
+            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Entities ({allEntities.length})
+            </p>
+            <div className="space-y-0.5">
+              {allEntities.map((entity) => (
+                <button
+                  key={`${entity.type}-${entity.name}`}
+                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; kick(); }}
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
+                    selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-medium text-zinc-300 truncate">{entity.name}</p>
+                    <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(entity.x)}, {Math.round(entity.z)}</p>
+                  </div>
+                  <span className="text-[9px] text-zinc-600 uppercase shrink-0">
+                    {entity.type === 'bot' ? entity.personality?.slice(0, 3) : 'PLR'}
+                  </span>
+                </button>
+              ))}
+              {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
+            </div>
+          </div>
+
+          {/* Markers section in sidebar */}
+          {markers.length > 0 && (
+            <div className="p-3 border-t border-zinc-800/60">
+              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+                Markers ({markers.length})
+              </p>
+              <div className="space-y-0.5">
+                {markers.map((marker) => (
+                  <button
+                    key={marker.id}
+                    onClick={() => { centerOn(marker.x, marker.z); kick(); }}
+                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:bg-zinc-800/50"
+                  >
+                    <span
+                      className="w-2.5 h-2.5 shrink-0"
+                      style={{
+                        backgroundColor: MARKER_KIND_COLORS[marker.kind] || '#E5E7EB',
+                        clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+                      }}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-zinc-300 truncate">{marker.name}</p>
+                      <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(marker.x)}, {Math.round(marker.z)}</p>
+                    </div>
+                    <span className="text-[9px] text-zinc-600 uppercase shrink-0">
+                      {marker.kind.slice(0, 3)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+>>>>>>> worktree-agent-ab88f285
 
         {/* Canvas */}
         <div
           ref={containerRef}
-          className={`flex-1 relative ${draggingRef.current ? 'cursor-grabbing' : hoveredRef.current ? 'cursor-pointer' : 'cursor-grab'}`}
+          className={`flex-1 relative ${cursorClass}`}
         >
           <canvas
             ref={canvasRef}
@@ -466,13 +1036,30 @@ export default function MapPage() {
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
+            onContextMenu={handleContextMenu}
             className="w-full h-full"
           />
+
+          {/* Drawing mode indicator */}
+          {mapDrawingMode === 'add-marker' && (
+            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-600/90 backdrop-blur-sm border border-emerald-500/60 rounded-lg px-4 py-2 text-[12px] text-white font-medium">
+              Click on the map to place a marker
+              <button
+                onClick={() => setMapDrawingMode('none')}
+                className="ml-3 text-emerald-200 hover:text-white underline"
+              >
+                Cancel
+              </button>
+            </div>
+          )}
+
+          {/* Legend */}
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
             <p className="text-zinc-500 font-semibold uppercase tracking-wider mb-2">Legend</p>
             <div className="space-y-1.5">
               <LegendItem shape="circle" color="#6B7280" label="Bot" />
               <LegendItem shape="square" color="#60A5FA" label="Player" />
+              <LegendItem shape="diamond" color="#EAB308" label="Marker" />
               {show.terrain && terrainCanvas.current && (
                 <>
                   <LegendItem shape="square" color="#5B8C33" label="Grass" />
@@ -483,16 +1070,66 @@ export default function MapPage() {
               )}
             </div>
           </div>
+
+          {/* Marker Editor overlay */}
+          {markerEditor && (
+            <div className="absolute top-4 right-4 z-40">
+              <MarkerEditor
+                marker={markerEditor.marker}
+                defaultX={markerEditor.defaultX}
+                defaultZ={markerEditor.defaultZ}
+                onSave={handleSaveMarker}
+                onCancel={() => setMarkerEditor(null)}
+              />
+            </div>
+          )}
         </div>
       </div>
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <MapContextMenu
+          target={contextMenu.target}
+          screenX={contextMenu.screenX}
+          screenY={contextMenu.screenY}
+          selectedBot={getSelectedBot()}
+          onClose={() => setContextMenu(null)}
+          onWalkHere={handleWalkHere}
+          onCreateMarker={handleCreateMarker}
+          onCopyCoords={handleCopyCoords}
+          onFollow={handleFollow}
+          onEditMarker={handleEditMarker}
+          onDeleteMarker={handleDeleteMarker}
+        />
+      )}
     </div>
   );
 }
 
+<<<<<<< HEAD
 function LegendItem({ shape, color, label }: { shape: 'circle' | 'square'; color: string; label: string }) {
+=======
+function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick: () => void; label: string; color?: string }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-600 hover:text-zinc-400'}`}
+      style={active && color ? { color } : undefined}
+    >{label}</button>
+  );
+}
+
+function LegendItem({ shape, color, label }: { shape: 'circle' | 'square' | 'diamond'; color: string; label: string }) {
+>>>>>>> worktree-agent-ab88f285
   return (
     <div className="flex items-center gap-2">
-      <span className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : 'rounded-sm'}`} style={{ backgroundColor: color }} />
+      <span
+        className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : shape === 'square' ? 'rounded-sm' : ''}`}
+        style={{
+          backgroundColor: color,
+          ...(shape === 'diamond' ? { clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' } : {}),
+        }}
+      />
       <span className="text-zinc-400">{label}</span>
     </div>
   );

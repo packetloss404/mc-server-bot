@@ -9,6 +9,7 @@ import { EventLog, BotEvent } from './EventLog';
 import { CommandCenter } from '../control/CommandCenter';
 import { CommandType } from '../control/CommandTypes';
 import { MissionManager } from '../control/MissionManager';
+import { MarkerStore } from '../control/MarkerStore';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -18,6 +19,7 @@ export interface APIServerResult {
   eventLog: EventLog;
   commandCenter: CommandCenter;
   missionManager: MissionManager;
+  markerStore: MarkerStore;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -685,5 +687,71 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success });
   });
 
-  return { app, httpServer, io, eventLog, commandCenter, missionManager };
+  // ═══════════════════════════════════════
+  //  CONTROL PLATFORM - WORLD PLANNING
+  // ═══════════════════════════════════════
+
+  const markerStore = new MarkerStore(io);
+
+  app.get('/api/markers', (_req: Request, res: Response) => {
+    res.json({ markers: markerStore.getMarkers() });
+  });
+  app.post('/api/markers', (req: Request, res: Response) => {
+    const { name, kind, position } = req.body;
+    if (!name || !kind || !position) { res.status(400).json({ error: 'name, kind, and position are required' }); return; }
+    const marker = markerStore.createMarker({ name, kind, position, tags: req.body.tags, notes: req.body.notes });
+    res.status(201).json({ marker });
+  });
+  app.patch('/api/markers/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateMarker(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ marker: updated });
+  });
+  app.delete('/api/markers/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteMarker(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.get('/api/zones', (_req: Request, res: Response) => {
+    res.json({ zones: markerStore.getZones() });
+  });
+  app.post('/api/zones', (req: Request, res: Response) => {
+    const { name, mode, shape } = req.body;
+    if (!name || !mode || !shape) { res.status(400).json({ error: 'name, mode, and shape are required' }); return; }
+    const zone = markerStore.createZone(req.body);
+    res.status(201).json({ zone });
+  });
+  app.patch('/api/zones/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateZone(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ zone: updated });
+  });
+  app.delete('/api/zones/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteZone(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.get('/api/routes', (_req: Request, res: Response) => {
+    res.json({ routes: markerStore.getRoutes() });
+  });
+  app.post('/api/routes', (req: Request, res: Response) => {
+    const { name, waypointIds, loop } = req.body;
+    if (!name || !Array.isArray(waypointIds)) { res.status(400).json({ error: 'name and waypointIds are required' }); return; }
+    const route = markerStore.createRoute({ name, waypointIds, loop: loop ?? false });
+    res.status(201).json({ route });
+  });
+  app.patch('/api/routes/:id', (req: Request, res: Response) => {
+    const updated = markerStore.updateRoute(req.params.id as string, req.body);
+    if (!updated) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ route: updated });
+  });
+  app.delete('/api/routes/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteRoute(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, commandCenter, missionManager, markerStore };
 }

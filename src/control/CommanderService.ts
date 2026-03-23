@@ -202,11 +202,7 @@ Rules:
         createdAt: now,
       };
       this.plans.set(planId, plan);
-<<<<<<< HEAD
-      logger.error({ planId, err: err?.message }, 'Commander parse: LLM call failed');
-=======
       logger.error({ err, planId }, 'Commander parse failed');
->>>>>>> worktree-agent-a92e65cc
       return plan;
     }
   }
@@ -233,11 +229,7 @@ Rules:
         await this.commandCenter.dispatchCommand(command);
         commands.push(command);
       } catch (err: any) {
-<<<<<<< HEAD
-        logger.error({ planId, commandType: cmd.type, err: err?.message }, 'Commander execute: command failed');
-=======
         logger.error({ err, planId, commandType: cmd.type }, 'Command dispatch failed');
->>>>>>> worktree-agent-a92e65cc
       }
     }
 
@@ -256,11 +248,7 @@ Rules:
         });
         missions.push(mission);
       } catch (err: any) {
-<<<<<<< HEAD
-        logger.error({ planId, missionType: msn.type, err: err?.message }, 'Commander execute: mission creation failed');
-=======
         logger.error({ err, planId, missionType: msn.type }, 'Mission creation failed');
->>>>>>> worktree-agent-a92e65cc
       }
     }
 

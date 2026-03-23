@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, CommandRecord } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +138,27 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// Control store for command tracking
+interface ControlStore {
+  commandHistory: CommandRecord[];
+  pushCommand: (cmd: CommandRecord) => void;
+  updateCommand: (id: string, patch: Partial<CommandRecord>) => void;
+}
+
+export const useControlStore = create<ControlStore>((set) => ({
+  commandHistory: [],
+
+  pushCommand: (cmd) =>
+    set((state) => ({
+      commandHistory: [cmd, ...state.commandHistory].slice(0, 100),
+    })),
+
+  updateCommand: (id, patch) =>
+    set((state) => ({
+      commandHistory: state.commandHistory.map((c) =>
+        c.id === id ? { ...c, ...patch } : c,
+      ),
+    })),
 }));

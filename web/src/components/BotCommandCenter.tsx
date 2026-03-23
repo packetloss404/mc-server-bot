@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { api } from '@/lib/api';
-import { useBotStore } from '@/lib/store';
+import { api, type CommandType, type CommandRecord } from '@/lib/api';
+import { useBotStore, useControlStore } from '@/lib/store';
 
 interface Props {
   botName: string;
@@ -13,6 +13,35 @@ interface Props {
   mode: string;
 }
 
+/** Status label for the last command */
+function commandStatusLabel(status: CommandRecord['status']): string {
+  switch (status) {
+    case 'queued': return 'Command queued...';
+    case 'started': return 'Command running...';
+    case 'succeeded': return 'Command succeeded';
+    case 'failed': return 'Command failed';
+    case 'cancelled': return 'Command cancelled';
+    default: return '';
+  }
+}
+
+/** Dot color class for command status */
+function statusDotColor(status: CommandRecord['status']): string {
+  switch (status) {
+    case 'queued': return 'bg-yellow-400';
+    case 'started': return 'bg-blue-400';
+    case 'succeeded': return 'bg-emerald-400';
+    case 'failed': return 'bg-red-400';
+    case 'cancelled': return 'bg-zinc-400';
+    default: return 'bg-zinc-500';
+  }
+}
+
+/** Human-friendly command type label */
+function commandTypeLabel(type: CommandType): string {
+  return type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning, mode }: Props) {
   const [loading, setLoading] = useState<string | null>(null);
   const [followTarget, setFollowTarget] = useState('');
@@ -20,39 +49,102 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   const [showWalkInput, setShowWalkInput] = useState(false);
   const [showFollowInput, setShowFollowInput] = useState(false);
   const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
+  const [lastCommandId, setLastCommandId] = useState<string | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
 
-  const exec = async (label: string, fn: () => Promise<any>) => {
+  const pushCommand = useControlStore((s) => s.pushCommand);
+  const recentCommands = useControlStore((s) =>
+    s.commandHistory.filter((c) => c.targets.includes(botName)).slice(0, 5)
+  );
+
+  // Find the last command to show live status updates
+  const lastCommand = lastCommandId
+    ? recentCommands.find((c) => c.id === lastCommandId)
+    : null;
+
+  /** Send a command via the new command API, falling back to legacy endpoints */
+  const execCommand = useCallback(async (
+    label: string,
+    cmdType: CommandType,
+    payload?: Record<string, unknown>,
+    legacyFallback?: () => Promise<unknown>,
+  ) => {
     setLoading(label);
     setFeedback(null);
     try {
-      await fn();
-      setFeedback({ msg: `${label} sent`, ok: true });
-    } catch (e: any) {
-      setFeedback({ msg: e.message || 'Failed', ok: false });
+      const { command } = await api.createCommand({
+        type: cmdType,
+        scope: 'bot',
+        targets: [botName],
+        payload,
+        source: 'dashboard',
+      });
+      pushCommand(command);
+      setLastCommandId(command.id);
+      setFeedback({ msg: commandStatusLabel(command.status), ok: true });
+    } catch (err: unknown) {
+      // Fall back to legacy API if command endpoint is unavailable (404)
+      const isNotFound = err instanceof Error && err.message.includes('404');
+      if (isNotFound && legacyFallback) {
+        try {
+          await legacyFallback();
+          setFeedback({ msg: `${label} sent`, ok: true });
+        } catch (fallbackErr: unknown) {
+          const msg = fallbackErr instanceof Error ? fallbackErr.message : 'Failed';
+          setFeedback({ msg, ok: false });
+        }
+      } else {
+        const msg = err instanceof Error ? err.message : 'Failed';
+        setFeedback({ msg, ok: false });
+      }
     }
     setLoading(null);
-    setTimeout(() => setFeedback(null), 3000);
-  };
+    setTimeout(() => setFeedback(null), 4000);
+  }, [botName, pushCommand]);
 
   const handleWalkTo = () => {
     const parts = walkCoords.split(/[,\s]+/).map(Number);
     if (parts.length < 2 || parts.some(isNaN)) return;
     const [x, zOrY, maybeZ] = parts;
     const hasY = parts.length >= 3;
-    exec('Walk to', () => api.walkTo(botName, x, hasY ? zOrY : null, hasY ? maybeZ : zOrY));
+    const payload = hasY
+      ? { x, y: zOrY, z: maybeZ }
+      : { x, y: null, z: zOrY };
+    execCommand(
+      'Walk to',
+      'walk_to_coords',
+      payload as Record<string, unknown>,
+      () => api.walkTo(botName, x, hasY ? zOrY : null, hasY ? maybeZ : zOrY),
+    );
     setWalkCoords('');
     setShowWalkInput(false);
   };
 
   const handleFollow = (playerName: string) => {
-    exec('Follow', () => api.followPlayer(botName, playerName));
+    execCommand(
+      'Follow',
+      'follow_player',
+      { playerName },
+      () => api.followPlayer(botName, playerName),
+    );
     setFollowTarget('');
     setShowFollowInput(false);
   };
 
   const isDisconnected = state === 'DISCONNECTED';
   const isCodegen = mode === 'codegen';
+
+  // Derive feedback from last command's live status when available
+  const liveFeedback = lastCommand && lastCommand.status !== 'queued'
+    ? {
+        msg: lastCommand.error
+          ? `${commandStatusLabel(lastCommand.status)}: ${lastCommand.error.message}`
+          : commandStatusLabel(lastCommand.status),
+        ok: lastCommand.status === 'succeeded' || lastCommand.status === 'started',
+      }
+    : null;
+
+  const displayFeedback = liveFeedback || feedback;
 
   return (
     <motion.div
@@ -63,13 +155,13 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
       <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Commands</h2>
 
       {/* Feedback */}
-      {feedback && (
+      {displayFeedback && (
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className={`text-xs px-3 py-1.5 rounded-lg mb-3 ${feedback.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}
+          className={`text-xs px-3 py-1.5 rounded-lg mb-3 ${displayFeedback.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}
         >
-          {feedback.msg}
+          {displayFeedback.msg}
         </motion.div>
       )}
 
@@ -78,27 +170,34 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
         {isCodegen && voyagerRunning && (
           <CmdButton
             label={voyagerPaused ? 'Resume' : 'Pause'}
-            icon={voyagerPaused ? '▶' : '⏸'}
+            icon={voyagerPaused ? '\u25B6' : '\u23F8'}
             color={voyagerPaused ? '#10B981' : '#F59E0B'}
             loading={loading === (voyagerPaused ? 'Resume' : 'Pause')}
             disabled={isDisconnected}
-            onClick={() => exec(
+            onClick={() => execCommand(
               voyagerPaused ? 'Resume' : 'Pause',
+              voyagerPaused ? 'resume_voyager' : 'pause_voyager',
+              undefined,
               () => voyagerPaused ? api.resumeBot(botName) : api.pauseBot(botName),
             )}
           />
         )}
         <CmdButton
           label="Stop"
-          icon="■"
+          icon="\u25A0"
           color="#EF4444"
           loading={loading === 'Stop'}
           disabled={isDisconnected || state === 'IDLE'}
-          onClick={() => exec('Stop', () => api.stopBot(botName))}
+          onClick={() => execCommand(
+            'Stop',
+            'stop_movement',
+            undefined,
+            () => api.stopBot(botName),
+          )}
         />
         <CmdButton
           label="Follow"
-          icon="👤"
+          icon="\uD83D\uDC64"
           color="#8B5CF6"
           loading={loading === 'Follow'}
           disabled={isDisconnected}
@@ -107,7 +206,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
         />
         <CmdButton
           label="Go To"
-          icon="📍"
+          icon="\uD83D\uDCCD"
           color="#3B82F6"
           loading={loading === 'Walk to'}
           disabled={isDisconnected}
@@ -184,6 +283,24 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
           </div>
           <p className="text-[9px] text-zinc-600 mt-1">Enter coordinates separated by commas or spaces</p>
         </motion.div>
+      )}
+
+      {/* Recent Commands */}
+      {recentCommands.length > 0 && (
+        <div className="mt-3 pt-3 border-t border-zinc-800/60">
+          <h3 className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-2">Recent Commands</h3>
+          <div className="space-y-1">
+            {recentCommands.map((cmd) => (
+              <div key={cmd.id} className="flex items-center gap-2 text-[11px] text-zinc-400">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDotColor(cmd.status)}`} />
+                <span className="truncate flex-1">{commandTypeLabel(cmd.type)}</span>
+                <span className="text-zinc-600 text-[10px] flex-shrink-0">
+                  {new Date(cmd.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
     </motion.div>
   );

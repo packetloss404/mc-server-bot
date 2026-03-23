@@ -133,6 +133,40 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Command types for the control platform
+export type CommandType =
+  | 'pause_voyager'
+  | 'resume_voyager'
+  | 'stop_movement'
+  | 'follow_player'
+  | 'walk_to_coords'
+  | 'move_to_marker'
+  | 'return_to_base'
+  | 'regroup'
+  | 'guard_zone'
+  | 'patrol_route'
+  | 'deposit_inventory'
+  | 'equip_best'
+  | 'unstuck';
+
+export type CommandStatus = 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled';
+
+export interface CommandRecord {
+  id: string;
+  type: CommandType;
+  scope: 'bot' | 'squad' | 'selection';
+  targets: string[];
+  payload: Record<string, unknown>;
+  priority: string;
+  source: string;
+  status: CommandStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: Record<string, unknown>;
+  error?: { code: string; message: string; retryable?: boolean };
+}
+
 // API functions
 export const api = {
   // Bots
@@ -203,5 +237,19 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
+    }),
+
+  // Command API
+  createCommand: (data: {
+    type: CommandType;
+    scope: 'bot' | 'squad' | 'selection';
+    targets: string[];
+    payload?: Record<string, unknown>;
+    priority?: string;
+    source?: string;
+  }) =>
+    fetchJSON<{ command: CommandRecord }>('/api/commands', {
+      method: 'POST',
+      body: JSON.stringify(data),
     }),
 };

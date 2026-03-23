@@ -84,7 +84,7 @@ export class BuildCoordinator {
         // Skip files larger than 1MB to avoid OOM on huge schematics
         const filePath = path.join(this.schematicsDir, filename);
         const stat = fs.statSync(filePath);
-        if (stat.size > 1_000_000) {
+        if (stat.size > 10_000_000) {
           results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
           logger.info({ filename, sizeBytes: stat.size }, 'Skipping large schematic metadata load');
           continue;
@@ -155,6 +155,12 @@ export class BuildCoordinator {
       if (!instance.bot) throw new Error(`Bot not connected: ${name}`);
     }
 
+    // Check file size before loading to prevent OOM
+    const fileStat = fs.statSync(fullPath);
+    if (fileStat.size > 10_000_000) {
+      throw new Error(`Schematic file too large (${(fileStat.size / 1_000_000).toFixed(1)}MB). Max file size: 10MB.`);
+    }
+
     // Load schematic
     const buffer = fs.readFileSync(fullPath);
     const schematic = await Schematic.read(buffer, this.getBotVersion());
@@ -194,7 +200,7 @@ export class BuildCoordinator {
     }
 
     // Safety limit on actual block count to prevent OOM
-    const MAX_BLOCKS = 50000;
+    const MAX_BLOCKS = 500000;
     if (blocks.length > MAX_BLOCKS) {
       throw new Error(`Schematic has ${blocks.length.toLocaleString()} blocks. Max supported: ${MAX_BLOCKS.toLocaleString()}.`);
     }

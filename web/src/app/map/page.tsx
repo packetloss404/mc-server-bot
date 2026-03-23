@@ -472,6 +472,7 @@ export default function MapPage() {
       // --- Draw markers (diamond/pin shapes) ---
       if (show.markers) {
         for (const marker of curMarkers) {
+          if (!marker.position) continue;
           const sx = cx + marker.position.x * scale + offset.x;
           const sy = cy + marker.position.z * scale + offset.y;
           if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
@@ -934,7 +935,7 @@ export default function MapPage() {
                 Markers ({markers.length})
               </p>
               <div className="space-y-0.5">
-                {markers.map((marker) => (
+                {markers.filter((m) => m.position).map((marker) => (
                   <button
                     key={marker.id}
                     onClick={() => { centerOn(marker.position.x, marker.position.z); kick(); }}

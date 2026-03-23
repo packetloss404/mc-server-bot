@@ -2,7 +2,11 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+<<<<<<< HEAD
 import { api, SchematicInfo, BuildJob } from '@/lib/api';
+=======
+import { api, SchematicInfo, BuildJob, MissionRecord } from '@/lib/api';
+>>>>>>> worktree-agent-a4af1233
 import { useBotStore } from '@/lib/store';
 import { PageHeader } from '@/components/PageHeader';
 
@@ -11,12 +15,20 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const PERSONALITIES = ['builder', 'merchant', 'guard', 'elder', 'explorer', 'blacksmith', 'farmer'];
 
 function getRecommendation(blockCount: number) {
+<<<<<<< HEAD
   const BLOCKS_PER_BOT_15MIN = 3600; // 4 blocks/sec × 60 × 15
+=======
+  const BLOCKS_PER_BOT_15MIN = 3600; // 4 blocks/sec x 60 x 15
+>>>>>>> worktree-agent-a4af1233
   const raw = Math.ceil(blockCount / BLOCKS_PER_BOT_15MIN);
   const count = Math.max(1, Math.min(5, raw));
   const estimatedMinutes = Math.ceil(blockCount / (count * 4) / 60);
   const reasoning = blockCount <= BLOCKS_PER_BOT_15MIN
+<<<<<<< HEAD
     ? 'Small build — one bot is sufficient'
+=======
+    ? 'Small build -- one bot is sufficient'
+>>>>>>> worktree-agent-a4af1233
     : `${blockCount.toLocaleString()} blocks at ~15 min target`;
   return { count, estimatedMinutes, reasoning };
 }
@@ -32,6 +44,19 @@ const STATUS_COLORS: Record<string, string> = {
   cancelled: '#EF4444',
 };
 
+<<<<<<< HEAD
+=======
+const MISSION_STATUS_COLORS: Record<string, string> = {
+  draft: '#6B7280',
+  queued: '#F59E0B',
+  running: '#1ABC9C',
+  paused: '#F59E0B',
+  completed: '#10B981',
+  failed: '#EF4444',
+  cancelled: '#6B7280',
+};
+
+>>>>>>> worktree-agent-a4af1233
 function StatusBadge({ status }: { status: string }) {
   const color = STATUS_COLORS[status] ?? '#6B7280';
   return (
@@ -45,6 +70,22 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+<<<<<<< HEAD
+=======
+function MissionStatusBadge({ status }: { status: string }) {
+  const color = MISSION_STATUS_COLORS[status] ?? '#6B7280';
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider"
+      style={{ backgroundColor: `${color}20`, color }}
+    >
+      <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: color }} />
+      {status}
+    </span>
+  );
+}
+
+>>>>>>> worktree-agent-a4af1233
 function ProgressBar({ value, max, color = '#1ABC9C' }: { value: number; max: number; color?: string }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   return (
@@ -74,6 +115,10 @@ export default function BuildPage() {
   const [createdBotNames, setCreatedBotNames] = useState<string[]>([]);
   const [personality, setPersonality] = useState('builder');
   const [createProgress, setCreateProgress] = useState('');
+<<<<<<< HEAD
+=======
+  const [buildMission, setBuildMission] = useState<MissionRecord | null>(null);
+>>>>>>> worktree-agent-a4af1233
 
   const botList = useBotStore((s) => s.botList);
   const playerList = useBotStore((s) => s.playerList);
@@ -145,6 +190,10 @@ export default function BuildPage() {
     setStarting(true);
     setError(null);
     setCreateProgress('');
+<<<<<<< HEAD
+=======
+    setBuildMission(null);
+>>>>>>> worktree-agent-a4af1233
 
     try {
       let botNames: string[];
@@ -161,7 +210,10 @@ export default function BuildPage() {
           try {
             await api.createBot(botNames[i], personality, 'codegen');
           } catch (err: any) {
+<<<<<<< HEAD
             // Bot might already exist — that's ok
+=======
+>>>>>>> worktree-agent-a4af1233
             if (!err.message?.includes('already exists')) throw err;
           }
           if (i < botNames.length - 1) await delay(5000);
@@ -183,7 +235,10 @@ export default function BuildPage() {
           if (connected.length === botNames.length) break;
         }
 
+<<<<<<< HEAD
         // Use whatever connected
+=======
+>>>>>>> worktree-agent-a4af1233
         const { bots: finalBots } = await api.getBots();
         const ready = finalBots
           .filter((b) => botNames.includes(b.name))
@@ -192,12 +247,36 @@ export default function BuildPage() {
         botNames = ready.map((b) => b.name);
       }
 
+<<<<<<< HEAD
       // Track which bots were created for this build
+=======
+>>>>>>> worktree-agent-a4af1233
       if (botMode === 'create') setCreatedBotNames(botNames);
 
       setCreateProgress('Starting build...');
       const result = await api.startBuild(selectedSchematic.filename, origin, botNames);
       setActiveBuild(result.build);
+<<<<<<< HEAD
+=======
+
+      // Create a mission to track this build
+      const schematicName = selectedSchematic.filename.replace(/\.(schem|schematic)$/i, '');
+      try {
+        const missionResult = await api.createMission({
+          type: 'build_schematic',
+          title: `Build: ${schematicName}`,
+          description: `Building ${schematicName} at (${origin.x}, ${origin.y}, ${origin.z}) with ${botNames.length} bot(s). ${selectedSchematic.blockCount.toLocaleString()} blocks total.`,
+          assigneeType: 'squad',
+          assigneeIds: botNames,
+          priority: 'normal',
+          source: 'dashboard',
+        });
+        setBuildMission(missionResult.mission);
+      } catch {
+        // Mission creation is best-effort; build continues regardless
+      }
+
+>>>>>>> worktree-agent-a4af1233
       setSelectedSchematic(null);
       setSelectedBots(new Set());
     } catch (err: any) {
@@ -212,13 +291,23 @@ export default function BuildPage() {
     if (!activeBuild) return;
     try {
       await api.cancelBuild(activeBuild.id);
+<<<<<<< HEAD
       // Delete bots that were created for this build
+=======
+>>>>>>> worktree-agent-a4af1233
       if (createdBotNames.length > 0) {
         for (const name of createdBotNames) {
           try { await api.deleteBot(name); } catch {}
         }
         setCreatedBotNames([]);
       }
+<<<<<<< HEAD
+=======
+      if (buildMission) {
+        try { await api.cancelMission(buildMission.id); } catch {}
+        setBuildMission(null);
+      }
+>>>>>>> worktree-agent-a4af1233
       setActiveBuild(null);
     } catch {}
   };
@@ -305,6 +394,18 @@ export default function BuildPage() {
               </div>
             </div>
 
+<<<<<<< HEAD
+=======
+            {/* Mission Status */}
+            {buildMission && (
+              <div className="flex items-center gap-3 bg-zinc-800/40 rounded-lg px-3 py-2">
+                <span className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Mission</span>
+                <span className="text-xs text-zinc-300 font-medium">{buildMission.title}</span>
+                <MissionStatusBadge status={buildMission.status} />
+              </div>
+            )}
+
+>>>>>>> worktree-agent-a4af1233
             {/* Overall Progress */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-xs">
@@ -440,7 +541,10 @@ export default function BuildPage() {
                         </div>
                       ))}
                     </div>
+<<<<<<< HEAD
                     {/* Use player/bot position */}
+=======
+>>>>>>> worktree-agent-a4af1233
                     <div className="flex flex-wrap gap-1.5 mt-1.5">
                       {playerList.filter((p) => p.isOnline && p.position).map((player) => (
                         <button
@@ -472,7 +576,11 @@ export default function BuildPage() {
                     </div>
                   </div>
 
+<<<<<<< HEAD
                   {/* Bot Selector — Tabbed */}
+=======
+                  {/* Bot Selector -- Tabbed */}
+>>>>>>> worktree-agent-a4af1233
                   <div className="space-y-3">
                     <label className="text-xs text-zinc-400 font-medium">Assign Bots</label>
                     <div className="flex gap-2">
@@ -527,7 +635,10 @@ export default function BuildPage() {
                       )
                     ) : (
                       <div className="space-y-4">
+<<<<<<< HEAD
                         {/* AI Recommendation */}
+=======
+>>>>>>> worktree-agent-a4af1233
                         {recommendation && (
                           <div className="bg-teal-500/10 border border-teal-500/30 rounded-lg p-3 space-y-1.5">
                             <div className="flex items-center justify-between">
@@ -552,7 +663,10 @@ export default function BuildPage() {
                           </div>
                         )}
 
+<<<<<<< HEAD
                         {/* Name Prefix */}
+=======
+>>>>>>> worktree-agent-a4af1233
                         <div className="flex items-center gap-4">
                           <div className="flex-1 space-y-1">
                             <label className="text-[10px] text-zinc-600 uppercase font-bold">Name Prefix</label>
@@ -578,7 +692,10 @@ export default function BuildPage() {
                           </div>
                         </div>
 
+<<<<<<< HEAD
                         {/* Bot Count Stepper */}
+=======
+>>>>>>> worktree-agent-a4af1233
                         <div className="space-y-1">
                           <label className="text-[10px] text-zinc-600 uppercase font-bold">Bot Count</label>
                           <div className="flex items-center gap-3">
@@ -603,7 +720,10 @@ export default function BuildPage() {
                           </div>
                         </div>
 
+<<<<<<< HEAD
                         {/* Name Preview */}
+=======
+>>>>>>> worktree-agent-a4af1233
                         <p className="text-[11px] text-zinc-500">
                           Will create: {effectiveBotNames.join(', ')}
                         </p>

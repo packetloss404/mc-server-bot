@@ -196,6 +196,7 @@ export interface ChainTemplate {
   stages: { task: string; inputItems?: { item: string; count: number }[]; outputItems?: { item: string; count: number }[] }[];
 }
 
+
 // API functions
 export const api = {
   // Bots

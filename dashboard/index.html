@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DyoBot Monitor</title>
+    <link rel="stylesheet" href="/dashboard/styles.css" />
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="sidebar panel">
+        <div class="sidebar-header">
+          <div>
+            <p class="eyebrow">DyoBot</p>
+            <h1>Command Monitor</h1>
+          </div>
+          <div id="world-pill" class="pill">Connecting</div>
+        </div>
+        <div class="sidebar-block">
+          <label class="label" for="bot-list">Bots</label>
+          <div id="bot-list" class="bot-list"></div>
+        </div>
+        <div class="sidebar-block">
+          <div class="label-row">
+            <span class="label">World</span>
+            <span id="world-time" class="muted">--</span>
+          </div>
+          <div id="world-summary" class="meta-grid"></div>
+        </div>
+        <div class="sidebar-block">
+          <span class="label">Activity</span>
+          <div id="activity-feed" class="activity-feed"></div>
+        </div>
+      </aside>
+
+      <main class="main">
+        <section class="hero panel">
+          <div>
+            <p class="eyebrow">Focused Bot</p>
+            <h2 id="hero-name">Select a bot</h2>
+            <p id="hero-subtitle" class="hero-subtitle">Track directives, current execution, inventory, memory, and live events.</p>
+          </div>
+          <div class="hero-actions">
+            <form id="task-form" class="inline-form">
+              <input id="task-input" type="text" placeholder="Queue a task or directive" />
+              <button type="submit">Send Task</button>
+            </form>
+            <form id="swarm-form" class="inline-form swarm-form">
+              <input id="swarm-input" type="text" placeholder="Set swarm: directive" />
+              <button type="submit">Send Swarm</button>
+            </form>
+          </div>
+        </section>
+
+        <section class="grid top-grid">
+          <article class="panel card accent-cyan">
+            <div class="card-header"><span>Status</span></div>
+            <div id="status-card" class="card-body"></div>
+          </article>
+          <article class="panel card accent-amber">
+            <div class="card-header"><span>Long-Term Directive</span></div>
+            <div id="directive-card" class="card-body"></div>
+          </article>
+          <article class="panel card accent-emerald">
+            <div class="card-header"><span>Execution</span></div>
+            <div id="execution-card" class="card-body"></div>
+          </article>
+        </section>
+
+        <section class="grid mid-grid">
+          <article class="panel section">
+            <div class="section-header"><span>Queued + Recent Tasks</span></div>
+            <div id="tasks-panel" class="section-body"></div>
+          </article>
+          <article class="panel section">
+            <div class="section-header"><span>Inventory</span></div>
+            <div id="inventory-panel" class="section-body inventory-grid"></div>
+          </article>
+        </section>
+
+        <section class="grid lower-grid">
+          <article class="panel section">
+            <div class="section-header"><span>Relationships</span></div>
+            <div id="relationships-panel" class="section-body list"></div>
+          </article>
+          <article class="panel section wide">
+            <div class="section-header"><span>Conversations</span></div>
+            <div id="conversations-panel" class="section-body conversations"></div>
+          </article>
+        </section>
+
+        <section class="grid lower-grid">
+          <article class="panel section wide">
+            <div class="section-header"><span>Swarm Blackboard</span></div>
+            <div id="blackboard-panel" class="section-body"></div>
+          </article>
+          <article class="panel section">
+            <div class="section-header"><span>Coordination Feed</span></div>
+            <div id="blackboard-messages" class="section-body list"></div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script type="module" src="/dashboard/app.js"></script>
+  </body>
+  </html>

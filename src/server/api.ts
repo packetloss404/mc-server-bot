@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
+import path from 'path';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
@@ -33,6 +34,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   }));
 
   app.use(express.json());
+
+  const dashboardDir = path.join(process.cwd(), 'dashboard');
+  app.use('/dashboard', express.static(dashboardDir));
+  app.get('/', (_req: Request, res: Response) => {
+    res.redirect('/dashboard/');
+  });
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
@@ -244,6 +251,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     res.json({
       currentTask: voyager.getCurrentTask(),
+      queuedTasks: voyager.getQueuedTasks(),
+      longTermGoal: voyager.getLongTermGoal(),
       completedTasks: voyager.getCompletedTasks(),
       failedTasks: voyager.getFailedTasks(),
     });
@@ -312,6 +321,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       isRaining: bot.isRaining,
       onlineBots: bots.filter((b) => b.bot).length,
     });
+  });
+
+  // Shared blackboard state
+  app.get('/api/blackboard', (_req: Request, res: Response) => {
+    res.json({ blackboard: botManager.getBlackboardManager().getState() });
   });
 
   // Activity log
@@ -668,6 +682,29 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     const msg = botManager.getBotComms().sendMessage(req.params.name as string, to, content, 'chat');
     res.json({ success: true, message: msg });
+  });
+
+  // ═══════════════════════════════════════
+  //  SWARM DIRECTIVE ENDPOINT
+  // ═══════════════════════════════════════
+
+  // Set a swarm directive from dashboard/UI
+  app.post('/api/swarm', async (req: Request, res: Response) => {
+    const { description, requestedBy } = req.body;
+    if (!description) {
+      res.status(400).json({ error: 'description is required' });
+      return;
+    }
+    await botManager.handleSwarmDirective(description, requestedBy || 'dashboard');
+
+    const event = eventLog.push({
+      type: 'swarm:directive',
+      botName: 'swarm',
+      description: `Swarm directive set: ${description}`,
+      metadata: { requestedBy: requestedBy || 'dashboard' },
+    });
+    io.emit('activity', event);
+    res.json({ success: true });
   });
 
   return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };

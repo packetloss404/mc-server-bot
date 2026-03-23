@@ -8,6 +8,7 @@ export interface Config {
   bots: {
     maxBots: number;
     defaultMode: string;
+    joinStaggerMs: number;
     reconnectDelaySec: number;
     maxReconnectAttempts: number;
   };
@@ -35,6 +36,8 @@ export interface Config {
     lowHealthThreshold: number;
     fleeDistance: number;
     fightRange: number;
+    drowningOxygenThreshold: number;
+    drowningSurfaceClearOxygen: number;
   };
   voyager: {
     enabled: boolean;

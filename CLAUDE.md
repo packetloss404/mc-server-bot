@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-DyoBot is a Voyager-style AI-powered Minecraft bot sidecar for DyoCraft. It connects mineflayer bots to a Minecraft server and uses Google Gemini to autonomously plan and execute tasks through code generation, with personality and social relationship systems.
+DyoBot is a Voyager-style AI-powered Minecraft bot sidecar for DyoCraft. It connects mineflayer bots to a Minecraft server and uses an LLM to autonomously plan and execute tasks through code generation, with personality and social relationship systems.
 
 ## Build & Run
 
@@ -33,7 +33,7 @@ grep -E "task proposed|Execution result|task evaluated" /tmp/dyobot.log
 
 ## Setup
 
-1. Copy `.env.example` to `.env` and set `GOOGLE_API_KEY`
+1. Copy `.env.example` to `.env` and set the API key for the configured provider (`ANTHROPIC_API_KEY` for Anthropic, `GOOGLE_API_KEY` for Gemini)
 2. Configure `config.yml`
 3. Run `npm install && npm run build && npm start`
 

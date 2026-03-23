@@ -7,7 +7,7 @@ import type { FunctionDeclaration } from '@babel/types';
 import { LLMClient } from '../ai/LLMClient';
 import { SkillLibrary } from './SkillLibrary';
 import { Task } from './CurriculumAgent';
-import { renderObservation, formatObservation } from './Observation';
+import { renderObservation } from './Observation';
 import { buildTaskGuidance } from './TaskGuidance';
 import { logger } from '../util/logger';
 
@@ -91,6 +91,12 @@ You may call previously saved skill functions shown in context. They accept (bot
 - For compound tasks, write a short orchestrator function that calls existing skills/primitives in order.`;
 
 export class ActionAgent {
+  private static readonly MAX_PREVIOUS_CODE_CHARS = 800;
+  private static readonly MAX_ERROR_CHARS = 400;
+  private static readonly MAX_EVENT_LOG_CHARS = 300;
+  private static readonly MAX_BLOCKER_CHARS = 220;
+  private static readonly MAX_WORLD_MEMORY_CHARS = 220;
+  private static readonly MAX_CRITIQUE_CHARS = 240;
   private llmClient: LLMClient;
   private maxTokens: number;
   private static MAX_PARSE_RETRIES = 3;
@@ -112,8 +118,8 @@ export class ActionAgent {
     worldMemorySummary?: string
   ): Promise<GeneratedCode> {
     const obs = renderObservation(bot);
-    const obsText = formatObservation(obs);
     const taskGuidance = buildTaskGuidance(task);
+    const obsText = this.formatCompactObservation(obs, taskGuidance.category, !previousError && !previousCode);
 
     // Enrich skill query with chatlog summary on retries (like original Voyager)
     const chatlogSummary = eventLog ? ActionAgent.summarizeChatlog(eventLog) : '';
@@ -121,7 +127,8 @@ export class ActionAgent {
     const query = chatlogSummary ? `${baseQuery}\n\n${chatlogSummary}` : baseQuery;
 
     // Re-retrieve skills each time (query may be enriched with error context)
-    const skillContext = await skillLibrary.getTopKSkillCode(query, 5);
+    const skillSummary = await skillLibrary.buildSkillSummary(query);
+    const bestSkillCode = await skillLibrary.getTopKSkillCode(query, 1);
     const composableSkills = await skillLibrary.getComposableMatches(query, 3);
 
     let lastRaw = previousCode;
@@ -134,13 +141,13 @@ export class ActionAgent {
 ${obsText}
 Task: ${task.description}
 Task category: ${taskGuidance.category}
-Task guidance:
-${taskGuidance.guidance.map((step, index) => `${index + 1}. ${step}`).join('\n')}
+Task guidance: ${taskGuidance.guidance.slice(0, 3).join(' ')}
 Preferred skill composition order:
 ${composableSkills.length > 0
-  ? composableSkills.map((skill, index) => `${index + 1}. ${skill.name} (${skill.description}) [score=${skill.score.toFixed(1)}]`).join('\n')
+  ? composableSkills.map((skill, index) => `${index + 1}. ${skill.name} (${skill.description})`).join('\n')
   : 'none'}
-${skillContext ? `\nPreviously saved skills you can call:\n${skillContext}` : ''}
+${skillSummary ? `\nRelevant skill summaries:\n${this.truncateText(skillSummary, 500)}` : ''}
+${bestSkillCode ? `\nBest matching saved skill:\n${this.truncateText(bestSkillCode, 1200)}` : ''}
 
 Write the function:`;
 
@@ -180,22 +187,65 @@ Write the function:`;
   private buildIterativeContext(previousCode?: string, previousError?: string, critique?: string, eventLog?: string, blockerSummary?: string, worldMemory?: string): string {
     let iterativeContext = '';
     if (previousCode) {
-      iterativeContext += `Code from the last round:\n${previousCode}\n\n`;
+      iterativeContext += `Code from the last round:\n${this.truncateText(previousCode, ActionAgent.MAX_PREVIOUS_CODE_CHARS)}\n\n`;
     }
     if (previousError) {
-      iterativeContext += `Execution error: ${previousError}\n\n`;
+      iterativeContext += `Execution error: ${this.truncateText(previousError, ActionAgent.MAX_ERROR_CHARS)}\n\n`;
     }
-    iterativeContext += `Chat log: ${eventLog || 'none'}\n\n`;
+    iterativeContext += `Chat log: ${eventLog ? this.truncateText(eventLog, ActionAgent.MAX_EVENT_LOG_CHARS) : 'none'}\n\n`;
     if (blockerSummary) {
-      iterativeContext += `Known blockers: ${blockerSummary}\n\n`;
+      iterativeContext += `Known blockers: ${this.truncateText(blockerSummary, ActionAgent.MAX_BLOCKER_CHARS)}\n\n`;
     }
     if (worldMemory) {
-      iterativeContext += `Known world memory: ${worldMemory}\n\n`;
+      iterativeContext += `Known world memory: ${this.truncateText(worldMemory, ActionAgent.MAX_WORLD_MEMORY_CHARS)}\n\n`;
     }
     if (critique) {
-      iterativeContext += `Critique: ${critique}\n\n`;
+      iterativeContext += `Critique: ${this.truncateText(critique, ActionAgent.MAX_CRITIQUE_CHARS)}\n\n`;
     }
     return iterativeContext;
+  }
+
+  private formatCompactObservation(obs: ReturnType<typeof renderObservation>, category: string, firstAttempt: boolean): string {
+    const lines: string[] = [
+      `Position: ${obs.position}`,
+      `Equipment: ${obs.equipment}`,
+      `Inventory (${obs.inventorySlots}): ${this.compactInventory(obs.inventory)}`,
+      `Nearby blocks: ${this.truncateList(obs.nearbyBlocks, category === 'movement' ? 10 : 6)}`,
+    ];
+
+    if (category === 'movement' || category === 'combat' || !firstAttempt) {
+      lines.push(`Health: ${obs.health}/20`);
+      lines.push(`Hunger: ${obs.hunger}/20`);
+      lines.push(`Oxygen: ${obs.oxygen}`);
+    }
+
+    if (category === 'movement' || category === 'combat') {
+      lines.push(`Nearby entities: ${this.truncateList(obs.nearbyEntities, 6)}`);
+    }
+
+    if (category === 'movement' || !firstAttempt) {
+      lines.push(`Biome: ${obs.biome}`);
+      lines.push(`Time: ${obs.timeOfDay}`);
+    }
+
+    return lines.join('\n');
+  }
+
+  private compactInventory(inventory: string): string {
+    if (inventory === 'empty') return inventory;
+    return this.truncateList(inventory, 8);
+  }
+
+  private truncateList(value: string, maxItems: number): string {
+    if (!value || value === 'none' || value === 'none visible' || value === 'empty') return value;
+    const items = value.split(', ').filter(Boolean);
+    if (items.length <= maxItems) return value;
+    return `${items.slice(0, maxItems).join(', ')} ... (+${items.length - maxItems} more)`;
+  }
+
+  private truncateText(value: string, maxChars: number): string {
+    if (value.length <= maxChars) return value;
+    return `${value.slice(0, maxChars)}...`;
   }
 
   private parseGeneratedFunction(raw: string): GeneratedCode {

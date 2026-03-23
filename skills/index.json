@@ -321,22 +321,19 @@
     "file": "walk_to_the_nearest_farmland.js"
   },
   {
-    "quality": 0.8,
-    "successCount": 7,
-    "failureCount": 0,
     "name": "mine_3_oak_logs",
-    "description": "mine 3 oak logs",
+    "description": "Mine 3 oak logs",
     "keywords": [
-      "wood",
-      "gathering",
-      "oak"
+      "mine",
+      "oak_log",
+      "wood"
     ],
-    "file": "mine_3_oak_logs.js"
+    "file": "mine_3_oak_logs.js",
+    "quality": 0.9,
+    "successCount": 8,
+    "failureCount": 0
   },
   {
-    "quality": 0.9,
-    "successCount": 7,
-    "failureCount": 0,
     "name": "craft_a_wooden_pickaxe",
     "description": "Craft a wooden pickaxe",
     "keywords": [
@@ -344,7 +341,10 @@
       "pickaxe",
       "wood"
     ],
-    "file": "craft_a_wooden_pickaxe.js"
+    "file": "craft_a_wooden_pickaxe.js",
+    "quality": 0.8,
+    "successCount": 9,
+    "failureCount": 0
   },
   {
     "quality": 0.7,
@@ -509,25 +509,25 @@
     "file": "mine_2_moss_blocks.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 6,
+    "failureCount": 0,
     "name": "mine_3_oak_logs_at",
     "description": "Mine 3 oak logs at 859, 77, 217",
     "keywords": [
       "mine",
       "oak_log"
     ],
-    "file": "mine_3_oak_logs_at.js",
-    "quality": 0.9,
-    "successCount": 6,
-    "failureCount": 0
+    "file": "mine_3_oak_logs_at.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 10,
+    "failureCount": 0,
     "name": "craft_1_crafting_table_using",
     "description": "Craft 1 crafting table using 4 oak planks",
     "keywords": [],
-    "file": "craft_1_crafting_table_using.js",
-    "quality": 0.9,
-    "successCount": 10,
-    "failureCount": 0
+    "file": "craft_1_crafting_table_using.js"
   },
   {
     "quality": 0.9,
@@ -592,13 +592,13 @@
     "file": "craft_4_oak_planks_from.js"
   },
   {
-    "quality": 0.9,
-    "successCount": 3,
-    "failureCount": 0,
     "name": "craft_4_sticks_using_2",
-    "description": "Craft 4 sticks using 2 oak planks",
+    "description": "Craft 4 sticks using 2 spruce planks",
     "keywords": [],
-    "file": "craft_4_sticks_using_2.js"
+    "file": "craft_4_sticks_using_2.js",
+    "quality": 0.9,
+    "successCount": 4,
+    "failureCount": 0
   },
   {
     "quality": 0.8,

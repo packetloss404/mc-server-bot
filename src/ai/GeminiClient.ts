@@ -100,6 +100,34 @@ export class GeminiClient implements LLMClient {
     };
   }
 
+  // TODO: Re-enable once memory usage is profiled — currently triggers OOM
+  // async embed(texts: string[]): Promise<number[][]> {
+  //   if (texts.length === 0) return [];
+  //   const url = `${this.baseUrl}gemini-embedding-001:batchEmbedContents?key=${this.apiKey}`;
+  //   const requests = texts.map((text) => ({
+  //     model: 'models/gemini-embedding-001',
+  //     content: { parts: [{ text }] },
+  //     taskType: 'RETRIEVAL_DOCUMENT',
+  //     outputDimensionality: 256,
+  //   }));
+  //   const resp = await fetch(url, {
+  //     method: 'POST',
+  //     headers: { 'Content-Type': 'application/json' },
+  //     body: JSON.stringify({ requests }),
+  //     signal: AbortSignal.timeout(30000),
+  //   });
+  //   if (!resp.ok) {
+  //     const errBody = await resp.text();
+  //     throw new Error(`Gemini Embedding API ${resp.status}: ${errBody}`);
+  //   }
+  //   const json: any = await resp.json();
+  //   const embeddings = json.embeddings;
+  //   if (!embeddings || !Array.isArray(embeddings)) {
+  //     throw new Error('No embeddings in Gemini response');
+  //   }
+  //   return embeddings.map((e: any) => e.values);
+  // }
+
   private extractText(json: any): string {
     const candidates = json.candidates;
     if (!candidates || candidates.length === 0) {

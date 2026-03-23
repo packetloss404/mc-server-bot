@@ -1,4 +1,8 @@
 async function mineEightStoneBlocks(bot) {
+  const woodenPickaxe = bot.inventory.items().find(i => i.name === 'wooden_pickaxe');
+  if (woodenPickaxe) {
+    await bot.equip(woodenPickaxe, 'hand');
+  }
   const targetBlock = 'stone';
   const count = 8;
   const stone = bot.findBlock({

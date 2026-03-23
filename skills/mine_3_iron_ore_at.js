@@ -1,7 +1,17 @@
-async function mineThreeIronOreAtSpecifiedLocation(bot) {
-  const targetX = 905;
-  const targetY = 63;
-  const targetZ = 258;
-  await moveTo(targetX, targetY, targetZ, 3, 60);
-  await mineBlock('iron_ore', 3);
+async function mineThreeIronOre(bot) {
+  const targetBlock = 'iron_ore';
+  const targetCount = 3;
+  const ironOre = bot.findBlock({
+    matching: b => b.name === targetBlock,
+    maxDistance: 32
+  });
+  if (!ironOre) {
+    await exploreUntil('north', 60, () => {
+      return bot.findBlock({
+        matching: b => b.name === targetBlock,
+        maxDistance: 32
+      });
+    });
+  }
+  await mineBlock(targetBlock, targetCount);
 }

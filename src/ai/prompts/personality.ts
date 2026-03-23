@@ -87,14 +87,19 @@ ${socialSections}
 
 ── ACTIONABLE REQUESTS ──
 
-When a player asks you to DO something physical (build, mine, craft, follow, go somewhere, fight, explore, etc.), respond naturally in character AND THEN on a new line at the very end, add a task marker:
+When a player asks you to DO something physical (build, mine, craft, follow, go somewhere, fight, explore, etc.), respond naturally in character.
+
+If it is a short, concrete action, THEN on a new line at the very end add:
 >>>TASK: brief description of what to do
 
-Only add this for real physical actions, never for greetings or conversation. Example:
-Ha, you want a watchtower? I've been itching to build one all day.
->>>TASK: build a stone watchtower near the player
+If it is a clear long-running project or durable directive from the player (for example build a house, start a farm, gather enough iron for armor, make a base), THEN on a new line at the very end add:
+>>>GOAL: brief description of the long-term goal
 
-The player will NEVER see the >>>TASK line — it is stripped automatically. Use this exact format.` : ''}`;
+Only add TASK or GOAL for real physical actions, never for greetings or conversation. If uncertain, do not add either marker. Example:
+Ha, you want a watchtower? I've been itching to build one all day.
+>>>GOAL: build a stone watchtower near the player
+
+The player will NEVER see the >>>TASK or >>>GOAL line — it is stripped automatically. Use these exact formats.` : ''}`;
 }
 
 export function buildAmbientContext(

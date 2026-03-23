@@ -9,6 +9,7 @@ import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
+import { BlackboardManager } from '../voyager/BlackboardManager';
 
 interface SavedBot {
   name: string;
@@ -26,6 +27,7 @@ export class BotManager {
   private conversationManager: ConversationManager;
   private socialMemory: SocialMemory;
   private botComms: BotComms;
+  private blackboardManager: BlackboardManager;
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -35,6 +37,7 @@ export class BotManager {
     this.conversationManager = new ConversationManager();
     this.socialMemory = new SocialMemory();
     this.botComms = new BotComms();
+    this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
   }
 
   async spawnBot(
@@ -84,6 +87,8 @@ export class BotManager {
       socialMemory: this.socialMemory,
       botComms: this.botComms,
       botManager: this,
+      blackboardManager: this.blackboardManager,
+      onSwarmDirective: (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
     });
 
     this.bots.set(key, instance);
@@ -126,6 +131,14 @@ export class BotManager {
     return [...this.bots.values()];
   }
 
+  getDiagnosticsSnapshot() {
+    const bots = this.getAllBots().map((bot) => bot.getDiagnosticsSummary());
+    return {
+      totalBots: bots.length,
+      bots,
+    };
+  }
+
   getAffinityManager(): AffinityManager {
     return this.affinityManager;
   }
@@ -155,6 +168,22 @@ export class BotManager {
         personality: b.personality,
         activity: b.getVoyagerLoop()?.getCurrentTask() || 'idle',
       }));
+  }
+
+  getBlackboardManager(): BlackboardManager {
+    return this.blackboardManager;
+  }
+
+  async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
+    const bots = this.getAllBots().filter((bot) => bot.getVoyagerLoop());
+    for (const bot of bots) {
+      bot.getVoyagerLoop()?.overrideWithSwarmDirective(description, requestedBy);
+    }
+
+    const leader = bots.find((bot) => !!bot.bot)?.getVoyagerLoop();
+    if (leader) {
+      await leader.queueSwarmGoal(description, requestedBy);
+    }
   }
 
   setMode(name: string, mode: string): boolean {

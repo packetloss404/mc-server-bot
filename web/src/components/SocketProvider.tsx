@@ -137,6 +137,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       api.getChains().then((data) => setChains(data.chains)).catch(() => {});
     });
 
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);

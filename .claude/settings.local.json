@@ -1,0 +1,27 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l /d/projects/mc-server-bot/src/**/*.ts)",
+      "Bash(curl -s -X DELETE http://127.0.0.1:3001/api/bots/packetsloth)",
+      "Bash(curl -s -X POST http://127.0.0.1:3001/api/bots -H \"Content-Type: application/json\" -d '{\"\"name\"\": \"\"packetsloth\"\", \"\"personality\"\": \"\"explorer\"\", \"\"location\"\": {\"\"x\"\": 853, \"\"y\"\": 64, \"\"z\"\": 800}}')",
+      "Bash(curl -s http://127.0.0.1:3001/api/bots/packetsloth)",
+      "Bash(curl -s -X POST http://127.0.0.1:3001/api/bots -H \"Content-Type: application/json\" -d '{\"\"name\"\": \"\"packetsloth\"\", \"\"personality\"\": \"\"explorer\"\"}')",
+      "Bash(tasklist)",
+      "Bash(netstat -ano)",
+      "Bash(curl -s \"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=AIzaSyA7Y5lR4j-Nn9TUq9qCpGPHwnW3JB_6L8E\" -H \"Content-Type: application/json\" -d '{\"\"\"\"systemInstruction\"\"\"\":{\"\"\"\"parts\"\"\"\":[{\"\"\"\"text\"\"\"\":\"\"\"\"You are sloth, a builder in Minecraft. Respond in character. Keep it short.\"\"\"\"}]},\"\"\"\"contents\"\"\"\":[{\"\"\"\"role\"\"\"\":\"\"\"\"user\"\"\"\",\"\"\"\"parts\"\"\"\":[{\"\"\"\"text\"\"\"\":\"\"\"\"hey sloth you doing alright?\"\"\"\"}]}],\"\"\"\"generationConfig\"\"\"\":{\"\"\"\"temperature\"\"\"\":0.9,\"\"\"\"maxOutputTokens\"\"\"\":256,\"\"\"\"thinkingConfig\"\"\"\":{\"\"\"\"thinkBudget\"\"\"\":0}}}')",
+      "Bash(curl -s \"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-pro-preview:generateContent?key=AIzaSyA7Y5lR4j-Nn9TUq9qCpGPHwnW3JB_6L8E\" -H \"Content-Type: application/json\" -d '{\"\"\"\"systemInstruction\"\"\"\":{\"\"\"\"parts\"\"\"\":[{\"\"\"\"text\"\"\"\":\"\"\"\"You are sloth, a builder in Minecraft. Respond in character. Keep it short.\"\"\"\"}]},\"\"\"\"contents\"\"\"\":[{\"\"\"\"role\"\"\"\":\"\"\"\"user\"\"\"\",\"\"\"\"parts\"\"\"\":[{\"\"\"\"text\"\"\"\":\"\"\"\"hey sloth you doing alright?\"\"\"\"}]}],\"\"\"\"generationConfig\"\"\"\":{\"\"\"\"temperature\"\"\"\":0.9,\"\"\"\"maxOutputTokens\"\"\"\":256,\"\"\"\"thinkingConfig\"\"\"\":{\"\"\"\"thinkingBudget\"\"\"\":0}}}')",
+      "Bash(curl:*)",
+      "Bash(for bot:*)",
+      "Bash(do echo:*)",
+      "Bash(done)",
+      "Bash(grep -v \"^\\\\-\\\\-$\")",
+      "Bash(wc -l /d/projects/mc-server-bot/web/src/components/*.tsx /d/projects/mc-server-bot/web/src/app/**/*.tsx)",
+      "Bash(npx tsc:*)",
+      "Bash(python3 -c \"import sys,json; print\\(json.dumps\\(json.load\\(sys.stdin\\),indent=2\\)\\)\")",
+      "Bash(python3 -m json.tool)",
+      "Bash(python3 -c \":*)",
+      "Bash(while read:*)",
+      "Bash(do curl:*)"
+    ]
+  }
+}

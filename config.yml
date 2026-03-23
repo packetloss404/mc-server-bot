@@ -13,6 +13,7 @@ minecraft:
 bots:
   maxBots: 10
   defaultMode: "codegen"
+  joinStaggerMs: 5000
   reconnectDelaySec: 5
   maxReconnectAttempts: 10
 
@@ -40,6 +41,8 @@ instincts:
   lowHealthThreshold: 8
   fleeDistance: 14
   fightRange: 3
+  drowningOxygenThreshold: 120
+  drowningSurfaceClearOxygen: 260
 
 voyager:
   enabled: true
@@ -53,8 +56,8 @@ llm:
   provider: "gemini"
   model: "gemini-3-flash-preview"
   temperature: 0.7
-  chatMaxTokens: 1024
-  codeGenMaxTokens: 4096
+  chatMaxTokens: 2048
+  codeGenMaxTokens: 8192
   maxConcurrentRequests: 3
 
 skills:

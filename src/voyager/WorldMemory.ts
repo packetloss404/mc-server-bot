@@ -13,6 +13,7 @@ export interface WorldMemoryRecord {
 }
 
 export class WorldMemory {
+  private static MAX_RECORDS = 200;
   private filePath: string;
   private records: WorldMemoryRecord[] = [];
 
@@ -33,6 +34,13 @@ export class WorldMemory {
     } else {
       this.records.push({ kind, name, x, y, z, updatedAt: Date.now(), contents });
     }
+
+    // Evict oldest records if over limit
+    if (this.records.length > WorldMemory.MAX_RECORDS) {
+      this.records.sort((a, b) => b.updatedAt - a.updatedAt);
+      this.records = this.records.slice(0, WorldMemory.MAX_RECORDS);
+    }
+
     this.persist();
   }
 

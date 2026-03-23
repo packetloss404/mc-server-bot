@@ -108,6 +108,10 @@ export class CurriculumAgent {
   private qaEmbeddingPath: string;
   private qaEmbeddings: Record<string, number[]> = {};
   private statsTracker: StatsTracker;
+  private static MAX_QA_CACHE_SIZE = 200;
+  private static MAX_COMPLETED_TASKS = 100;
+  private static MAX_FAILED_TASKS = 50;
+  private persistDebounceTimer: NodeJS.Timeout | null = null;
 
   constructor(llmClient: LLMClient | null, useLLM: boolean, dataDir: string = './data') {
     this.llmClient = llmClient;
@@ -126,11 +130,23 @@ export class CurriculumAgent {
     this.worldMemory = new WorldMemory(dataDir);
     this.statsTracker = new StatsTracker(dataDir);
 
-    // Load persisted state
-    this.completedTasks = this.loadJsonArray(this.completedTasksPath);
-    this.failedTasks = this.loadJsonArray(this.failedTasksPath);
-    this.qaCache = this.loadJsonMap(this.qaCachePath);
-    this.qaEmbeddings = this.loadJsonEmbeddingMap(this.qaEmbeddingPath);
+    // Load persisted state (trim to caps on load)
+    this.completedTasks = this.loadJsonArray(this.completedTasksPath).slice(-CurriculumAgent.MAX_COMPLETED_TASKS);
+    this.failedTasks = this.loadJsonArray(this.failedTasksPath).slice(-CurriculumAgent.MAX_FAILED_TASKS);
+    const loadedCache = this.loadJsonMap(this.qaCachePath);
+    const cacheKeys = Object.keys(loadedCache);
+    if (cacheKeys.length > CurriculumAgent.MAX_QA_CACHE_SIZE) {
+      const keepKeys = cacheKeys.slice(-CurriculumAgent.MAX_QA_CACHE_SIZE);
+      for (const key of keepKeys) {
+        this.qaCache[key] = loadedCache[key];
+      }
+    } else {
+      this.qaCache = loadedCache;
+    }
+    const loadedEmbeddings = this.loadJsonEmbeddingMap(this.qaEmbeddingPath);
+    for (const key of Object.keys(this.qaCache)) {
+      if (loadedEmbeddings[key]) this.qaEmbeddings[key] = loadedEmbeddings[key];
+    }
 
     if (this.completedTasks.length > 0) {
       this.lastTask = this.completedTasks[this.completedTasks.length - 1];
@@ -154,6 +170,15 @@ export class CurriculumAgent {
         this.failedTasks.push(task.description);
       }
     }
+
+    // Trim arrays to prevent unbounded growth
+    if (this.completedTasks.length > CurriculumAgent.MAX_COMPLETED_TASKS) {
+      this.completedTasks = this.completedTasks.slice(-CurriculumAgent.MAX_COMPLETED_TASKS);
+    }
+    if (this.failedTasks.length > CurriculumAgent.MAX_FAILED_TASKS) {
+      this.failedTasks = this.failedTasks.slice(-CurriculumAgent.MAX_FAILED_TASKS);
+    }
+
     this.persistTasks();
   }
 
@@ -398,6 +423,15 @@ Propose the next task:`;
   }
 
   private persistTasks(): void {
+    // Debounce writes — at most once every 5 seconds
+    if (this.persistDebounceTimer) return;
+    this.persistDebounceTimer = setTimeout(() => {
+      this.persistDebounceTimer = null;
+      this.persistTasksNow();
+    }, 5000);
+  }
+
+  private persistTasksNow(): void {
     fs.writeFileSync(this.completedTasksPath, JSON.stringify(this.completedTasks, null, 2));
     fs.writeFileSync(this.failedTasksPath, JSON.stringify(this.failedTasks, null, 2));
     fs.writeFileSync(this.qaCachePath, JSON.stringify(this.qaCache, null, 2));
@@ -506,6 +540,17 @@ Propose the next task:`;
       const embedding = (await this.llmClient.embed([question]).catch(() => [] as number[][]))[0];
       if (embedding) this.qaEmbeddings[question] = embedding;
     }
+
+    // Evict oldest entries if cache exceeds max size
+    const cacheKeys = Object.keys(this.qaCache);
+    if (cacheKeys.length > CurriculumAgent.MAX_QA_CACHE_SIZE) {
+      const toRemove = cacheKeys.slice(0, cacheKeys.length - CurriculumAgent.MAX_QA_CACHE_SIZE);
+      for (const key of toRemove) {
+        delete this.qaCache[key];
+        delete this.qaEmbeddings[key];
+      }
+    }
+
     this.persistTasks();
   }
 

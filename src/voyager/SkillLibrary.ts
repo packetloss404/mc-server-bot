@@ -36,6 +36,7 @@ export class SkillLibrary {
   private maxSkills: number;
   private docFreq: Map<string, number> = new Map();
   private embeddingClient: LLMClient | null;
+  private allSkillCodeCache: string | null = null;
 
   constructor(skillsDir: string, maxSkills: number, embeddingClient: LLMClient | null = null) {
     this.skillsDir = skillsDir;
@@ -170,6 +171,7 @@ export class SkillLibrary {
       this.index.push(entry);
     }
 
+    this.allSkillCodeCache = null; // Invalidate cache
     this.saveIndex();
     this.rebuildIndexStats();
     logger.info({ name, keywords }, 'Skill saved to library');
@@ -198,12 +200,14 @@ export class SkillLibrary {
 
   /** Get ALL skill code concatenated (for VM injection so skills can call each other) */
   getAllSkillCode(): string {
+    if (this.allSkillCodeCache !== null) return this.allSkillCodeCache;
     const parts: string[] = [];
     for (const entry of this.index) {
       const code = this.getCode(entry.name);
       if (code) parts.push(code);
     }
-    return parts.join('\n\n');
+    this.allSkillCodeCache = parts.join('\n\n');
+    return this.allSkillCodeCache;
   }
 
   /** Get top-k relevant skill code for prompt context */

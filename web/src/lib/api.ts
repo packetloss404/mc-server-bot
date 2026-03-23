@@ -133,6 +133,42 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// World object types
+export type MarkerKind = 'base' | 'storage' | 'mine' | 'village' | 'build-site' | 'custom';
+export type ZoneMode = 'guard' | 'avoid' | 'farm' | 'build' | 'gather' | 'custom';
+export type ZoneShape = 'circle' | 'rectangle';
+
+export interface MarkerRecord {
+  id: string;
+  name: string;
+  kind: MarkerKind;
+  x: number;
+  y: number;
+  z: number;
+  tags: string[];
+  notes: string;
+  createdAt: number;
+}
+
+export interface ZoneRecord {
+  id: string;
+  name: string;
+  mode: ZoneMode;
+  shape: ZoneShape;
+  cx: number;
+  cz: number;
+  radius?: number;       // for circle
+  width?: number;        // for rectangle
+  height?: number;       // for rectangle
+  color?: string;
+}
+
+export interface RouteRecord {
+  id: string;
+  name: string;
+  markerIds: string[];   // ordered list of marker IDs
+}
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +240,35 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Markers
+  getMarkers: () =>
+    fetchJSON<{ markers: MarkerRecord[] }>('/api/markers').catch(() => ({ markers: [] })),
+  createMarker: (marker: Omit<MarkerRecord, 'id' | 'createdAt'>) =>
+    fetchJSON<{ marker: MarkerRecord }>('/api/markers', {
+      method: 'POST',
+      body: JSON.stringify(marker),
+    }),
+  updateMarker: (id: string, patch: Partial<MarkerRecord>) =>
+    fetchJSON<{ marker: MarkerRecord }>(`/api/markers/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  deleteMarker: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/markers/${id}`, { method: 'DELETE' }),
+
+  // Zones
+  getZones: () =>
+    fetchJSON<{ zones: ZoneRecord[] }>('/api/zones').catch(() => ({ zones: [] })),
+  createZone: (zone: Omit<ZoneRecord, 'id'>) =>
+    fetchJSON<{ zone: ZoneRecord }>('/api/zones', {
+      method: 'POST',
+      body: JSON.stringify(zone),
+    }),
+  deleteZone: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
+
+  // Routes
+  getRoutes: () =>
+    fetchJSON<{ routes: RouteRecord[] }>('/api/routes').catch(() => ({ routes: [] })),
 };

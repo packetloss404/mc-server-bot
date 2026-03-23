@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, MarkerRecord, ZoneRecord, RouteRecord } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -15,6 +15,8 @@ export interface PlayerData {
   isOnline: boolean;
 }
 
+export type MapDrawingMode = 'none' | 'add-marker' | 'draw-zone';
+
 interface BotStore {
   botsById: Record<string, BotLiveData>;
   botList: BotLiveData[];
@@ -24,6 +26,12 @@ interface BotStore {
   connected: boolean;
   world: WorldState | null;
   unreadChats: number;
+
+  // World objects
+  markers: MarkerRecord[];
+  zones: ZoneRecord[];
+  routes: RouteRecord[];
+  mapDrawingMode: MapDrawingMode;
 
   setBots: (bots: BotStatus[]) => void;
   updatePosition: (bot: string, x: number, y: number, z: number) => void;
@@ -39,6 +47,15 @@ interface BotStore {
   removePlayer: (name: string) => void;
   incrementUnreadChats: () => void;
   resetUnreadChats: () => void;
+
+  // World objects
+  setMarkers: (markers: MarkerRecord[]) => void;
+  addMarker: (marker: MarkerRecord) => void;
+  removeMarker: (id: string) => void;
+  updateMarker: (id: string, patch: Partial<MarkerRecord>) => void;
+  setZones: (zones: ZoneRecord[]) => void;
+  setRoutes: (routes: RouteRecord[]) => void;
+  setMapDrawingMode: (mode: MapDrawingMode) => void;
 }
 
 function toBotList(byId: Record<string, BotLiveData>): BotLiveData[] {
@@ -69,6 +86,10 @@ export const useBotStore = create<BotStore>((set) => ({
   connected: false,
   world: null,
   unreadChats: 0,
+  markers: [],
+  zones: [],
+  routes: [],
+  mapDrawingMode: 'none' as MapDrawingMode,
 
   setBots: (bots) =>
     set((state) => {
@@ -138,4 +159,16 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+
+  // World objects
+  setMarkers: (markers) => set({ markers }),
+  addMarker: (marker) => set((state) => ({ markers: [...state.markers, marker] })),
+  removeMarker: (id) => set((state) => ({ markers: state.markers.filter((m) => m.id !== id) })),
+  updateMarker: (id, patch) =>
+    set((state) => ({
+      markers: state.markers.map((m) => (m.id === id ? { ...m, ...patch } : m)),
+    })),
+  setZones: (zones) => set({ zones }),
+  setRoutes: (routes) => set({ routes }),
+  setMapDrawingMode: (mode) => set({ mapDrawingMode: mode }),
 }));

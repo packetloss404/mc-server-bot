@@ -1,62 +1,119 @@
 'use client';
 
 import { create } from 'zustand';
-import type { CommandRecord } from './api';
+
+export interface Squad {
+  id: string;
+  name: string;
+  memberNames: string[];
+  createdAt: number;
+}
+
+export type CommandStatus = 'pending' | 'running' | 'succeeded' | 'failed';
+
+export interface BotCommandState {
+  botName: string;
+  command: string;
+  status: CommandStatus;
+  startedAt: number;
+  finishedAt?: number;
+  error?: string;
+}
 
 interface ControlStore {
   // Selection
   selectedBotIds: Set<string>;
-  toggleBotSelection: (botName: string) => void;
-  selectAll: (botNames: string[]) => void;
+  toggleBotSelection: (name: string) => void;
+  selectBots: (names: string[]) => void;
   clearSelection: () => void;
+  isSelected: (name: string) => boolean;
 
-  // Commands
-  commands: CommandRecord[];
-  setCommands: (cmds: CommandRecord[]) => void;
-  addCommand: (cmd: CommandRecord) => void;
-  updateCommand: (cmd: CommandRecord) => void;
+  // Squads
+  squads: Squad[];
+  createSquad: (name: string, memberNames: string[]) => string;
+  deleteSquad: (id: string) => void;
+  renameSquad: (id: string, name: string) => void;
+  updateSquadMembers: (id: string, memberNames: string[]) => void;
+  activeSquadId: string | null;
+  setActiveSquad: (id: string | null) => void;
 
-  // Derived helpers
-  pendingCommands: () => CommandRecord[];
-  failedCommands: () => CommandRecord[];
-  commandsForBot: (botName: string) => CommandRecord[];
+  // Command tracking
+  commandStates: Record<string, BotCommandState>;
+  setCommandState: (botName: string, state: BotCommandState) => void;
+  clearCommandState: (botName: string) => void;
+  clearAllCommandStates: () => void;
 }
 
+let squadCounter = 0;
+
 export const useControlStore = create<ControlStore>((set, get) => ({
+  // Selection
   selectedBotIds: new Set<string>(),
 
-  toggleBotSelection: (botName) =>
+  toggleBotSelection: (name: string) =>
     set((state) => {
       const next = new Set(state.selectedBotIds);
-      if (next.has(botName)) next.delete(botName);
-      else next.add(botName);
+      if (next.has(name)) {
+        next.delete(name);
+      } else {
+        next.add(name);
+      }
       return { selectedBotIds: next };
     }),
 
-  selectAll: (botNames) =>
-    set({ selectedBotIds: new Set(botNames) }),
+  selectBots: (names: string[]) =>
+    set({ selectedBotIds: new Set(names) }),
 
   clearSelection: () =>
     set({ selectedBotIds: new Set<string>() }),
 
-  commands: [],
+  isSelected: (name: string) => get().selectedBotIds.has(name),
 
-  setCommands: (cmds) => set({ commands: cmds }),
+  // Squads
+  squads: [],
+  activeSquadId: null,
 
-  addCommand: (cmd) =>
-    set((state) => ({ commands: [cmd, ...state.commands].slice(0, 200) })),
-
-  updateCommand: (cmd) =>
+  createSquad: (name: string, memberNames: string[]) => {
+    const id = `squad-${++squadCounter}-${Date.now()}`;
     set((state) => ({
-      commands: state.commands.map((c) => (c.id === cmd.id ? cmd : c)),
+      squads: [...state.squads, { id, name, memberNames, createdAt: Date.now() }],
+      activeSquadId: id,
+    }));
+    return id;
+  },
+
+  deleteSquad: (id: string) =>
+    set((state) => ({
+      squads: state.squads.filter((s) => s.id !== id),
+      activeSquadId: state.activeSquadId === id ? null : state.activeSquadId,
     })),
 
-  pendingCommands: () =>
-    get().commands.filter((c) => c.status === 'queued' || c.status === 'started'),
+  renameSquad: (id: string, name: string) =>
+    set((state) => ({
+      squads: state.squads.map((s) => (s.id === id ? { ...s, name } : s)),
+    })),
 
-  failedCommands: () =>
-    get().commands.filter((c) => c.status === 'failed'),
+  updateSquadMembers: (id: string, memberNames: string[]) =>
+    set((state) => ({
+      squads: state.squads.map((s) => (s.id === id ? { ...s, memberNames } : s)),
+    })),
 
-  commandsForBot: (botName) =>
-    get().commands.filter((c) => c.targets.includes(botName)),
+  setActiveSquad: (id: string | null) => set({ activeSquadId: id }),
+
+  // Command tracking
+  commandStates: {},
+
+  setCommandState: (botName: string, state: BotCommandState) =>
+    set((prev) => ({
+      commandStates: { ...prev.commandStates, [botName]: state },
+    })),
+
+  clearCommandState: (botName: string) =>
+    set((prev) => {
+      const next = { ...prev.commandStates };
+      delete next[botName];
+      return { commandStates: next };
+    }),
+
+  clearAllCommandStates: () => set({ commandStates: {} }),
 }));

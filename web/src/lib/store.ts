@@ -1,7 +1,11 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type {
+  BotStatus, BotEvent, WorldState,
+  MarkerRecord, ZoneRecord, RouteRecord,
+  SquadRecord, RoleAssignmentRecord,
+} from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +142,97 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+/* ─── World Planning Store ─── */
+
+interface WorldPlanningStore {
+  markers: MarkerRecord[];
+  zones: ZoneRecord[];
+  routes: RouteRecord[];
+  selectedMapObject: { type: 'marker' | 'zone' | 'route'; id: string } | null;
+  drawingMode: 'marker' | 'zone' | 'route' | null;
+
+  setMarkers: (markers: MarkerRecord[]) => void;
+  upsertMarker: (marker: MarkerRecord) => void;
+  removeMarker: (id: string) => void;
+  setZones: (zones: ZoneRecord[]) => void;
+  upsertZone: (zone: ZoneRecord) => void;
+  removeZone: (id: string) => void;
+  setRoutes: (routes: RouteRecord[]) => void;
+  upsertRoute: (route: RouteRecord) => void;
+  removeRoute: (id: string) => void;
+  setSelectedMapObject: (obj: WorldPlanningStore['selectedMapObject']) => void;
+  setDrawingMode: (mode: WorldPlanningStore['drawingMode']) => void;
+}
+
+function upsertById<T extends { id: string }>(list: T[], item: T): T[] {
+  const idx = list.findIndex((i) => i.id === item.id);
+  if (idx >= 0) {
+    const next = [...list];
+    next[idx] = item;
+    return next;
+  }
+  return [...list, item];
+}
+
+function removeById<T extends { id: string }>(list: T[], id: string): T[] {
+  return list.filter((i) => i.id !== id);
+}
+
+export const useWorldStore = create<WorldPlanningStore>((set) => ({
+  markers: [],
+  zones: [],
+  routes: [],
+  selectedMapObject: null,
+  drawingMode: null,
+
+  setMarkers: (markers) => set({ markers }),
+  upsertMarker: (marker) => set((s) => ({ markers: upsertById(s.markers, marker) })),
+  removeMarker: (id) => set((s) => ({ markers: removeById(s.markers, id) })),
+
+  setZones: (zones) => set({ zones }),
+  upsertZone: (zone) => set((s) => ({ zones: upsertById(s.zones, zone) })),
+  removeZone: (id) => set((s) => ({ zones: removeById(s.zones, id) })),
+
+  setRoutes: (routes) => set({ routes }),
+  upsertRoute: (route) => set((s) => ({ routes: upsertById(s.routes, route) })),
+  removeRoute: (id) => set((s) => ({ routes: removeById(s.routes, id) })),
+
+  setSelectedMapObject: (obj) => set({ selectedMapObject: obj }),
+  setDrawingMode: (mode) => set({ drawingMode: mode }),
+}));
+
+/* ─── Fleet Store ─── */
+
+interface FleetStore {
+  squads: SquadRecord[];
+  setSquads: (squads: SquadRecord[]) => void;
+  upsertSquad: (squad: SquadRecord) => void;
+  removeSquad: (id: string) => void;
+}
+
+export const useFleetStore = create<FleetStore>((set) => ({
+  squads: [],
+  setSquads: (squads) => set({ squads }),
+  upsertSquad: (squad) => set((s) => ({ squads: upsertById(s.squads, squad) })),
+  removeSquad: (id) => set((s) => ({ squads: removeById(s.squads, id) })),
+}));
+
+/* ─── Role Store ─── */
+
+interface RoleStore {
+  assignments: RoleAssignmentRecord[];
+  setAssignments: (assignments: RoleAssignmentRecord[]) => void;
+  upsertAssignment: (assignment: RoleAssignmentRecord) => void;
+  removeAssignment: (id: string) => void;
+}
+
+export const useRoleStore = create<RoleStore>((set) => ({
+  assignments: [],
+  setAssignments: (assignments) => set({ assignments }),
+  upsertAssignment: (assignment) =>
+    set((s) => ({ assignments: upsertById(s.assignments, assignment) })),
+  removeAssignment: (id) =>
+    set((s) => ({ assignments: removeById(s.assignments, id) })),
 }));

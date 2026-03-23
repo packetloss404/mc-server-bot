@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useWorldStore, useFleetStore, useRoleStore } from '@/lib/store';
 import { api } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
@@ -18,6 +18,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+
+    // World planning, fleet, and role initial fetches
+    api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {});
+    api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {});
+    api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {});
+    api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
+    api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
 
     // Poll bots every 5s as a fallback
     const pollInterval = setInterval(() => {
@@ -86,6 +93,30 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
+    // World planning events
+    socket.on('marker:created', (data: any) => {
+      useWorldStore.getState().upsertMarker(data);
+    });
+    socket.on('marker:updated', (data: any) => {
+      useWorldStore.getState().upsertMarker(data);
+    });
+    socket.on('zone:updated', (data: any) => {
+      useWorldStore.getState().upsertZone(data);
+    });
+    socket.on('route:updated', (data: any) => {
+      useWorldStore.getState().upsertRoute(data);
+    });
+
+    // Fleet events
+    socket.on('squad:updated', () => {
+      api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
+    });
+
+    // Role events
+    socket.on('role:updated', () => {
+      api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
+    });
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -103,6 +134,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
+      socket.off('marker:created');
+      socket.off('marker:updated');
+      socket.off('zone:updated');
+      socket.off('route:updated');
+      socket.off('squad:updated');
+      socket.off('role:updated');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

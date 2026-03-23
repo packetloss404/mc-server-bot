@@ -133,6 +133,57 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// World planning types
+export interface MarkerRecord {
+  id: string;
+  name: string;
+  position: { x: number; y: number; z: number };
+  icon?: string;
+  color?: string;
+  createdBy?: string;
+  createdAt?: number;
+}
+
+export interface ZoneRecord {
+  id: string;
+  name: string;
+  vertices: { x: number; z: number }[];
+  yMin: number;
+  yMax: number;
+  color?: string;
+  type?: string;
+  createdBy?: string;
+  createdAt?: number;
+}
+
+export interface RouteRecord {
+  id: string;
+  name: string;
+  waypoints: { x: number; y: number; z: number }[];
+  color?: string;
+  createdBy?: string;
+  createdAt?: number;
+}
+
+// Fleet types
+export interface SquadRecord {
+  id: string;
+  name: string;
+  members: string[];
+  leader?: string;
+  task?: string;
+  createdAt?: number;
+}
+
+// Role types
+export interface RoleAssignmentRecord {
+  id: string;
+  botName: string;
+  role: string;
+  assignedBy?: string;
+  assignedAt?: number;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +255,15 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // World planning
+  getMarkers: () => fetchJSON<{ markers: MarkerRecord[] }>('/api/markers'),
+  getZones: () => fetchJSON<{ zones: ZoneRecord[] }>('/api/zones'),
+  getRoutes: () => fetchJSON<{ routes: RouteRecord[] }>('/api/routes'),
+
+  // Fleet
+  getSquads: () => fetchJSON<{ squads: SquadRecord[] }>('/api/squads'),
+
+  // Roles
+  getRoleAssignments: () => fetchJSON<{ assignments: RoleAssignmentRecord[] }>('/api/roles'),
 };

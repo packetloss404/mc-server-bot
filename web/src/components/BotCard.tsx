@@ -3,7 +3,19 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import type { BotLiveData } from '@/lib/store';
+import { useRoleStore } from '@/lib/store';
 import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
+
+const ROLE_COLORS: Record<string, string> = {
+  guard: '#EF4444',
+  builder: '#3B82F6',
+  hauler: '#F59E0B',
+  farmer: '#10B981',
+  miner: '#6B7280',
+  scout: '#8B5CF6',
+  merchant: '#EC4899',
+  'free-agent': '#6B7280',
+};
 
 function HealthBar({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
@@ -30,6 +42,8 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
   const stateLabel = STATE_LABELS[bot.state] ?? bot.state;
   const isActive = !['IDLE', 'DISCONNECTED', 'SPAWNING'].includes(bot.state);
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
+  const roleAssignment = useRoleStore((s) => s.assignments.find((a) => a.botName === bot.name));
+  const roleColor = roleAssignment ? (ROLE_COLORS[roleAssignment.role] ?? '#6B7280') : null;
 
   return (
     <motion.div
@@ -58,7 +72,17 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
                 {emoji}
               </div>
               <div className="min-w-0">
-                <h3 className="text-sm font-semibold text-white truncate">{bot.name}</h3>
+                <div className="flex items-center gap-1.5">
+                  <h3 className="text-sm font-semibold text-white truncate">{bot.name}</h3>
+                  {roleAssignment && roleColor && (
+                    <span
+                      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
+                      style={{ color: roleColor, backgroundColor: `${roleColor}15` }}
+                    >
+                      {roleAssignment.role}
+                    </span>
+                  )}
+                </div>
                 <p className="text-[11px] text-zinc-500 capitalize">{bot.personality}</p>
               </div>
             </div>

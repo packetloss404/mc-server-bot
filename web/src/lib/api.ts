@@ -133,6 +133,146 @@ export interface TerrainData {
   blocks: string[];
 }
 
+export interface SchematicInfo {
+  filename: string;
+  size: { x: number; y: number; z: number };
+  blockCount: number;
+}
+
+export interface BotAssignment {
+  botName: string;
+  yMin: number;
+  yMax: number;
+  status: 'waiting' | 'building' | 'completed' | 'failed';
+  blocksTotal: number;
+  blocksPlaced: number;
+  currentY: number;
+}
+
+export interface BuildJob {
+  id: string;
+  schematicFile: string;
+  origin: { x: number; y: number; z: number };
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  createdAt: number;
+  totalBlocks: number;
+  placedBlocks: number;
+  assignments: BotAssignment[];
+}
+
+export interface ChestLocation { x: number; y: number; z: number; label: string; }
+
+export interface ChainStage {
+  id: string;
+  botName: string;
+  task: string;
+  inputChest?: ChestLocation;
+  outputChest?: ChestLocation;
+  inputItems?: { item: string; count: number }[];
+  outputItems?: { item: string; count: number }[];
+  status: 'pending' | 'queued' | 'running' | 'completed' | 'failed';
+  startedAt?: number;
+  completedAt?: number;
+  retries: number;
+  error?: string;
+}
+
+export interface SupplyChain {
+  id: string;
+  name: string;
+  description?: string;
+  stages: ChainStage[];
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  currentStageIndex: number;
+  loop: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ChainTemplate {
+  id: string;
+  name: string;
+  description: string;
+  stages: { task: string; inputItems?: { item: string; count: number }[]; outputItems?: { item: string; count: number }[] }[];
+}
+
+// ═══════════════════════════════════════
+//  CONTROL PLATFORM TYPES
+// ═══════════════════════════════════════
+
+export type CommandType =
+  | 'pause_voyager' | 'resume_voyager' | 'stop_movement' | 'follow_player'
+  | 'walk_to_coords' | 'move_to_marker' | 'return_to_base' | 'regroup'
+  | 'guard_zone' | 'patrol_route' | 'deposit_inventory' | 'equip_best' | 'unstuck';
+
+export type CommandStatus = 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled';
+export type MissionStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface CommandRecord {
+  id: string;
+  type: CommandType;
+  scope: 'bot' | 'squad' | 'selection';
+  targets: string[];
+  payload: Record<string, unknown>;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  source: string;
+  requestedBy?: string;
+  status: CommandStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: Record<string, unknown>;
+  error?: { code: string; message: string; retryable?: boolean };
+}
+
+export interface MissionRecord {
+  id: string;
+  type: string;
+  title: string;
+  description?: string;
+  assigneeType: 'bot' | 'squad';
+  assigneeIds: string[];
+  status: MissionStatus;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  steps: MissionStep[];
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  blockedReason?: string;
+  linkedCommandIds?: string[];
+  source: string;
+}
+
+export interface MissionStep {
+  id: string;
+  type: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  payload: Record<string, unknown>;
+  error?: string;
+}
+
+export interface SquadRecord {
+  id: string;
+  name: string;
+  botNames: string[];
+  defaultRole?: string;
+  homeMarkerId?: string;
+  activeMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoleAssignmentRecord {
+  id: string;
+  botName: string;
+  role: string;
+  autonomyLevel: 'manual' | 'assisted' | 'autonomous';
+  homeMarkerId?: string;
+  allowedZoneIds: string[];
+  preferredMissionTypes: string[];
+}
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +344,49 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Schematics & Builds
+  getSchematics: () => fetchJSON<{ schematics: SchematicInfo[] }>('/api/schematics'),
+  getBuilds: () => fetchJSON<{ builds: BuildJob[] }>('/api/builds'),
+  getBuild: (id: string) => fetchJSON<{ build: BuildJob }>(`/api/builds/${id}`),
+  startBuild: (schematicFile: string, origin: { x: number; y: number; z: number }, botNames: string[]) =>
+    fetchJSON<{ success: boolean; build: BuildJob }>('/api/builds', {
+      method: 'POST',
+      body: JSON.stringify({ schematicFile, origin, botNames }),
+    }),
+  cancelBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/cancel`, { method: 'POST' }),
+  pauseBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/pause`, { method: 'POST' }),
+  resumeBuild: (id: string) => fetchJSON<{ success: boolean }>(`/api/builds/${id}/resume`, { method: 'POST' }),
+
+  // Supply Chains
+  getChainTemplates: () => fetchJSON<{ templates: ChainTemplate[] }>('/api/chain-templates'),
+  getChains: () => fetchJSON<{ chains: SupplyChain[] }>('/api/chains'),
+  getChain: (id: string) => fetchJSON<{ chain: SupplyChain }>(`/api/chains/${id}`),
+  createChain: (data: any) => fetchJSON<{ success: boolean; chain: SupplyChain }>('/api/chains', { method: 'POST', body: JSON.stringify(data) }),
+  deleteChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}`, { method: 'DELETE' }),
+  startChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/start`, { method: 'POST' }),
+  pauseChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/pause`, { method: 'POST' }),
+  cancelChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/cancel`, { method: 'POST' }),
+
+  // Missions
+  createMission: (data: { type: string; title: string; assigneeType: 'bot' | 'squad'; assigneeIds: string[]; priority?: string; steps?: any[]; source?: string; description?: string }) =>
+    fetchJSON<{ mission: MissionRecord }>('/api/missions', { method: 'POST', body: JSON.stringify(data) }),
+  getMissions: (params?: { bot?: string; squad?: string; status?: string; limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.bot) query.set('bot', params.bot);
+    if (params?.squad) query.set('squad', params.squad);
+    if (params?.status) query.set('status', params.status);
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? '?' + qs : ''}`);
+  },
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+  cancelMission: (id: string) => fetchJSON<{ success: boolean }>(`/api/missions/${id}/cancel`, { method: 'POST' }),
+
+  // Roles
+  getRoleAssignments: () => fetchJSON<{ assignments: RoleAssignmentRecord[] }>('/api/roles'),
+
+  // Commands
+  createCommand: (data: { type: CommandType; scope: 'bot' | 'squad' | 'selection'; targets: string[]; payload?: Record<string, unknown>; priority?: string; source?: string }) =>
+    fetchJSON<{ command: CommandRecord }>('/api/commands', { method: 'POST', body: JSON.stringify(data) }),
 };

@@ -860,6 +860,25 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
+  // Override endpoints
+  app.get('/api/roles', (_req: Request, res: Response) => {
+    res.json({ assignments: roleManager.getAssignments(), overrides: roleManager.getOverrides?.() ?? [] });
+  });
+  app.get('/api/bots/:name/override', (req: Request, res: Response) => {
+    const override = roleManager.getOverride?.(req.params.name as string);
+    res.json({ override: override || null });
+  });
+  app.delete('/api/bots/:name/override', (req: Request, res: Response) => {
+    roleManager.clearOverride?.(req.params.name as string);
+    res.json({ success: true });
+  });
+
+  // Wire role manager to command center for auto-override
+  if ('setRoleManager' in commandCenter) (commandCenter as any).setRoleManager(roleManager);
+
+  // Check override timeouts periodically
+  setInterval(() => roleManager.checkOverrideTimeouts?.(), 60000);
+
   // ═══════════════════════════════════════
   //  CONTROL PLATFORM - COMMANDER ENDPOINTS
   // ═══════════════════════════════════════

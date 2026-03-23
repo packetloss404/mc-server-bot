@@ -16,6 +16,17 @@ import { logger } from '../util/logger';
 import * as fs from 'fs';
 import * as path from 'path';
 
+export interface CommandMetrics {
+  totalCreated: number;
+  totalSucceeded: number;
+  totalFailed: number;
+  totalCancelled: number;
+  totalTimedOut: number;
+  averageDurationMs: number;
+  byType: Record<string, { count: number; succeeded: number; failed: number; avgDurationMs: number }>;
+  byBot: Record<string, { count: number; succeeded: number; failed: number }>;
+}
+
 export interface CreateCommandParams {
   type: CommandType;
   scope?: CommandScope;
@@ -35,13 +46,6 @@ interface CommandFilters {
 
 const DATA_PATH = path.join(process.cwd(), 'data', 'commands.json');
 const MAX_PERSISTED = 500;
-<<<<<<< HEAD
-/** Max age for commands before cleanup removes them (24 hours) */
-const MAX_AGE_MS = 24 * 60 * 60 * 1000;
-/** Debounce interval for batching persistence writes (ms) */
-const DEBOUNCE_MS = 1_000;
-=======
->>>>>>> worktree-agent-ad58abab
 
 /** Command types that involve pathfinder-based movement */
 const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
@@ -64,97 +68,23 @@ export class CommandCenter {
   private io: SocketIOServer;
   private markerStore: MarkerStore | null;
   private timeoutTimer: ReturnType<typeof setInterval> | null = null;
-<<<<<<< HEAD
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
-  private saveDirty = false;
-=======
->>>>>>> worktree-agent-ad58abab
 
   constructor(botManager: BotManager, io: SocketIOServer, markerStore?: MarkerStore) {
     this.botManager = botManager;
     this.io = io;
     this.markerStore = markerStore ?? null;
     this.loadFromDisk();
-<<<<<<< HEAD
-    this.cleanup();
-=======
->>>>>>> worktree-agent-ad58abab
     this.startTimeoutChecker();
   }
 
   // ── Cleanup ─────────────────────────────────────────────
 
-<<<<<<< HEAD
-  /** Remove commands older than 24 hours and cap history at 500 */
-  cleanup(): void {
-    const now = Date.now();
-    let removed = 0;
-
-    for (const [id, cmd] of this.commands) {
-      const age = now - new Date(cmd.createdAt).getTime();
-      if (age > MAX_AGE_MS) {
-        this.commands.delete(id);
-        removed++;
-      }
-    }
-
-    // Cap at MAX_PERSISTED (keep newest)
-    if (this.commands.size > MAX_PERSISTED) {
-      const sorted = [...this.commands.entries()]
-        .sort((a, b) => b[1].createdAt.localeCompare(a[1].createdAt));
-      const toRemove = sorted.slice(MAX_PERSISTED);
-      for (const [id] of toRemove) {
-        this.commands.delete(id);
-        removed++;
-      }
-    }
-
-    if (removed > 0) {
-      logger.info({ removed, remaining: this.commands.size }, 'Command history cleaned up');
-      this.persistImmediate();
-    }
-  }
-
-=======
->>>>>>> worktree-agent-ad58abab
   /** Stop the timeout checker interval (call on shutdown) */
   destroy(): void {
     if (this.timeoutTimer) {
       clearInterval(this.timeoutTimer);
       this.timeoutTimer = null;
     }
-<<<<<<< HEAD
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-  }
-
-  /** Graceful shutdown: cancel active commands, save, clear timers */
-  shutdown(): void {
-    // Cancel all active (started) commands
-    for (const command of this.commands.values()) {
-      if (command.status === 'started' || command.status === 'queued') {
-        if (command.status === 'started' && MOVEMENT_COMMAND_TYPES.has(command.type)) {
-          this.stopPathfinderForTargets(command.targets);
-        }
-        command.error = { code: 'CANCELLED', message: 'server shutdown' };
-        command.status = 'cancelled';
-        command.completedAt = new Date().toISOString();
-        logger.info(
-          { commandId: command.id, botName: command.targets[0], type: command.type, status: 'cancelled', source: command.source },
-          'Command cancelled on shutdown',
-        );
-      }
-    }
-
-    // Immediate save
-    this.persistImmediate();
-
-    // Clear all timers
-    this.destroy();
-=======
->>>>>>> worktree-agent-ad58abab
   }
 
   // ── ID generation ──────────────────────────────────────────
@@ -262,6 +192,113 @@ export class CommandCenter {
     return this.commands.get(id);
   }
 
+  getMetrics(): CommandMetrics {
+    const all = [...this.commands.values()];
+
+    const totalCreated = all.length;
+    let totalSucceeded = 0;
+    let totalFailed = 0;
+    let totalCancelled = 0;
+    let totalTimedOut = 0;
+    let totalDurationMs = 0;
+    let durationCount = 0;
+
+    const byType: Record<string, { count: number; succeeded: number; failed: number; totalDurationMs: number; durationCount: number }> = {};
+    const byBot: Record<string, { count: number; succeeded: number; failed: number }> = {};
+
+    for (const cmd of all) {
+      // Per-status counters
+      if (cmd.status === 'succeeded') totalSucceeded++;
+      else if (cmd.status === 'failed') {
+        totalFailed++;
+        if (cmd.error?.code === 'TIMEOUT') totalTimedOut++;
+      }
+      else if (cmd.status === 'cancelled') totalCancelled++;
+
+      // Duration
+      const duration = this.computeDurationMs(cmd);
+      if (duration !== undefined) {
+        totalDurationMs += duration;
+        durationCount++;
+      }
+
+      // By type
+      if (!byType[cmd.type]) {
+        byType[cmd.type] = { count: 0, succeeded: 0, failed: 0, totalDurationMs: 0, durationCount: 0 };
+      }
+      const t = byType[cmd.type];
+      t.count++;
+      if (cmd.status === 'succeeded') t.succeeded++;
+      else if (cmd.status === 'failed') t.failed++;
+      if (duration !== undefined) {
+        t.totalDurationMs += duration;
+        t.durationCount++;
+      }
+
+      // By bot (first target)
+      const botName = cmd.targets[0];
+      if (botName) {
+        if (!byBot[botName]) {
+          byBot[botName] = { count: 0, succeeded: 0, failed: 0 };
+        }
+        const b = byBot[botName];
+        b.count++;
+        if (cmd.status === 'succeeded') b.succeeded++;
+        else if (cmd.status === 'failed') b.failed++;
+      }
+    }
+
+    // Build final byType with avgDurationMs
+    const byTypeFinal: CommandMetrics['byType'] = {};
+    for (const [type, data] of Object.entries(byType)) {
+      byTypeFinal[type] = {
+        count: data.count,
+        succeeded: data.succeeded,
+        failed: data.failed,
+        avgDurationMs: data.durationCount > 0 ? Math.round(data.totalDurationMs / data.durationCount) : 0,
+      };
+    }
+
+    return {
+      totalCreated,
+      totalSucceeded,
+      totalFailed,
+      totalCancelled,
+      totalTimedOut,
+      averageDurationMs: durationCount > 0 ? Math.round(totalDurationMs / durationCount) : 0,
+      byType: byTypeFinal,
+      byBot,
+    };
+  }
+
+  private computeDurationMs(cmd: CommandRecord): number | undefined {
+    if (cmd.startedAt && cmd.completedAt) {
+      return new Date(cmd.completedAt).getTime() - new Date(cmd.startedAt).getTime();
+    }
+    return undefined;
+  }
+
+  /** Return count of commands in a given status */
+  getCountByStatus(status: CommandStatus): number {
+    let count = 0;
+    for (const cmd of this.commands.values()) {
+      if (cmd.status === status) count++;
+    }
+    return count;
+  }
+
+  /** Return count of commands that failed within the last N milliseconds */
+  getRecentFailedCount(withinMs: number): number {
+    const cutoff = new Date(Date.now() - withinMs).toISOString();
+    let count = 0;
+    for (const cmd of this.commands.values()) {
+      if (cmd.status === 'failed' && cmd.completedAt && cmd.completedAt >= cutoff) {
+        count++;
+      }
+    }
+    return count;
+  }
+
   cancelCommand(id: string, reason?: string): CommandRecord | undefined {
     const command = this.commands.get(id);
     if (!command) return undefined;
@@ -338,7 +375,7 @@ export class CommandCenter {
           logger.debug({ botName }, 'Pathfinder stopped for cancelled/timed-out command');
         }
       } catch (err: any) {
-        logger.warn({ botName, err: err?.message }, 'Failed to stop pathfinder');
+        logger.warn({ err, botName }, 'Failed to stop pathfinder');
       }
     }
   }
@@ -721,7 +758,7 @@ export class CommandCenter {
 
     // bot.bot.equip returns a promise but we fire-and-forget since the caller awaits executeHandler
     bot.bot.equip(bestItem, 'hand').catch((err: any) => {
-      logger.warn({ botName: bot.name, err: err?.message }, 'Failed to equip item');
+      logger.warn({ err, botName: bot.name }, 'Failed to equip item');
     });
 
     logger.info({ botName: bot.name, item: bestItem.name }, 'Equipping best item via command');
@@ -755,11 +792,7 @@ export class CommandCenter {
 
   // ── Status lifecycle ───────────────────────────────────────
 
-<<<<<<< HEAD
-  /** Structured logging for every lifecycle transition */
-=======
   /** Task 6: Structured logging for every lifecycle transition */
->>>>>>> worktree-agent-ad58abab
   private logLifecycle(command: CommandRecord, message: string): void {
     const durationMs = command.startedAt && command.completedAt
       ? new Date(command.completedAt).getTime() - new Date(command.startedAt).getTime()
@@ -767,22 +800,6 @@ export class CommandCenter {
         ? Date.now() - new Date(command.startedAt).getTime()
         : undefined;
 
-<<<<<<< HEAD
-    const fields: Record<string, unknown> = {
-      commandId: command.id,
-      botName: command.targets[0],
-      type: command.type,
-      status: command.status,
-      source: command.source,
-    };
-    if (durationMs !== undefined) fields.durationMs = durationMs;
-
-    if (command.status === 'failed' || command.status === 'cancelled') {
-      logger.warn(fields, message);
-    } else {
-      logger.info(fields, message);
-    }
-=======
     logger.info(
       {
         commandId: command.id,
@@ -793,7 +810,6 @@ export class CommandCenter {
       },
       message,
     );
->>>>>>> worktree-agent-ad58abab
   }
 
   private updateStatus(command: CommandRecord, status: CommandStatus): void {
@@ -835,25 +851,7 @@ export class CommandCenter {
 
   // ── Persistence ────────────────────────────────────────────
 
-<<<<<<< HEAD
-  /** Schedule a debounced save (batches writes within DEBOUNCE_MS) */
   private persist(): void {
-    this.saveDirty = true;
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      if (this.saveDirty) {
-        this.persistImmediate();
-      }
-    }, DEBOUNCE_MS);
-  }
-
-  /** Write to disk immediately (called on shutdown and cleanup) */
-  private persistImmediate(): void {
-    this.saveDirty = false;
-=======
-  private persist(): void {
->>>>>>> worktree-agent-ad58abab
     try {
       // Keep only the most recent commands
       const all = [...this.commands.values()]
@@ -878,26 +876,13 @@ export class CommandCenter {
       const raw = fs.readFileSync(DATA_PATH, 'utf-8');
       const data = JSON.parse(raw) as { commands: CommandRecord[] };
 
-<<<<<<< HEAD
-      if (!Array.isArray(data?.commands)) {
-        logger.warn('Commands file is corrupt (missing commands array), starting fresh');
-        return;
-      }
-
-=======
->>>>>>> worktree-agent-ad58abab
       for (const cmd of data.commands) {
         this.commands.set(cmd.id, cmd);
       }
 
       logger.info({ count: data.commands.length }, 'Loaded persisted commands');
     } catch (err) {
-<<<<<<< HEAD
-      logger.warn({ err }, 'Failed to load persisted commands, starting fresh');
-      this.commands.clear();
-=======
       logger.error({ err }, 'Failed to load persisted commands');
->>>>>>> worktree-agent-ad58abab
     }
   }
 }

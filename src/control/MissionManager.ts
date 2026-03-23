@@ -15,18 +15,18 @@ import {
   MISSION_EVENTS,
 } from './MissionTypes';
 
-<<<<<<< HEAD
-const DATA_DIR = path.join(process.cwd(), 'data');
-const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
-const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
-const MAX_MISSIONS = 200;
-const MAX_AGE_MS = 24 * 60 * 60 * 1000; // 24 hours
-const DEBOUNCE_MS = 1_000;
-=======
 const DATA_DIR = './data';
 const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
->>>>>>> worktree-agent-ad58abab
+
+export interface MissionMetrics {
+  totalCreated: number;
+  totalCompleted: number;
+  totalFailed: number;
+  totalCancelled: number;
+  byType: Record<string, { count: number; completed: number; failed: number }>;
+  byBot: Record<string, { count: number; completed: number; failed: number }>;
+}
 
 export interface CreateMissionParams {
   type: MissionType;
@@ -57,20 +57,11 @@ export class MissionManager {
   private commandCenter?: CommandCenter;
   /** Tracks which task description was queued for a running mission (missionId → description) */
   private missionTaskDescriptions: Map<string, string> = new Map();
-<<<<<<< HEAD
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
-  private saveDirty = false;
-=======
->>>>>>> worktree-agent-ad58abab
 
   constructor(botManager: BotManager, io: SocketIOServer) {
     this.botManager = botManager;
     this.io = io;
     this.load();
-<<<<<<< HEAD
-    this.cleanup();
-=======
->>>>>>> worktree-agent-ad58abab
   }
 
   // ── Coordinator adapters ────────────────────────────
@@ -87,68 +78,6 @@ export class MissionManager {
     this.commandCenter = cc;
   }
 
-<<<<<<< HEAD
-  // ── Cleanup & Shutdown ──────────────────────────────
-
-  /** Remove completed/failed missions older than 24 hours and cap at 200 */
-  cleanup(): void {
-    const now = Date.now();
-    let removed = 0;
-    const terminalStatuses: MissionStatus[] = ['completed', 'failed', 'cancelled'];
-
-    for (const [id, mission] of this.missions) {
-      if (terminalStatuses.includes(mission.status)) {
-        const age = now - mission.createdAt;
-        if (age > MAX_AGE_MS) {
-          this.missions.delete(id);
-          removed++;
-        }
-      }
-    }
-
-    // Cap at MAX_MISSIONS (keep newest)
-    if (this.missions.size > MAX_MISSIONS) {
-      const sorted = [...this.missions.entries()]
-        .sort((a, b) => b[1].createdAt - a[1].createdAt);
-      const toRemove = sorted.slice(MAX_MISSIONS);
-      for (const [id] of toRemove) {
-        this.missions.delete(id);
-        removed++;
-      }
-    }
-
-    if (removed > 0) {
-      logger.info({ removed, remaining: this.missions.size }, 'Mission history cleaned up');
-      this.saveImmediate();
-    }
-  }
-
-  /** Graceful shutdown: cancel active missions, save, clear timers */
-  shutdown(): void {
-    for (const mission of this.missions.values()) {
-      if (mission.status === 'running' || mission.status === 'queued') {
-        mission.status = 'cancelled';
-        mission.completedAt = Date.now();
-        mission.updatedAt = Date.now();
-        mission.blockedReason = 'server shutdown';
-        this.missionTaskDescriptions.delete(mission.id);
-        logger.info(
-          { missionId: mission.id, botName: mission.assigneeIds[0], type: mission.type, status: 'cancelled', source: mission.source },
-          'Mission cancelled on shutdown',
-        );
-      }
-    }
-
-    this.saveImmediate();
-
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-  }
-
-=======
->>>>>>> worktree-agent-ad58abab
   // ── ID generation ──────────────────────────────────
 
   private generateId(): string {
@@ -186,14 +115,7 @@ export class MissionManager {
 
     this.save();
     this.io.emit(MISSION_EVENTS.CREATED, mission);
-<<<<<<< HEAD
-    logger.info(
-      { missionId: mission.id, botName: mission.assigneeIds[0], type: mission.type, status: mission.status, source: mission.source },
-      'Mission created',
-    );
-=======
     logger.info({ missionId: mission.id, title: mission.title, assignees: mission.assigneeIds }, 'Mission created');
->>>>>>> worktree-agent-ad58abab
     return mission;
   }
 
@@ -225,6 +147,73 @@ export class MissionManager {
 
   getMission(id: string): MissionRecord | undefined {
     return this.missions.get(id);
+  }
+
+  getMetrics(): MissionMetrics {
+    const all = [...this.missions.values()];
+
+    let totalCompleted = 0;
+    let totalFailed = 0;
+    let totalCancelled = 0;
+
+    const byType: Record<string, { count: number; completed: number; failed: number }> = {};
+    const byBot: Record<string, { count: number; completed: number; failed: number }> = {};
+
+    for (const m of all) {
+      if (m.status === 'completed') totalCompleted++;
+      else if (m.status === 'failed') totalFailed++;
+      else if (m.status === 'cancelled') totalCancelled++;
+
+      // By type
+      if (!byType[m.type]) {
+        byType[m.type] = { count: 0, completed: 0, failed: 0 };
+      }
+      const t = byType[m.type];
+      t.count++;
+      if (m.status === 'completed') t.completed++;
+      else if (m.status === 'failed') t.failed++;
+
+      // By bot
+      for (const botName of m.assigneeIds) {
+        if (!byBot[botName]) {
+          byBot[botName] = { count: 0, completed: 0, failed: 0 };
+        }
+        const b = byBot[botName];
+        b.count++;
+        if (m.status === 'completed') b.completed++;
+        else if (m.status === 'failed') b.failed++;
+      }
+    }
+
+    return {
+      totalCreated: all.length,
+      totalCompleted,
+      totalFailed,
+      totalCancelled,
+      byType,
+      byBot,
+    };
+  }
+
+  /** Count missions currently in 'running' status */
+  getRunningCount(): number {
+    let count = 0;
+    for (const m of this.missions.values()) {
+      if (m.status === 'running') count++;
+    }
+    return count;
+  }
+
+  /** Count missions flagged as stale */
+  getStaleCount(): number {
+    const now = Date.now();
+    let count = 0;
+    for (const m of this.missions.values()) {
+      if (m.status === 'running' && m.startedAt && now - m.startedAt > STALE_THRESHOLD_MS) {
+        count++;
+      }
+    }
+    return count;
   }
 
   // ── Status transitions ─────────────────────────────
@@ -267,34 +256,10 @@ export class MissionManager {
     }
     this.io.emit(MISSION_EVENTS.UPDATED, mission);
 
-<<<<<<< HEAD
-    const durationMs = mission.startedAt && mission.completedAt
-      ? mission.completedAt - mission.startedAt
-      : mission.startedAt
-        ? Date.now() - mission.startedAt
-        : undefined;
-
-    const fields: Record<string, unknown> = {
-      missionId: id,
-      botName: mission.assigneeIds[0],
-      type: mission.type,
-      status: newStatus,
-      source: mission.source,
-    };
-    if (durationMs !== undefined) fields.durationMs = durationMs;
-    if (metadata?.reason) fields.reason = metadata.reason;
-
-    if (newStatus === 'failed' || newStatus === 'cancelled') {
-      logger.warn(fields, 'Mission status updated');
-    } else {
-      logger.info(fields, 'Mission status updated');
-    }
-=======
     logger.info(
       { missionId: id, oldStatus, newStatus, reason: metadata?.reason },
       'Mission status updated'
     );
->>>>>>> worktree-agent-ad58abab
     return mission;
   }
 
@@ -490,8 +455,8 @@ export class MissionManager {
           this.save();
           this.io.emit(MISSION_EVENTS.UPDATED, mission);
           logger.warn(
-            { missionId: mission.id, runningSinceMs: now - mission.startedAt },
-            'Mission flagged as stale'
+            { missionId: mission.id, botName: mission.assigneeIds[0], reason: 'Running for over 30 minutes', runningSinceMs: now - mission.startedAt },
+            'Mission stale'
           );
         }
       }
@@ -571,7 +536,7 @@ export class MissionManager {
       logger.info({ missionId: mission.id, buildJobId: job.id }, 'Build mission started');
       return this.updateMissionStatus(mission.id, 'running');
     } catch (err: any) {
-      logger.error({ missionId: mission.id, err: err.message }, 'Failed to start build mission');
+      logger.error({ err, missionId: mission.id }, 'Failed to start build mission');
       return this.updateMissionStatus(mission.id, 'failed', { error: err.message });
     }
   }
@@ -680,50 +645,6 @@ export class MissionManager {
 
   private load(): void {
     try {
-<<<<<<< HEAD
-      if (!fs.existsSync(MISSIONS_FILE)) return;
-
-      const raw = fs.readFileSync(MISSIONS_FILE, 'utf-8');
-      const data = JSON.parse(raw) as {
-        missions: MissionRecord[];
-        botQueues: Record<string, string[]>;
-      };
-
-      if (!Array.isArray(data?.missions)) {
-        logger.warn('Missions file is corrupt (missing missions array), starting fresh');
-        return;
-      }
-
-      for (const m of data.missions) {
-        this.missions.set(m.id, m);
-      }
-      for (const [botName, ids] of Object.entries(data.botQueues ?? {})) {
-        this.botMissionQueues.set(botName, ids);
-      }
-      logger.info({ count: this.missions.size }, 'Loaded missions from disk');
-    } catch (err: any) {
-      logger.warn({ err: err?.message }, 'Failed to load missions file, starting fresh');
-      this.missions.clear();
-      this.botMissionQueues.clear();
-    }
-  }
-
-  /** Schedule a debounced save */
-  private save(): void {
-    this.saveDirty = true;
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      if (this.saveDirty) {
-        this.saveImmediate();
-      }
-    }, DEBOUNCE_MS);
-  }
-
-  /** Write to disk immediately (called on shutdown and cleanup) */
-  private saveImmediate(): void {
-    this.saveDirty = false;
-=======
       if (fs.existsSync(MISSIONS_FILE)) {
         const raw = fs.readFileSync(MISSIONS_FILE, 'utf-8');
         const data = JSON.parse(raw) as {
@@ -740,12 +661,11 @@ export class MissionManager {
         logger.info({ count: this.missions.size }, 'Loaded missions from disk');
       }
     } catch (err: any) {
-      logger.warn({ err: err.message }, 'Failed to load missions file, starting fresh');
+      logger.warn({ err }, 'Failed to load missions file, starting fresh');
     }
   }
 
   private save(): void {
->>>>>>> worktree-agent-ad58abab
     try {
       if (!fs.existsSync(DATA_DIR)) {
         fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -757,11 +677,7 @@ export class MissionManager {
       };
       fs.writeFileSync(MISSIONS_FILE, JSON.stringify(data, null, 2), 'utf-8');
     } catch (err: any) {
-<<<<<<< HEAD
-      logger.error({ err: err?.message }, 'Failed to save missions file');
-=======
-      logger.error({ err: err.message }, 'Failed to save missions file');
->>>>>>> worktree-agent-ad58abab
+      logger.error({ err }, 'Failed to save missions file');
     }
   }
 }

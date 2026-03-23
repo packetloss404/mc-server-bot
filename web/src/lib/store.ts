@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState, BuildJob, SupplyChain } from './api';
+import type { BotStatus, BotEvent, WorldState, CommandRecord, MissionRecord } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -39,14 +39,6 @@ interface BotStore {
   removePlayer: (name: string) => void;
   incrementUnreadChats: () => void;
   resetUnreadChats: () => void;
-  activeBuild: BuildJob | null;
-  setActiveBuild: (build: BuildJob | null) => void;
-  updateBuildProgress: (buildId: string, botName: string, blocksPlaced: number, currentY: number) => void;
-  updateBuildBotStatus: (buildId: string, botName: string, status: string) => void;
-  chains: SupplyChain[];
-  setChains: (chains: SupplyChain[]) => void;
-  updateChainStage: (chainId: string, stageIndex: number, stage: any) => void;
-  updateChainStatus: (chainId: string, status: string) => void;
 }
 
 function toBotList(byId: Record<string, BotLiveData>): BotLiveData[] {
@@ -146,51 +138,107 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
 
-  activeBuild: null,
+// ---------------------------------------------------------------------------
+// Control Store – commands & bot selection
+// ---------------------------------------------------------------------------
 
-  setActiveBuild: (build) => set({ activeBuild: build }),
+interface ControlStore {
+  // Commands
+  commandsById: Record<string, CommandRecord>;
+  commandHistory: CommandRecord[];
+  pendingCommands: CommandRecord[];
 
-  updateBuildProgress: (buildId, botName, blocksPlaced, currentY) =>
+  // Selection
+  selectedBotIds: Set<string>;
+
+  // Actions
+  upsertCommand: (command: CommandRecord) => void;
+  addCommandToHistory: (command: CommandRecord) => void;
+  setSelectedBotIds: (ids: Set<string>) => void;
+  toggleBotSelection: (id: string) => void;
+  clearSelection: () => void;
+}
+
+export const useControlStore = create<ControlStore>((set) => ({
+  commandsById: {},
+  commandHistory: [],
+  pendingCommands: [],
+  selectedBotIds: new Set<string>(),
+
+  upsertCommand: (command) =>
     set((state) => {
-      if (!state.activeBuild || state.activeBuild.id !== buildId || !state.activeBuild.assignments) return {};
-      const assignments = state.activeBuild.assignments.map((a) =>
-        a.botName === botName ? { ...a, blocksPlaced, currentY } : a,
+      const updated = { ...state.commandsById, [command.id]: command };
+      const pending = Object.values(updated).filter(
+        (c) => c.status === 'queued' || c.status === 'started',
       );
-      const totalPlaced = assignments.reduce((sum, a) => sum + a.blocksPlaced, 0);
+      const history = Object.values(updated)
+        .filter((c) => c.status !== 'queued' && c.status !== 'started')
+        .sort((a, b) => (b.completedAt || b.createdAt) - (a.completedAt || a.createdAt))
+        .slice(0, 100);
+      return { commandsById: updated, pendingCommands: pending, commandHistory: history };
+    }),
+
+  addCommandToHistory: (command) =>
+    set((state) => ({
+      commandHistory: [command, ...state.commandHistory].slice(0, 100),
+    })),
+
+  setSelectedBotIds: (ids) => set({ selectedBotIds: ids }),
+
+  toggleBotSelection: (id) =>
+    set((state) => {
+      const next = new Set(state.selectedBotIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedBotIds: next };
+    }),
+
+  clearSelection: () => set({ selectedBotIds: new Set<string>() }),
+}));
+
+// ---------------------------------------------------------------------------
+// Mission Store
+// ---------------------------------------------------------------------------
+
+interface MissionStore {
+  missionsById: Record<string, MissionRecord>;
+  missionList: MissionRecord[];
+
+  upsertMission: (mission: MissionRecord) => void;
+  removeMission: (id: string) => void;
+  setMissions: (missions: MissionRecord[]) => void;
+}
+
+export const useMissionStore = create<MissionStore>((set) => ({
+  missionsById: {},
+  missionList: [],
+
+  upsertMission: (mission) =>
+    set((state) => {
+      const updated = { ...state.missionsById, [mission.id]: mission };
       return {
-        activeBuild: { ...state.activeBuild, assignments, placedBlocks: totalPlaced },
+        missionsById: updated,
+        missionList: Object.values(updated).sort((a, b) => b.updatedAt - a.updatedAt),
       };
     }),
 
-  updateBuildBotStatus: (buildId, botName, status) =>
+  removeMission: (id) =>
     set((state) => {
-      if (!state.activeBuild || state.activeBuild.id !== buildId || !state.activeBuild.assignments) return {};
-      const assignments = state.activeBuild.assignments.map((a) =>
-        a.botName === botName ? { ...a, status: status as any } : a,
-      );
+      const { [id]: _, ...rest } = state.missionsById;
       return {
-        activeBuild: { ...state.activeBuild, assignments },
+        missionsById: rest,
+        missionList: Object.values(rest).sort((a, b) => b.updatedAt - a.updatedAt),
       };
     }),
 
-  chains: [],
-
-  setChains: (chains) => set({ chains }),
-
-  updateChainStage: (chainId, stageIndex, stage) =>
-    set((state) => ({
-      chains: state.chains.map((c) =>
-        c.id === chainId
-          ? { ...c, stages: c.stages.map((s, i) => (i === stageIndex ? { ...s, ...stage } : s)), currentStageIndex: stageIndex }
-          : c,
-      ),
-    })),
-
-  updateChainStatus: (chainId, status) =>
-    set((state) => ({
-      chains: state.chains.map((c) =>
-        c.id === chainId ? { ...c, status: status as any } : c,
-      ),
-    })),
+  setMissions: (missions) => {
+    const byId: Record<string, MissionRecord> = {};
+    for (const m of missions) byId[m.id] = m;
+    return set({
+      missionsById: byId,
+      missionList: [...missions].sort((a, b) => b.updatedAt - a.updatedAt),
+    });
+  },
 }));

@@ -2,8 +2,9 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore, useMissionStore } from '@/lib/store';
 import { api } from '@/lib/api';
+import type { CommandRecord, MissionRecord } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
@@ -11,8 +12,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     updateInventory, pushEvent, setConnected, setWorld,
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
     incrementUnreadChats,
-    setActiveBuild, updateBuildProgress, updateBuildBotStatus,
-    setChains, updateChainStage, updateChainStatus,
   } = useBotStore();
 
   useEffect(() => {
@@ -88,55 +87,27 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
-    // Build events
-    socket.on('build:started', (data: any) => {
-      setActiveBuild(data.build ?? data);
-    });
+    // Command lifecycle events
+    const handleCommand = (data: CommandRecord | { command: CommandRecord }) => {
+      const record = 'command' in data ? data.command : data;
+      useControlStore.getState().upsertCommand(record);
+    };
+    socket.on('command:queued', handleCommand);
+    socket.on('command:started', handleCommand);
+    socket.on('command:succeeded', handleCommand);
+    socket.on('command:failed', handleCommand);
+    socket.on('command:cancelled', handleCommand);
 
-    socket.on('build:progress', (data: { buildId: string; botName: string; blocksPlaced: number; currentY: number }) => {
-      updateBuildProgress(data.buildId, data.botName, data.blocksPlaced, data.currentY);
-    });
-
-    socket.on('build:bot-status', (data: { buildId: string; botName: string; status: string }) => {
-      updateBuildBotStatus(data.buildId, data.botName, data.status);
-    });
-
-    socket.on('build:completed', (data: { buildId: string }) => {
-      const current = useBotStore.getState().activeBuild;
-      if (current && current.id === data.buildId) {
-        setActiveBuild({ ...current, status: 'completed' });
-      }
-    });
-
-    socket.on('build:cancelled', () => {
-      setActiveBuild(null);
-    });
-
-    // Chain events
-    socket.on('chain:started', () => {
-      api.getChains().then((data) => setChains(data.chains)).catch(() => {});
-    });
-
-    socket.on('chain:stage-update', (data: { chainId: string; stageIndex: number; stage: any }) => {
-      updateChainStage(data.chainId, data.stageIndex, data.stage);
-    });
-
-    socket.on('chain:completed', (data: { chainId: string }) => {
-      updateChainStatus(data.chainId, 'completed');
-    });
-
-    socket.on('chain:failed', (data: { chainId: string }) => {
-      updateChainStatus(data.chainId, 'failed');
-    });
-
-    socket.on('chain:paused', (data: { chainId: string }) => {
-      updateChainStatus(data.chainId, 'paused');
-    });
-
-    socket.on('chain:cancelled', () => {
-      api.getChains().then((data) => setChains(data.chains)).catch(() => {});
-    });
-
+    // Mission lifecycle events
+    const handleMission = (data: MissionRecord | { mission: MissionRecord }) => {
+      const record = 'mission' in data ? data.mission : data;
+      useMissionStore.getState().upsertMission(record);
+    };
+    socket.on('mission:created', handleMission);
+    socket.on('mission:updated', handleMission);
+    socket.on('mission:completed', handleMission);
+    socket.on('mission:failed', handleMission);
+    socket.on('mission:cancelled', handleMission);
 
     return () => {
       clearInterval(pollInterval);
@@ -155,25 +126,22 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
-      socket.off('build:started');
-      socket.off('build:progress');
-      socket.off('build:bot-status');
-      socket.off('build:completed');
-      socket.off('build:cancelled');
-      socket.off('chain:started');
-      socket.off('chain:stage-update');
-      socket.off('chain:completed');
-      socket.off('chain:failed');
-      socket.off('chain:paused');
-      socket.off('chain:cancelled');
+      socket.off('command:queued', handleCommand);
+      socket.off('command:started', handleCommand);
+      socket.off('command:succeeded', handleCommand);
+      socket.off('command:failed', handleCommand);
+      socket.off('command:cancelled', handleCommand);
+      socket.off('mission:created', handleMission);
+      socket.off('mission:updated', handleMission);
+      socket.off('mission:completed', handleMission);
+      socket.off('mission:failed', handleMission);
+      socket.off('mission:cancelled', handleMission);
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
     incrementUnreadChats,
-    setActiveBuild, updateBuildProgress, updateBuildBotStatus,
-    setChains, updateChainStage, updateChainStatus,
   ]);
 
   return <>{children}</>;

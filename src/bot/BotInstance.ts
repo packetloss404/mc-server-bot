@@ -1,3 +1,4 @@
+import { EventEmitter } from 'events';
 import mineflayer, { Bot } from 'mineflayer';
 import { pathfinder, Movements } from 'mineflayer-pathfinder';
 import { plugin as collectBlock } from 'mineflayer-collectblock';
@@ -37,14 +38,28 @@ export interface BotOptions {
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
 }
 
-export class BotInstance {
+export class BotInstance extends EventEmitter {
   private static OWNER_PLAYER = 'Nerdfuryz';
   private static nextAvailableConnectAt = 0;
   readonly name: string;
   readonly personality: string;
   mode: BotMode;
-  state: BotState = BotState.SPAWNING;
+  private _state: BotState = BotState.SPAWNING;
   bot: Bot | null = null;
+
+  /** State getter/setter that emits 'stateChanged' for event-driven socket updates. */
+  get state(): BotState { return this._state; }
+  set state(newState: BotState) {
+    const prev = this._state;
+    this._state = newState;
+    if (prev !== newState) {
+      this.emit('stateChanged', { bot: this.name, state: newState, previousState: prev });
+    }
+  }
+
+  // Throttle tracking for event-driven position/inventory updates
+  private _lastPositionEmit = 0;
+  private _inventoryDebounceTimer: NodeJS.Timeout | null = null;
 
   private config: Config;
   private spawnLocation?: { x: number; y: number; z: number };
@@ -64,19 +79,23 @@ export class BotInstance {
   private botComms: BotComms;
   private botManager: BotManager;
   private voyagerLoop: VoyagerLoop | null = null;
+  private reflectionInterval: ReturnType<typeof setInterval> | null = null;
+  private rawMessageHandler: ((jsonMsg: any) => void) | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
   private instinctResumeTimeout: NodeJS.Timeout | null = null;
   private instinctActive = false;
   private instinctReason: 'attack' | 'hazard' | null = null;
-  private voyagerPausedByInstinct = false;
+  private instinctPauseKey: string | null = null;
   private lastAttackedAt = 0;
   private lastHealth = 20;
   private lastAttackerName: string | null = null;
   private statsTracker = new StatsTracker('./data');
   private static CHAT_COOLDOWN_MS = 3000;
   private lastPathResetLog: { reason: string; at: number; suppressed: number } | null = null;
+  private lastInteractionAt: number = Date.now();
 
   constructor(options: BotOptions) {
+    super();
     this.name = options.name;
     this.personality = options.personality;
     this.mode = options.mode;
@@ -174,24 +193,43 @@ export class BotInstance {
           }
           this.startChatListener();
           // Debug: log all raw messages to diagnose chat issues
-          this.bot!.on('message', (jsonMsg: any) => {
+          if (!this.bot) return; // Bot disconnected during auth/class selection
+          if (this.rawMessageHandler) {
+            this.bot.removeListener('message', this.rawMessageHandler);
+          }
+          this.rawMessageHandler = (jsonMsg: any) => {
             const text = jsonMsg.toString();
             if (text && !text.includes('Chunk size') && text.trim().length > 0) {
               logger.debug({ bot: this.name, rawMessage: text }, 'Raw message received');
             }
-          });
+          };
+          this.bot.on('message', this.rawMessageHandler);
 
-          // Listen for inter-bot messages
+          // Listen for inter-bot messages (unregister first to avoid duplicates on reconnect)
+          this.botComms.unregisterListener(this.name);
           this.botComms.registerListener(this.name, (msg: BotMessage) => {
+            // Don't process messages from self
+            if (msg.from.toLowerCase() === this.name.toLowerCase()) return;
+
             logger.info({ bot: this.name, from: msg.from, content: msg.content }, 'Received bot message');
             this.socialMemory.addMemory(this.name, 'social',
               `${msg.from} sent me a message: "${msg.content.substring(0, 80)}"`,
               [msg.from], 5
             );
+
+            // Detect task-like requests and queue them via VoyagerLoop
+            const taskRequest = this.extractBotTaskRequest(msg.content);
+            if (taskRequest && this.voyagerLoop) {
+              logger.info(
+                { bot: this.name, from: msg.from, task: taskRequest },
+                'Queuing bot-to-bot task request'
+              );
+              this.voyagerLoop.queuePlayerTask(taskRequest, msg.from);
+            }
           });
 
           // Periodic reflection every 10 minutes
-          setInterval(() => {
+          this.reflectionInterval = setInterval(() => {
             const recent = this.socialMemory.getRecentMemories(this.name, 10);
             if (recent.length >= 5) {
               this.socialMemory.reflect(this.name, recent);
@@ -248,6 +286,54 @@ export class BotInstance {
       if (!this.bot || !entity || entity.id !== this.bot.entity.id) return;
       this.triggerAttackInstinct(source || this.findLikelyThreat(), 'entity-hurt');
     });
+
+    // --- Event-driven socket updates (position, health, inventory) ---
+
+    // Position: throttle to max once per second
+    this.bot.on('move', () => {
+      const now = Date.now();
+      if (now - this._lastPositionEmit < 1000) return;
+      const pos = this.bot?.entity?.position;
+      if (!pos) return;
+      this._lastPositionEmit = now;
+      this.emit('positionChanged', {
+        bot: this.name,
+        x: Math.round(pos.x),
+        y: Math.round(pos.y),
+        z: Math.round(pos.z),
+      });
+    });
+
+    // Health: emit on change (mineflayer fires 'health' on actual change)
+    this.bot.on('health', () => {
+      this.emit('healthChanged', {
+        bot: this.name,
+        health: this.bot?.health ?? 0,
+        food: this.bot?.food ?? 0,
+      });
+    });
+
+    // Inventory: debounce to once per 2 seconds since changes can be rapid
+    const emitInventory = () => {
+      if (!this.bot) return;
+      try {
+        const items = this.bot.inventory.items();
+        this.emit('inventoryChanged', {
+          bot: this.name,
+          items: items.map((i: any) => ({ name: i.name, count: i.count, slot: i.slot })),
+        });
+      } catch { /* bot may be disconnected */ }
+    };
+    const debouncedInventory = () => {
+      if (this._inventoryDebounceTimer) clearTimeout(this._inventoryDebounceTimer);
+      this._inventoryDebounceTimer = setTimeout(emitInventory, 2000);
+    };
+    this.bot.on('playerCollect' as any, debouncedInventory);
+    this.bot.once('spawn', () => {
+      (this.bot?.inventory as any)?.on?.('updateSlot', debouncedInventory);
+    });
+
+    // --- End event-driven socket updates ---
 
     this.bot.on('goal_reached', () => {
       const pos = this.bot?.entity?.position;
@@ -679,10 +765,10 @@ export class BotInstance {
       case 'follow':
         this.bot.chat(`Alright ${playerName}, I'll follow you.`);
         this.state = BotState.FOLLOWING;
-        if (this.voyagerLoop) this.voyagerLoop.pause();
+        if (this.voyagerLoop) this.voyagerLoop.pause('command:follow');
         followPlayer(this.bot, playerName, 600000).finally(() => {
           if (this.state === BotState.FOLLOWING) this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume();
+          if (this.voyagerLoop) this.voyagerLoop.resume('command:follow');
         });
         break;
 
@@ -713,18 +799,18 @@ export class BotInstance {
         }
         this.bot.chat(`Starting build from ${match}. This may take a while...`);
         this.state = BotState.EXECUTING_TASK;
-        if (this.voyagerLoop) this.voyagerLoop.pause();
+        if (this.voyagerLoop) this.voyagerLoop.pause('command:build-schematic');
         const origin = this.bot.entity.position.floored();
         buildSchematic(this.bot, match, { x: origin.x, y: origin.y, z: origin.z }, (placed, total) => {
           this.bot?.chat(`Building... ${placed}/${total} blocks`);
         }).then((result) => {
           if (this.bot) this.bot.chat(result.message ?? 'Build complete.');
           this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume();
+          if (this.voyagerLoop) this.voyagerLoop.resume('command:build-schematic');
         }).catch((err) => {
           this.bot?.chat(`Build failed: ${err.message}`);
           this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume();
+          if (this.voyagerLoop) this.voyagerLoop.resume('command:build-schematic');
         });
         break;
       }
@@ -807,14 +893,27 @@ export class BotInstance {
       this.socialMemory.updateEmotionalState(this.name,
         sentiment === 'POSITIVE' ? 'positive_chat' : sentiment === 'NEGATIVE' ? 'negative_chat' : 'social_interaction'
       );
+      this.lastInteractionAt = Date.now();
 
       // Queue task in Voyager loop if extracted
-      if (goalDescription && this.voyagerLoop) {
-        logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
-        this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
-      } else if (taskDescription && this.voyagerLoop) {
-        logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
-        this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
+      if ((goalDescription || taskDescription) && this.voyagerLoop) {
+        // Force-resume if paused so the player's request actually executes
+        if (this.voyagerLoop.isPaused()) {
+          this.voyagerLoop.forceResume('player-chat-request');
+          logger.info({ bot: this.name, player: playerName }, 'Force-resumed voyager loop for player request');
+        }
+        if (!this.voyagerLoop.isRunning()) {
+          this.voyagerLoop.start();
+          logger.info({ bot: this.name, player: playerName }, 'Auto-started voyager loop for player request');
+        }
+
+        if (goalDescription) {
+          logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
+          this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
+        } else if (taskDescription) {
+          logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
+          this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
+        }
       }
     } catch (err: any) {
       logger.error({ bot: this.name, player: playerName, err: err.message }, 'Chat response failed');
@@ -825,13 +924,43 @@ export class BotInstance {
   private scheduleAmbientChat(): void {
     if (!this.llmClient) return;
 
-    // Ambient chat is rare — 10 to 20 minutes between attempts
-    const minMs = 600_000;  // 10 minutes
-    const maxMs = 1_200_000; // 20 minutes
+    // Mood-based ambient chat intervals
+    const emotionalState = this.socialMemory.getEmotionalState(this.name);
+    let minMs: number;
+    let maxMs: number;
+    switch (emotionalState.mood) {
+      case 'lonely':
+        minMs = 300_000;    // 5 minutes
+        maxMs = 600_000;    // 10 minutes
+        break;
+      case 'annoyed':
+        minMs = 1_200_000;  // 20 minutes
+        maxMs = 2_400_000;  // 40 minutes
+        break;
+      case 'happy':
+      case 'excited':
+        minMs = 480_000;    // 8 minutes
+        maxMs = 900_000;    // 15 minutes
+        break;
+      case 'scared':
+        minMs = 900_000;    // 15 minutes
+        maxMs = 1_800_000;  // 30 minutes
+        break;
+      default: // neutral
+        minMs = 600_000;    // 10 minutes
+        maxMs = 1_200_000;  // 20 minutes
+        break;
+    }
     const delay = minMs + Math.random() * (maxMs - minMs);
 
     this.ambientChatTimeout = setTimeout(async () => {
       if (!this.bot || this.destroyed) return;
+
+      // Check for idle_long: if no interactions for 10+ minutes, trigger lonely mood
+      const idleMs = Date.now() - this.lastInteractionAt;
+      if (idleMs > 600_000) { // 10 minutes
+        this.socialMemory.updateEmotionalState(this.name, 'idle_long');
+      }
 
       // 30% chance to actually say something even when timer fires
       if (Math.random() > 0.3) {
@@ -906,10 +1035,12 @@ export class BotInstance {
     this.voyagerLoop.onTaskSuccess = (taskDescription: string) => {
       this.socialMemory.addMemory(this.name, 'event', `Successfully completed: ${taskDescription}`, [], 5);
       this.socialMemory.updateEmotionalState(this.name, 'task_success');
+      this.lastInteractionAt = Date.now();
     };
     this.voyagerLoop.onTaskFailure = (taskDescription: string) => {
       this.socialMemory.addMemory(this.name, 'event', `Failed task: ${taskDescription}`, [], 4);
       this.socialMemory.updateEmotionalState(this.name, 'task_failure');
+      this.lastInteractionAt = Date.now();
     };
 
     this.voyagerLoop.start();
@@ -924,6 +1055,11 @@ export class BotInstance {
 
     this.lastAttackedAt = Date.now();
     this.lastAttackerName = source?.username || source?.name || null;
+
+    // Track affinity hit when a real player (not another bot) attacks this bot
+    if (this.lastAttackerName && source?.type === 'player' && !this.botManager.getBot(this.lastAttackerName)) {
+      this.affinityManager.onHit(this.name, this.lastAttackerName);
+    }
 
     if (!this.instinctActive) {
       this.activateInstinct('attack', trigger);
@@ -970,9 +1106,10 @@ export class BotInstance {
       this.bot.pathfinder.stop();
     }
     this.clearMovementControls();
-    if (this.voyagerLoop?.isRunning() && !this.voyagerLoop.isPaused()) {
-      this.voyagerLoop.pause(`instinct:${trigger}`);
-      this.voyagerPausedByInstinct = true;
+    if (this.voyagerLoop?.isRunning()) {
+      const key = `instinct:${trigger}`;
+      this.instinctPauseKey = key;
+      this.voyagerLoop.pause(key);
     }
   }
 
@@ -1024,10 +1161,10 @@ export class BotInstance {
     if (this.state === BotState.INSTINCT) {
       this.state = BotState.IDLE;
     }
-    if (!this.destroyed && this.state !== BotState.DISCONNECTED && this.voyagerPausedByInstinct && this.voyagerLoop) {
-      this.voyagerLoop.resume(`instinct-ended:${reason}`);
+    if (!this.destroyed && this.state !== BotState.DISCONNECTED && this.instinctPauseKey && this.voyagerLoop) {
+      this.voyagerLoop.resume(this.instinctPauseKey);
     }
-    this.voyagerPausedByInstinct = false;
+    this.instinctPauseKey = null;
     if (this.mode !== BotMode.CODEGEN) {
       this.startWandering();
     }
@@ -1043,7 +1180,10 @@ export class BotInstance {
       if (dist > 12) return false;
       if (entity.type === 'hostile') return true;
       if (hostileNames.has(entity.name)) return true;
-      if (entity.type === 'player' && entity.username !== this.bot!.username) return true;
+      if (entity.type === 'player' && entity.username !== this.bot!.username) {
+        // Only treat players as threats if they are hostile (low affinity)
+        return this.affinityManager.isHostile(this.name, entity.username);
+      }
       return false;
     });
   }
@@ -1171,9 +1311,18 @@ export class BotInstance {
       clearTimeout(this.ambientChatTimeout);
       this.ambientChatTimeout = null;
     }
+    if (this.reflectionInterval) {
+      clearInterval(this.reflectionInterval);
+      this.reflectionInterval = null;
+    }
     if (this.voyagerLoop) {
       this.voyagerLoop.stop();
       this.voyagerLoop = null;
+    }
+    this.chatCooldowns.clear();
+    if (this._inventoryDebounceTimer) {
+      clearTimeout(this._inventoryDebounceTimer);
+      this._inventoryDebounceTimer = null;
     }
   }
 
@@ -1221,11 +1370,27 @@ export class BotInstance {
     this.destroyed = true;
     this.stopAmbientBehaviors();
 
+    if (this.pendingConnectTimeout) {
+      clearTimeout(this.pendingConnectTimeout);
+      this.pendingConnectTimeout = null;
+    }
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+
+    this.botComms.unregisterListener(this.name);
+
     if (this.bot) {
+      if (this.rawMessageHandler) {
+        this.bot.removeListener('message', this.rawMessageHandler);
+        this.rawMessageHandler = null;
+      }
       this.bot.quit();
       this.bot = null;
     }
 
+    this.removeAllListeners();
     this.state = BotState.DISCONNECTED;
     logger.info({ bot: this.name }, 'Bot disconnected and destroyed');
   }
@@ -1356,5 +1521,27 @@ export class BotInstance {
 
   getVoyagerLoop(): VoyagerLoop | null {
     return this.voyagerLoop;
+  }
+
+  /**
+   * Detect task-like requests in bot-to-bot messages using keyword matching.
+   * Returns the extracted task string if the message looks like a request, or null otherwise.
+   */
+  private extractBotTaskRequest(content: string): string | null {
+    const lower = content.toLowerCase();
+
+    // Only match direct requests — require "please", "can you", "could you", "go", "I need you to"
+    // or imperative form directed at this bot. This avoids matching status chatter like
+    // "I need to gather more resources" which is self-directed, not a request.
+    const directRequestPattern = /\b(please|can you|could you|go|i need you to|would you|will you)\b/;
+    if (!directRequestPattern.test(lower)) return null;
+
+    // Check that the message also contains an action verb + noun
+    const taskPattern = /\b(mine|craft|gather|bring|come|help|build|collect|get|find|chop|dig|smelt|cook|farm|harvest|fetch|deliver|make|place|break)\b.*?\b(\w{3,})\b/;
+    const match = lower.match(taskPattern);
+    if (!match) return null;
+
+    // Use the original content (preserving case) as the task description
+    return content.trim();
   }
 }

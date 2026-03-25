@@ -1,7 +1,7 @@
-async function mine3OakLogsAtTargetLocation(bot) {
-  const targetX = 847;
-  const targetY = 68;
-  const targetZ = 199;
-  await moveTo(targetX, targetY, targetZ, 3, 60);
-  await mineBlock('oak_log', 3);
+async function mineThreeOakLogsAtLocation(bot) {
+  const currentLogs = bot.inventory.items().filter(i => i.name === 'oak_log').reduce((acc, i) => acc + i.count, 0);
+  const needed = 3 - currentLogs;
+  if (needed <= 0) return;
+  await moveTo(931, 68, 338, 3, 60);
+  await mineBlock('oak_log', needed);
 }

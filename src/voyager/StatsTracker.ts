@@ -19,6 +19,7 @@ export interface BotStats {
 export class StatsTracker {
   private filePath: string;
   private stats: Record<string, BotStats> = {};
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(dataDir: string) {
     this.filePath = path.join(dataDir, 'stats.json');
@@ -112,6 +113,29 @@ export class StatsTracker {
   }
 
   private persist(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.stats, null, 2));
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.writeAtomic();
+    }, 2000);
+  }
+
+  private writeAtomic(): void {
+    const tmpPath = this.filePath + '.tmp';
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.stats, null, 2));
+      fs.renameSync(tmpPath, this.filePath);
+    } catch {
+      try { fs.writeFileSync(this.filePath, JSON.stringify(this.stats, null, 2)); } catch { /* best effort */ }
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+  }
+
+  shutdown(): void {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+      this.writeAtomic();
+    }
   }
 }

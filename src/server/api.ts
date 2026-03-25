@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
 import path from 'path';
+import { Vec3 } from 'vec3';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
@@ -85,6 +86,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
   missionManager.setBuildCoordinator(buildCoordinator);
   missionManager.setChainCoordinator(chainCoordinator);
+  missionManager.setSquadManager(squadManager);
 
   const commanderService = new CommanderService({
     llmClient: botManager.getLLMClient?.() ?? null,
@@ -396,10 +398,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
     const players = Object.values(connectedBot.bot.players)
-      .filter((p: any) => p.username && p.entity)
+      .filter((p: any) => p.username)
       .map((p: any) => ({
         name: p.username,
-        position: p.entity ? { x: Math.floor(p.entity.position.x), y: Math.floor(p.entity.position.y), z: Math.floor(p.entity.position.z) } : null,
+        position: p.entity
+          ? { x: Math.floor(p.entity.position.x), y: Math.floor(p.entity.position.y), z: Math.floor(p.entity.position.z) }
+          : null,
         isOnline: true,
       }));
     res.json({ players });
@@ -953,7 +957,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
     try {
-      const info = await buildCoordinator.getSchematicInfoAsync(req.params.filename as string);
+      const filename = req.params.filename as string;
+      if (/[\/\\]|\.\./.test(filename)) {
+        res.status(400).json({ error: 'Invalid filename: path traversal characters not allowed' }); return;
+      }
+      const info = await buildCoordinator.getSchematicInfoAsync(filename);
       if (!info) { res.status(404).json({ error: 'Schematic not found' }); return; }
       res.json({ schematic: info });
     } catch (err: any) {
@@ -963,15 +971,22 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   app.post('/api/builds', async (req: Request, res: Response) => {
-    const { schematicFile, origin, botNames } = req.body;
+    const { schematicFile, origin, botNames, cleanupBotNames, fillFoundation, snapToGround } = req.body;
     if (!schematicFile || !origin || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
       res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' }); return;
+    }
+    if (/[\/\\]|\.\./.test(schematicFile)) {
+      res.status(400).json({ error: 'Invalid schematicFile: path traversal characters not allowed' }); return;
     }
     if (typeof origin.x !== 'number' || typeof origin.y !== 'number' || typeof origin.z !== 'number') {
       res.status(400).json({ error: 'origin must have numeric x, y, z fields' }); return;
     }
     try {
-      const build = await buildCoordinator.startBuild(schematicFile, origin, botNames);
+      const build = await buildCoordinator.startBuild(schematicFile, origin, botNames, {
+        cleanupBotNames: Array.isArray(cleanupBotNames) ? cleanupBotNames : undefined,
+        fillFoundation: typeof fillFoundation === 'boolean' ? fillFoundation : undefined,
+        snapToGround: typeof snapToGround === 'boolean' ? snapToGround : undefined,
+      });
       res.status(201).json({ success: true, build });
     } catch (err: any) {
       logger.error({ err }, 'Failed to start build');
@@ -1094,6 +1109,150 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       logger.error({ err }, 'Commander execute failed');
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // ═══════════════════════════════════════
+  //  TERRAIN SCANNING ENDPOINTS
+  // ═══════════════════════════════════════
+
+  /** Scan downward from y=200 to y=-64 to find the first non-air surface block. */
+  function findNearestConnectedBot(x: number, z: number): any | null {
+    const connected = botManager.getAllBots().filter((b) => b.bot?.entity);
+    if (connected.length === 0) return null;
+    let best = connected[0];
+    let bestDist = Infinity;
+    for (const b of connected) {
+      const pos = b.bot!.entity.position;
+      const dx = pos.x - x;
+      const dz = pos.z - z;
+      const dist = dx * dx + dz * dz;
+      if (dist < bestDist) {
+        bestDist = dist;
+        best = b;
+      }
+    }
+    return best.bot;
+  }
+
+  function findSurfaceBlock(bot: any, x: number, z: number): { y: number; name: string } | null {
+    for (let y = 200; y >= -64; y--) {
+      const block = bot.blockAt(new Vec3(x, y, z));
+      if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+        return { y, name: block.name };
+      }
+    }
+    return null;
+  }
+
+  // GET /api/terrain?cx=100&cz=200&radius=64&step=2
+  app.get('/api/terrain', (_req: Request, res: Response) => {
+    const cx = parseInt(String(_req.query.cx ?? '0'), 10);
+    const cz = parseInt(String(_req.query.cz ?? '0'), 10);
+    const bot = findNearestConnectedBot(cx, cz);
+    if (!bot) {
+      res.status(503).json({ error: 'No bot connected' });
+      return;
+    }
+    let radius = parseInt(String(_req.query.radius ?? '64'), 10);
+    let step = parseInt(String(_req.query.step ?? '2'), 10);
+
+    // Clamp for performance
+    if (radius > 128) radius = 128;
+    if (step < 1) step = 1;
+
+    const size = Math.floor(2 * radius / step) + 1;
+    const blocks: string[] = [];
+
+    for (let z = cz - radius; z <= cz + radius; z += step) {
+      for (let x = cx - radius; x <= cx + radius; x += step) {
+        const surface = findSurfaceBlock(bot, x, z);
+        blocks.push(surface ? surface.name : 'unknown');
+      }
+    }
+
+    res.json({ cx, cz, radius, step, size, blocks });
+  });
+
+  // GET /api/terrain/height?x=100&z=200
+  app.get('/api/terrain/height', (_req: Request, res: Response) => {
+    const x = parseInt(String(_req.query.x ?? '0'), 10);
+    const z = parseInt(String(_req.query.z ?? '0'), 10);
+    const bot = findNearestConnectedBot(x, z);
+    if (!bot) {
+      res.status(503).json({ error: 'No bot connected' });
+      return;
+    }
+
+    const surface = findSurfaceBlock(bot, x, z);
+    if (surface) {
+      res.json({ x, z, y: surface.y, block: surface.name });
+    } else {
+      res.json({ x, z, y: null, block: 'unknown' });
+    }
+  });
+
+  // POST /api/terrain/height  — batch mode
+  app.post('/api/terrain/height', (req: Request, res: Response) => {
+    const positions: Array<{ x: number; z: number }> = req.body?.positions;
+    if (!Array.isArray(positions)) {
+      res.status(400).json({ error: 'positions array is required' });
+      return;
+    }
+
+    const heights = positions.map((p) => {
+      const x = Number(p.x) || 0;
+      const z = Number(p.z) || 0;
+      const bot = findNearestConnectedBot(x, z);
+      if (!bot) return { x, z, y: null as number | null, block: 'unknown' };
+      const surface = findSurfaceBlock(bot, x, z);
+      return surface
+        ? { x, z, y: surface.y, block: surface.name }
+        : { x, z, y: null as number | null, block: 'unknown' };
+    });
+
+    res.json({ heights });
+  });
+
+  // POST /api/terrain/heightmap  — rectangular area heightmap
+  app.post('/api/terrain/heightmap', (req: Request, res: Response) => {
+    const { minX, maxX, minZ, maxZ } = req.body ?? {};
+    if (minX == null || maxX == null || minZ == null || maxZ == null) {
+      res.status(400).json({ error: 'minX, maxX, minZ, maxZ are required' });
+      return;
+    }
+
+    let step = parseInt(String(req.body.step ?? '1'), 10);
+    if (step < 1) step = 1;
+
+    const heights: number[][] = [];
+    const blocks: string[][] = [];
+
+    const centerX = Math.round((minX + maxX) / 2);
+    const centerZ = Math.round((minZ + maxZ) / 2);
+    const bot = findNearestConnectedBot(centerX, centerZ);
+    if (!bot) {
+      res.status(503).json({ error: 'No bot connected' });
+      return;
+    }
+
+    for (let z = minZ; z <= maxZ; z += step) {
+      const heightRow: number[] = [];
+      const blockRow: string[] = [];
+      for (let x = minX; x <= maxX; x += step) {
+        const surface = findSurfaceBlock(bot, x, z);
+        if (surface) {
+          heightRow.push(surface.y);
+          blockRow.push(surface.name);
+        } else {
+          heightRow.push(-64);
+          blockRow.push('unknown');
+        }
+      }
+      heights.push(heightRow);
+      blocks.push(blockRow);
+    }
+
+    res.json({ heights, blocks });
   });
 
   return { app, httpServer, io, eventLog, commandCenter, missionManager, buildCoordinator, chainCoordinator, markerStore, squadManager, roleManager, commanderService };

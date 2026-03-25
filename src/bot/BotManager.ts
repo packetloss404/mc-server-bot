@@ -123,6 +123,16 @@ export class BotManager {
     return count;
   }
 
+  /** Flush all pending debounced writes across every data manager. */
+  shutdownPersistence(): void {
+    this.affinityManager.shutdown();
+    this.socialMemory.shutdown();
+    this.blackboardManager.shutdown();
+    for (const bot of this.bots.values()) {
+      bot.getVoyagerLoop()?.shutdownPersistence();
+    }
+  }
+
   getBot(name: string): BotInstance | undefined {
     return this.bots.get(name.toLowerCase());
   }

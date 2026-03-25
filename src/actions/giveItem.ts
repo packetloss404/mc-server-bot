@@ -1,7 +1,7 @@
 import { Bot } from 'mineflayer';
 import { ActionResult } from './types';
 
-export async function giveItem(bot: Bot, playerName: string, itemName: string, count = 1): Promise<ActionResult> {
+export async function giveItem(bot: Bot, playerName: string, itemName: string, count = 1, onGift?: (playerName: string) => void): Promise<ActionResult> {
   const mcData = require('minecraft-data')(bot.version);
   const itemInfo = mcData.itemsByName[itemName];
   if (!itemInfo) {
@@ -31,6 +31,7 @@ export async function giveItem(bot: Bot, playerName: string, itemName: string, c
 
   try {
     await bot.toss(itemInfo.id, null, count);
+    if (onGift) onGift(playerName);
     return { success: true, message: `Tossed ${count} ${itemName} toward ${playerName}` };
   } catch (err: any) {
     return { success: false, message: `Give failed: ${err.message}` };

@@ -1,5 +1,9 @@
 # DyoBot Dashboard Revamp -- Parallel Execution Plan
 
+This document is now primarily historical.
+
+Large parts of the plan have been implemented in the repo. Use `dev/dashrevamp/plan/current-state.md` for the current health check, and use this file mainly to understand the original execution sequencing and ownership model.
+
 ## Document Purpose
 
 This document defines how 4 lead Claude Code agents, each managing 2 engineer agents (8 total), will execute the 10-epic dashboard revamp in parallel. Each agent receives a concrete prompt and a clear file ownership boundary.

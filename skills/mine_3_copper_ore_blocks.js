@@ -5,10 +5,7 @@ async function mineThreeCopperOreBlocks(bot) {
   });
   let copperBlock = findCopper();
   if (!copperBlock) {
-    await exploreUntil(bot, 'horizontal', 60, () => {
-      const block = findCopper();
-      return block ? block : null;
-    });
+    await exploreUntil('horizontal', 60, () => findCopper());
     copperBlock = findCopper();
   }
   if (copperBlock) {

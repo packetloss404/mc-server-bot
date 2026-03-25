@@ -1,5 +1,12 @@
 # E2 Tactical Command Center Revamp
 
+Current status: partial
+
+Current-state note:
+
+- `BotCommandCenter`, bot detail, and dashboard tactical surfaces exist
+- command center uses shared command creation in places, but lifecycle wiring, override visibility, and richer quick actions are still incomplete
+
 ## Goal
 
 Turn the current command buttons into a richer, reusable tactical control system.
@@ -19,6 +26,8 @@ Turn the current command buttons into a richer, reusable tactical control system
 
 ### E2-S1 Refactor command center to use shared command API
 
+Status: partial
+
 Acceptance criteria:
 
 - command center no longer relies on page-local loading assumptions only
@@ -32,6 +41,8 @@ Tasks:
 
 ### E2-S2 Add high-value quick actions
 
+Status: partial
+
 Acceptance criteria:
 
 - command center includes at least 5 new useful actions beyond pause/stop/follow/walk
@@ -44,6 +55,8 @@ Tasks:
 - add confirmation only for high-impact actions
 
 ### E2-S3 Add manual override visibility
+
+Status: partial
 
 Acceptance criteria:
 

@@ -25,6 +25,7 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
 
   return new Promise<ActionResult>((resolve, reject) => {
     let hits = 0;
+    let finished = false;
     const startTime = Date.now();
     let droppedItem: any = null;
 
@@ -50,6 +51,8 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     };
 
     const finish = async (success: boolean, message: string) => {
+      if (finished) return;
+      finished = true;
       if (success && droppedItem) {
         try {
           await (bot as any).collectBlock.collect(droppedItem, { ignoreNoPath: true });
@@ -71,7 +74,7 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
 
     const timeoutId = setTimeout(() => {
       cleanup();
-      reject(new Error(`Failed to kill ${entityName} within ${Math.round(maxDuration / 1000)}s`));
+      void finish(false, `Failed to kill ${entityName} within ${Math.round(maxDuration / 1000)}s`);
     }, maxDuration);
 
     const attackInterval = setInterval(() => {

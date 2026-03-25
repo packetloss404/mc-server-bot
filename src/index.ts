@@ -63,7 +63,7 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { httpServer, io, eventLog } = createAPIServer(botManager);
+  const { httpServer, io, eventLog, markerStore } = createAPIServer(botManager);
 
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
@@ -147,6 +147,9 @@ async function main() {
       clearInterval(memoryInterval);
       memoryInterval = null;
     }
+    // Flush all debounced file writes before tearing down bots
+    botManager.shutdownPersistence();
+    markerStore.shutdown();
     io.close();
     await botManager.removeAllBots();
     process.exit(0);

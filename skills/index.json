@@ -168,17 +168,17 @@
     "file": "point_the_player_towards_the.js"
   },
   {
-    "quality": 0.7,
-    "successCount": 0,
-    "failureCount": 0,
     "name": "mine_3_blocks_of_grass",
     "description": "mine 3 blocks of grass",
     "keywords": [
-      "mine",
-      "blocks",
-      "grass"
+      "grass",
+      "seeds",
+      "parrot"
     ],
-    "file": "mine_3_blocks_of_grass.js"
+    "file": "mine_3_blocks_of_grass.js",
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0
   },
   {
     "quality": 0.9,
@@ -195,7 +195,7 @@
   },
   {
     "quality": 0.8,
-    "successCount": 1,
+    "successCount": 2,
     "failureCount": 0,
     "name": "walk_to_the_nearest_player",
     "description": "Walk to the nearest player",
@@ -436,17 +436,21 @@
   },
   {
     "quality": 0.8,
-    "successCount": 4,
+    "successCount": 5,
     "failureCount": 0,
     "name": "mine_3_coal_ore_at",
-    "description": "Mine 3 coal ore at 911, 66,",
-    "keywords": [],
+    "description": "Mine 3 coal ore at 907, 76, 404",
+    "keywords": [
+      "mine",
+      "coal",
+      "resource"
+    ],
     "file": "mine_3_coal_ore_at.js"
   },
   {
-    "quality": 0.8,
+    "quality": 0.7200000000000001,
     "successCount": 6,
-    "failureCount": 0,
+    "failureCount": 1,
     "name": "mine_3_iron_ore_at",
     "description": "Mine 3 iron ore at 821,",
     "keywords": [],
@@ -479,6 +483,9 @@
     "file": "minethenearestoaklog.js"
   },
   {
+    "quality": 0.8,
+    "successCount": 14,
+    "failureCount": 0,
     "name": "mine_3_spruce_logs",
     "description": "Mine 3 spruce logs",
     "keywords": [
@@ -486,10 +493,7 @@
       "builder",
       "shelter"
     ],
-    "file": "mine_3_spruce_logs.js",
-    "quality": 0.8,
-    "successCount": 14,
-    "failureCount": 0
+    "file": "mine_3_spruce_logs.js"
   },
   {
     "quality": 0.8,
@@ -501,31 +505,31 @@
     "file": "mine_2_moss_blocks.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 10,
+    "failureCount": 0,
     "name": "mine_3_oak_logs_at",
     "description": "Mine 3 oak logs at 798, 7",
     "keywords": [],
-    "file": "mine_3_oak_logs_at.js",
-    "quality": 0.9,
-    "successCount": 10,
-    "failureCount": 0
+    "file": "mine_3_oak_logs_at.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 12,
+    "failureCount": 0,
     "name": "craft_1_crafting_table_using",
     "description": "Craft 1 crafting table using 4 spruce planks",
     "keywords": [],
-    "file": "craft_1_crafting_table_using.js",
-    "quality": 0.9,
-    "successCount": 12,
-    "failureCount": 0
+    "file": "craft_1_crafting_table_using.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 2,
+    "failureCount": 0,
     "name": "craft_12_spruce_planks_at",
     "description": "Craft 12 spruce planks at the crafting table at 807,",
     "keywords": [],
-    "file": "craft_12_spruce_planks_at.js",
-    "quality": 0.9,
-    "successCount": 2,
-    "failureCount": 0
+    "file": "craft_12_spruce_planks_at.js"
   },
   {
     "quality": 0.8,
@@ -712,6 +716,9 @@
     "file": "mine_1_oak_log_at.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "place_the_crafting_table_and",
     "description": "Place the crafting table and craft 4 sticks",
     "keywords": [
@@ -719,17 +726,221 @@
       "sticks",
       "tools"
     ],
-    "file": "place_the_crafting_table_and.js",
-    "quality": 0.9,
-    "successCount": 1,
-    "failureCount": 0
+    "file": "place_the_crafting_table_and.js"
   },
   {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
     "name": "craft_24_oak_planks_from",
     "description": "Craft 24 oak planks from 6 oak logs",
     "keywords": [],
-    "file": "craft_24_oak_planks_from.js",
+    "file": "craft_24_oak_planks_from.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "pick_up_the_items_located",
+    "description": "Pick up the items located 4 meters away",
+    "keywords": [],
+    "file": "pick_up_the_items_located.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 3,
+    "failureCount": 0,
+    "name": "explore_the_ocean_to_find",
+    "description": "Explore the ocean to find an island",
+    "keywords": [
+      "explore",
+      "the",
+      "ocean",
+      "find",
+      "island"
+    ],
+    "file": "explore_the_ocean_to_find.js"
+  },
+  {
     "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "craft_1_crafting_table",
+    "description": "Craft 1 crafting table",
+    "keywords": [
+      "craft",
+      "crafting",
+      "table"
+    ],
+    "file": "craft_1_crafting_table.js"
+  },
+  {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "craft_12_oak_planks",
+    "description": "Craft 12 oak planks",
+    "keywords": [
+      "craft",
+      "oak",
+      "planks"
+    ],
+    "file": "craft_12_oak_planks.js"
+  },
+  {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "craft_1_oak_boat",
+    "description": "Craft 1 oak boat",
+    "keywords": [
+      "craft",
+      "oak",
+      "boat"
+    ],
+    "file": "craft_1_oak_boat.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "explore_to_find_an_island",
+    "description": "Explore to find an island",
+    "keywords": [
+      "explore",
+      "find",
+      "island"
+    ],
+    "file": "explore_to_find_an_island.js"
+  },
+  {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "mine_2_oak_logs",
+    "description": "Mine 2 oak logs",
+    "keywords": [
+      "mine",
+      "oak",
+      "logs"
+    ],
+    "file": "mine_2_oak_logs.js"
+  },
+  {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "craft_8_oak_planks",
+    "description": "Craft 8 oak planks",
+    "keywords": [
+      "craft",
+      "oak",
+      "planks"
+    ],
+    "file": "craft_8_oak_planks.js"
+  },
+  {
+    "quality": 0.9,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "place_crafting_table_and_craft",
+    "description": "Place crafting table and craft 1 stone pickaxe using 3 cobblestone and 2 sticks",
+    "keywords": [
+      "craft",
+      "stone_pickaxe",
+      "upgrade"
+    ],
+    "file": "place_crafting_table_and_craft.js"
+  },
+  {
+    "name": "explore_100_blocks_to_the",
+    "description": "Explore 100 blocks to the west",
+    "keywords": [
+      "explore",
+      "walk",
+      "west"
+    ],
+    "file": "explore_100_blocks_to_the.js",
+    "quality": 0.8,
+    "successCount": 4,
+    "failureCount": 0
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "explore_100_blocks_to_find",
+    "description": "Explore 100 blocks to find a village",
+    "keywords": [
+      "explore",
+      "village",
+      "structure"
+    ],
+    "file": "explore_100_blocks_to_find.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "open_the_chest_at_920",
+    "description": "Open the chest at 920,",
+    "keywords": [],
+    "file": "open_the_chest_at_920.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "explore_and_find_a_cave",
+    "description": "Explore and find a cave entrance",
+    "keywords": [
+      "explore",
+      "cave",
+      "structure"
+    ],
+    "file": "explore_and_find_a_cave.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 3,
+    "failureCount": 0,
+    "name": "mine_3_stripped_birch_logs",
+    "description": "Mine 3 stripped birch logs",
+    "keywords": [
+      "mine",
+      "birch",
+      "wood"
+    ],
+    "file": "mine_3_stripped_birch_logs.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "open_the_chest_at_908",
+    "description": "Open the chest at 908, 84",
+    "keywords": [],
+    "file": "open_the_chest_at_908.js"
+  },
+  {
+    "quality": 0.8,
+    "successCount": 1,
+    "failureCount": 0,
+    "name": "pick_up_the_item_6",
+    "description": "Pick up the item 6 meters away",
+    "keywords": [],
+    "file": "pick_up_the_item_6.js"
+  },
+  {
+    "name": "pick_up_all_7_nearby",
+    "description": "Pick up all 7 nearby dropped items",
+    "keywords": [
+      "pickup",
+      "items",
+      "resources"
+    ],
+    "file": "pick_up_all_7_nearby.js",
+    "quality": 0.8,
     "successCount": 1,
     "failureCount": 0
   }

@@ -2,6 +2,10 @@
 
 This folder is the working planning package for the web dashboard control revamp for `mc-server-bot`.
 
+The package started as a forward-looking implementation plan. It now also doubles as a current-state reference.
+
+Read `current-state.md` first if you want to know what is already built versus what is still planned.
+
 It is tailored to the current repo shape:
 
 - Backend control and bot runtime live in `src/`
@@ -20,6 +24,8 @@ It is tailored to the current repo shape:
 
 ## Planning Package
 
+- `current-state.md` - current implementation health check, milestone checklist, and stale-doc corrections
+- `next-sprint.md` - highest-value next slice of work based on the current repo state
 - `vision.md` - product goals, personas, and control philosophy
 - `features.md` - complete feature inventory and requirements
 - `milestones.md` - delivery milestones and acceptance criteria
@@ -57,18 +63,24 @@ To "manage the hell out of it," the revamp is split into 10 PM-style workstreams
 
 ## Current-State Summary
 
-The repo already includes useful building blocks:
+The repo now includes a large portion of the planned control platform:
 
-- Per-bot direct commands in `web/src/components/BotCommandCenter.tsx`
-- Ad hoc task queueing in `web/src/app/bots/[name]/page.tsx` and `web/src/app/manage/page.tsx`
-- A map visualization surface in `web/src/app/map/page.tsx`
-- A live store in `web/src/lib/store.ts`
-- Polling and socket synchronization in `web/src/components/SocketProvider.tsx`
-- Existing mutable bot APIs in `src/server/api.ts`
-- A hidden player task queue inside `src/voyager/VoyagerLoop.ts`
-- Rich orchestration in `src/build/BuildCoordinator.ts` and `src/supplychain/ChainCoordinator.ts`
+- shared backend control services under `src/control/`
+- command and mission APIs in `src/server/api.ts`
+- map world-object persistence and CRUD
+- squad, role, and commander backend services
+- new dashboard pages for fleet, roles, commander, and history
+- frontend tactical components for command, mission queue, and selection UX
+- backend control tests and basic telemetry/metrics
 
-The core delivery strategy is to unify these into 4 shared concepts:
+The main remaining gap is no longer raw feature absence. It is integration quality:
+
+- frontend state is split across overlapping stores
+- command and mission lifecycle sockets are not the primary UI source of truth yet
+- several UI panels still use older activity/task data instead of shared control records
+- role automation, routines/templates, and some diagnostics flows remain incomplete
+
+The core product model is still organized around 4 shared concepts:
 
 - `Command` - an immediate action applied to one or more bots
 - `Mission` - a structured, trackable multi-step objective
@@ -83,3 +95,5 @@ This package is ready for engineering when:
 - Frontend engineers can map the screens and state model without re-inventing control concepts
 - PM and QA can track scope, milestones, and acceptance criteria
 - The plan explains how to evolve the current repo without breaking existing dashboard behavior
+
+For current execution status, use `current-state.md` and the status sections in `features.md`, `milestones.md`, `roadmap.md`, and `backlog.md`.

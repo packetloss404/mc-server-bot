@@ -5,6 +5,7 @@ import { BotManager } from '../bot/BotManager';
 import { BuildCoordinator } from '../build/BuildCoordinator';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { CommandCenter } from './CommandCenter';
+import { SquadManager } from './SquadManager';
 import { logger } from '../util/logger';
 import {
   MissionRecord,
@@ -55,6 +56,7 @@ export class MissionManager {
   private buildCoordinator?: BuildCoordinator;
   private chainCoordinator?: ChainCoordinator;
   private commandCenter?: CommandCenter;
+  private squadManager?: SquadManager;
   /** Tracks which task description was queued for a running mission (missionId → description) */
   private missionTaskDescriptions: Map<string, string> = new Map();
 
@@ -78,10 +80,48 @@ export class MissionManager {
     this.commandCenter = cc;
   }
 
+  setSquadManager(sm: SquadManager): void {
+    this.squadManager = sm;
+  }
+
   // ── ID generation ──────────────────────────────────
 
   private generateId(): string {
     return `msn_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  /**
+   * Resolve assignee IDs to bot names.
+   * For assigneeType 'bot', IDs are already bot names.
+   * For assigneeType 'squad', each ID is a squad ID that must be resolved via SquadManager.
+   */
+  private resolveAssigneeBotNames(mission: MissionRecord): string[] {
+    if (mission.assigneeType === 'bot') {
+      return mission.assigneeIds;
+    }
+
+    // assigneeType === 'squad'
+    if (!this.squadManager) {
+      logger.warn(
+        { missionId: mission.id },
+        'Cannot resolve squad assignees: SquadManager not set'
+      );
+      return [];
+    }
+
+    const botNames: string[] = [];
+    for (const squadId of mission.assigneeIds) {
+      const squad = this.squadManager.getSquad(squadId);
+      if (squad) {
+        botNames.push(...squad.botNames);
+      } else {
+        logger.warn(
+          { missionId: mission.id, squadId },
+          'Squad not found when resolving mission assignees'
+        );
+      }
+    }
+    return [...new Set(botNames)]; // deduplicate
   }
 
   // ── CRUD ───────────────────────────────────────────
@@ -106,11 +146,10 @@ export class MissionManager {
 
     this.missions.set(mission.id, mission);
 
-    // Add to each assignee bot's queue
-    if (mission.assigneeType === 'bot') {
-      for (const botName of mission.assigneeIds) {
-        this.addToBotQueue(botName, mission.id);
-      }
+    // Add to each assignee bot's queue (resolve squad IDs to bot names if needed)
+    const botNames = this.resolveAssigneeBotNames(mission);
+    for (const botName of botNames) {
+      this.addToBotQueue(botName, mission.id);
     }
 
     this.save();
@@ -285,8 +324,9 @@ export class MissionManager {
       return undefined;
     }
 
-    // Remove from bot queues
-    for (const botName of mission.assigneeIds) {
+    // Remove from bot queues (resolve squad IDs to bot names)
+    const botNames = this.resolveAssigneeBotNames(mission);
+    for (const botName of botNames) {
       this.removeFromBotQueue(botName, id);
     }
 
@@ -307,11 +347,10 @@ export class MissionManager {
       }
     }
 
-    // Re-add to bot queues
-    if (mission.assigneeType === 'bot') {
-      for (const botName of mission.assigneeIds) {
-        this.addToBotQueue(botName, id);
-      }
+    // Re-add to bot queues (resolve squad IDs to bot names if needed)
+    const botNames = this.resolveAssigneeBotNames(mission);
+    for (const botName of botNames) {
+      this.addToBotQueue(botName, id);
     }
 
     mission.completedAt = undefined;
@@ -399,8 +438,14 @@ export class MissionManager {
 
   private executeQueueTaskMission(mission: MissionRecord): MissionRecord | undefined {
     const taskDescription = mission.description || mission.title;
+    const botNames = this.resolveAssigneeBotNames(mission);
 
-    for (const botName of mission.assigneeIds) {
+    if (botNames.length === 0) {
+      logger.warn({ missionId: mission.id }, 'No bots resolved for mission, failing');
+      return this.updateMissionStatus(mission.id, 'failed', { reason: 'No bots available' });
+    }
+
+    for (const botName of botNames) {
       const bot = this.botManager.getBot(botName);
       if (!bot) {
         logger.warn(
@@ -472,8 +517,14 @@ export class MissionManager {
     const trackedDescription = this.missionTaskDescriptions.get(mission.id);
     if (!trackedDescription) return;
 
-    // Check each assigned bot's VoyagerLoop for completion
-    for (const botName of mission.assigneeIds) {
+    const botNames = this.resolveAssigneeBotNames(mission);
+    let completedCount = 0;
+    let failedCount = 0;
+    let failedBotName: string | undefined;
+    const totalAssignees = botNames.length;
+
+    // Check ALL assigned bots' VoyagerLoops for completion
+    for (const botName of botNames) {
       const bot = this.botManager.getBot(botName);
       if (!bot) continue;
 
@@ -484,29 +535,37 @@ export class MissionManager {
       const failedTasks = voyager.getFailedTasks();
 
       if (completedTasks.includes(trackedDescription)) {
-        logger.info(
-          { missionId: mission.id, botName, task: trackedDescription },
-          'Mission task completed by VoyagerLoop'
-        );
-        this.updateMissionStatus(mission.id, 'completed');
-        return;
+        completedCount++;
+      } else if (failedTasks.includes(trackedDescription)) {
+        failedCount++;
+        if (!failedBotName) failedBotName = botName;
       }
-
-      if (failedTasks.includes(trackedDescription)) {
-        logger.info(
-          { missionId: mission.id, botName, task: trackedDescription },
-          'Mission task failed in VoyagerLoop'
-        );
-        this.updateMissionStatus(mission.id, 'failed', {
-          error: `Task failed: ${trackedDescription}`,
-        });
-        return;
-      }
-
-      // Also check: if the task is no longer current AND not in the queue,
-      // it may have been decomposed into subtasks that completed/failed.
-      // We leave it running and let the stale detector handle truly stuck missions.
+      // If neither completed nor failed, the bot is still working on it
     }
+
+    // Fail the mission if any bot failed
+    if (failedCount > 0) {
+      logger.info(
+        { missionId: mission.id, failedCount, totalAssignees, task: trackedDescription },
+        'Mission task failed: one or more bots failed'
+      );
+      this.updateMissionStatus(mission.id, 'failed', {
+        error: `Task failed on ${failedCount}/${totalAssignees} bot(s): ${trackedDescription}`,
+      });
+      return;
+    }
+
+    // Complete only when ALL assignees have finished
+    if (completedCount >= totalAssignees && totalAssignees > 0) {
+      logger.info(
+        { missionId: mission.id, completedCount, totalAssignees, task: trackedDescription },
+        'Mission task completed by all assignees'
+      );
+      this.updateMissionStatus(mission.id, 'completed');
+      return;
+    }
+
+    // Otherwise, still in progress — let stale detector handle truly stuck missions
   }
 
   private async executeBuildMission(mission: MissionRecord): Promise<MissionRecord | undefined> {

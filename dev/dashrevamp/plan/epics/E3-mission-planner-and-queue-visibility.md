@@ -1,5 +1,12 @@
 # E3 Mission Planner And Queue Visibility
 
+Current status: partial
+
+Current-state note:
+
+- mission types, mission manager, mission APIs, and queue inspection are present
+- queue control and queue/history UX are still split between shared mission records and raw Voyager task state
+
 ## Goal
 
 Expose and control planned work instead of hiding queue state inside `VoyagerLoop`.
@@ -20,6 +27,8 @@ Expose and control planned work instead of hiding queue state inside `VoyagerLoo
 
 ### E3-S1 Add explicit mission models and persistence
 
+Status: done
+
 Acceptance criteria:
 
 - mission records exist independently of UI refreshes
@@ -34,6 +43,8 @@ Tasks:
 
 ### E3-S2 Expose `VoyagerLoop` queue safely
 
+Status: partial
+
 Acceptance criteria:
 
 - queued tasks are inspectable without mutating internal arrays unsafely
@@ -46,6 +57,8 @@ Tasks:
 - preserve current decompose-and-queue behavior while surfacing intermediate status
 
 ### E3-S3 Replace ad hoc task entry UI with mission queue panel
+
+Status: partial
 
 Acceptance criteria:
 

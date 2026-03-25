@@ -1,4 +1,4 @@
-async function walkToNearestPlayer(bot) {
+async function walkToTheNearestPlayer(bot) {
   const getNearestPlayerEntity = () => {
     return bot.nearestEntity(entity => entity.type === 'player' && entity.username !== bot.username);
   };

@@ -22,11 +22,13 @@ export class RoleManager {
   private readonly filePath: string;
   private readonly io: SocketIOServer;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private overrideCheckInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(io: SocketIOServer) {
     this.io = io;
     this.filePath = path.join(process.cwd(), 'data', 'roles.json');
     this.load();
+    this.overrideCheckInterval = setInterval(() => this.checkOverrideTimeouts(), 30_000);
   }
 
   // ── Manual Override Tracking ──────────────────────────────
@@ -120,6 +122,7 @@ export class RoleManager {
 
   /** Flush pending saves and clear timers */
   shutdown(): void {
+    if (this.overrideCheckInterval) { clearInterval(this.overrideCheckInterval); this.overrideCheckInterval = null; }
     this.saveImmediate();
   }
 

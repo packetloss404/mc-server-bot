@@ -1,5 +1,12 @@
 # E7 Commander Console
 
+Current status: partial
+
+Current-state note:
+
+- commander parse/execute backend and UI are implemented
+- the biggest remaining work is contract alignment, persistent history/drafts, and stronger ambiguity handling
+
 ## Goal
 
 Support natural language planning without losing transparency or safety.
@@ -18,6 +25,8 @@ Support natural language planning without losing transparency or safety.
 
 ### E7-S1 Add parse-only planner endpoint
 
+Status: mostly done
+
 Acceptance criteria:
 
 - free text returns a typed plan preview without executing
@@ -31,6 +40,8 @@ Tasks:
 
 ### E7-S2 Add commander UI
 
+Status: partial
+
 Acceptance criteria:
 
 - operator can edit, confirm, or cancel a proposed plan
@@ -43,6 +54,8 @@ Tasks:
 - add execution history and drafts
 
 ### E7-S3 Handle ambiguity and safety
+
+Status: partial
 
 Acceptance criteria:
 

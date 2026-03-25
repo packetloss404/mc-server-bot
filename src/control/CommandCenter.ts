@@ -480,8 +480,8 @@ export class CommandCenter {
     if (!voyager) {
       throw { code: 'NO_VOYAGER', message: `${bot.name} is not running a voyager loop` } as CommandError;
     }
-    voyager.resume();
-    logger.info({ botName: bot.name }, 'Voyager resumed via command');
+    voyager.forceResume('dashboard');
+    logger.info({ botName: bot.name }, 'Voyager force-resumed via command');
     return { resumed: true };
   }
 

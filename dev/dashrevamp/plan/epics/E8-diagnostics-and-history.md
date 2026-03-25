@@ -1,5 +1,12 @@
 # E8 Diagnostics And History
 
+Current status: partial
+
+Current-state note:
+
+- history and diagnostics surfaces exist, including a history page and bot detail diagnostics sections
+- the major remaining gap is fidelity: these screens still rely too much on older activity/task data instead of shared command and mission records
+
 ## Goal
 
 Make the dashboard trustworthy when bots fail or behave unexpectedly.
@@ -18,6 +25,8 @@ Make the dashboard trustworthy when bots fail or behave unexpectedly.
 
 ### E8-S1 Add command and mission history views
 
+Status: partial
+
 Acceptance criteria:
 
 - operator can inspect recent command and mission activity across bots
@@ -30,6 +39,8 @@ Tasks:
 - add mission history queries
 
 ### E8-S2 Add blockers and recovery suggestions
+
+Status: partial
 
 Acceptance criteria:
 

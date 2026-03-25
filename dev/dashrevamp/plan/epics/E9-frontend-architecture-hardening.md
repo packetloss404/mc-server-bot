@@ -1,5 +1,12 @@
 # E9 Frontend Architecture Hardening
 
+Current status: partial
+
+Current-state note:
+
+- reusable components were added, but frontend architecture is still one of the biggest open risks
+- duplicated stores and incomplete socket-first control syncing are the main blockers for the rest of the revamp
+
 ## Goal
 
 Keep the frontend maintainable while feature count rises.
@@ -18,6 +25,8 @@ Keep the frontend maintainable while feature count rises.
 
 ### E9-S1 Split store into logical slices
 
+Status: partial
+
 Acceptance criteria:
 
 - store supports telemetry, control, missions, world planning, fleet, and roles cleanly
@@ -31,6 +40,8 @@ Tasks:
 
 ### E9-S2 Upgrade socket provider to event-first control sync
 
+Status: partial
+
 Acceptance criteria:
 
 - command and mission state updates come primarily from sockets
@@ -42,6 +53,8 @@ Tasks:
 - normalize event handling into store updates
 
 ### E9-S3 Create reusable control components
+
+Status: mostly done
 
 Acceptance criteria:
 

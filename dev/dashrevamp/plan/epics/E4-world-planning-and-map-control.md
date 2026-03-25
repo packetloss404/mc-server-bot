@@ -1,5 +1,12 @@
 # E4 World Planning And Map Control
 
+Current status: partial
+
+Current-state note:
+
+- marker, zone, and route persistence are in place, and the map renders world objects now
+- the remaining work is mostly around creation/editing UX and richer command flows from the map
+
 ## Goal
 
 Make the map a first-class command surface.
@@ -19,6 +26,8 @@ Make the map a first-class command surface.
 
 ### E4-S1 Refactor map page for extensibility
 
+Status: mostly done
+
 Acceptance criteria:
 
 - map page stops mutating refs during render
@@ -31,6 +40,8 @@ Tasks:
 - add selected object state and mode state
 
 ### E4-S2 Add markers, zones, and routes
+
+Status: partial
 
 Acceptance criteria:
 
@@ -45,6 +56,8 @@ Tasks:
 - add list or detail panel for world objects
 
 ### E4-S3 Add click-to-command and context menus
+
+Status: partial
 
 Acceptance criteria:
 

@@ -1,5 +1,12 @@
 # E6 Roles And Automation Policies
 
+Current status: partial
+
+Current-state note:
+
+- role persistence, APIs, page, and assignment panel are present
+- policy execution, autonomy enforcement, and strong override semantics are still the major unfinished parts
+
 ## Goal
 
 Give bots durable, visible dashboard-managed operating roles.
@@ -18,6 +25,8 @@ Give bots durable, visible dashboard-managed operating roles.
 
 ### E6-S1 Add role assignment data model
 
+Status: mostly done
+
 Acceptance criteria:
 
 - role assignments match the schema plan
@@ -31,6 +40,8 @@ Tasks:
 
 ### E6-S2 Add role management UI
 
+Status: partial
+
 Acceptance criteria:
 
 - operator can assign role, home marker, allowed zones, and autonomy level without leaving the dashboard
@@ -42,6 +53,8 @@ Tasks:
 - show role summaries on dashboard/fleet cards
 
 ### E6-S3 Add policy execution and override rules
+
+Status: missing
 
 Acceptance criteria:
 

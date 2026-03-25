@@ -22,6 +22,7 @@ export class AffinityManager {
   private events: Map<string, RelationshipEvent[]> = new Map();
   private config: Config['affinity'];
   private savePath: string;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: Config['affinity'], dataDir: string) {
     this.config = config;
@@ -147,13 +148,36 @@ export class AffinityManager {
   }
 
   private save(): void {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.writeAtomic();
+    }, 2000);
+  }
+
+  private writeAtomic(): void {
     const dir = path.dirname(this.savePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     const data: PersistedData = {
       scores: this.store,
       events: Object.fromEntries(this.events),
     };
-    fs.writeFileSync(this.savePath, JSON.stringify(data, null, 2));
+    const tmpPath = this.savePath + '.tmp';
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(data, null, 2));
+      fs.renameSync(tmpPath, this.savePath);
+    } catch {
+      try { fs.writeFileSync(this.savePath, JSON.stringify(data, null, 2)); } catch { /* best effort */ }
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+  }
+
+  shutdown(): void {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+      this.writeAtomic();
+    }
   }
 
   private load(): void {

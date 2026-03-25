@@ -1,16 +1,15 @@
 async function mineOneOakLog(bot) {
-  const logName = 'oak_log';
-  const block = bot.findBlock({
-    matching: b => b.name === logName,
+  const targetLog = bot.findBlock({
+    matching: block => block.name === 'oak_log',
     maxDistance: 32
   });
-  if (!block) {
-    await exploreUntil('north', 60, () => {
-      return bot.findBlock({
-        matching: b => b.name === logName,
-        maxDistance: 32
-      });
-    });
+  if (targetLog) {
+    await moveTo(targetLog.position.x, targetLog.position.y, targetLog.position.z, 2);
+  } else {
+    await exploreUntil('north', 60, () => bot.findBlock({
+      matching: block => block.name === 'oak_log',
+      maxDistance: 32
+    }));
   }
-  await mineBlock(logName, 1);
+  await mineBlock('oak_log', 1);
 }

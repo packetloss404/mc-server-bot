@@ -42,8 +42,8 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
     return { success: false, message: `Found furnace for ${itemName} but could not reach it` };
   }
 
+  const furnace = await (bot as any).openFurnace(furnaceBlock);
   try {
-    const furnace = await (bot as any).openFurnace(furnaceBlock);
     let smelted = 0;
 
     for (let i = 0; i < count; i++) {
@@ -62,8 +62,6 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
       smelted++;
     }
 
-    furnace.close();
-
     if (smelted === 0) {
       return {
         success: false,
@@ -81,5 +79,7 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
       success: false,
       message: `Smelting ${itemName} failed: ${err.message}. Inventory: ${inventorySummary(bot)}`,
     };
+  } finally {
+    furnace.close();
   }
 }

@@ -56,6 +56,7 @@ interface BlackboardState {
 export class BlackboardManager {
   private filePath: string;
   private state: BlackboardState;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(dataDir: string) {
     this.filePath = path.join(dataDir, 'blackboard.json');
@@ -247,6 +248,30 @@ export class BlackboardManager {
   }
 
   private persist(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2));
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.writeAtomic();
+    }, 2000);
+  }
+
+  private writeAtomic(): void {
+    const tmpPath = this.filePath + '.tmp';
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.state, null, 2));
+      fs.renameSync(tmpPath, this.filePath);
+    } catch {
+      // Fallback: direct write (rename can fail on Windows if target is locked)
+      try { fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2)); } catch { /* best effort */ }
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+  }
+
+  shutdown(): void {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+      this.writeAtomic();
+    }
   }
 }

@@ -17,78 +17,34 @@ export interface GeneratedCode {
   execCode: string;
 }
 
-const ACTION_SYSTEM_PROMPT = `You are a Minecraft bot code generator. You write JavaScript code as a single named async function to complete the task.
+const ACTION_SYSTEM_PROMPT = `You are a Minecraft bot code generator. Output a single async function to complete the task.
 
-## Useful programs already available in scope
-Reuse these as much as possible. They are the preferred way to act in the world.
+## Available primitives (always prefer these over raw bot APIs)
+mineBlock(name, count) — craftItem(name, count) — smeltItem(itemName, fuelName, count)
+placeItem(name, x, y, z) — killMob(name, maxMs) — moveTo(x, y, z, range, timeoutSec)
+exploreUntil(direction, maxTime, callback) — withdrawItem(containerName, itemName, count)
+depositItem(containerName, itemName, count) — inspectContainer(containerName)
 
-\`\`\`
-async function mineBlock(name, count)    // collect blocks/items
-async function craftItem(name, count)    // craft items
-async function smeltItem(itemName, fuelName, count) // smelt items in a furnace
-async function placeItem(name, x, y, z)  // place blocks
-async function killMob(name, maxMs)      // fight mobs
-async function moveTo(x, y, z, range, timeoutSec) // pathfind to a target
-async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target
-async function withdrawItem(containerName, itemName, count) // withdraw from chest/barrel/etc
-async function depositItem(containerName, itemName, count)  // deposit into chest/barrel/etc
-async function inspectContainer(containerName) // inspect container contents
-\`\`\`
+## Bot observation APIs
+bot.entity.position, bot.health, bot.food
+bot.inventory.items() → [{name, count}]; find: bot.inventory.items().find(i => i.name === 'oak_log')
+bot.findBlock({matching: b => b.name === 'name', maxDistance: 32})
+bot.lookAt(pos), bot.look(yaw, pitch), bot.nearestEntity(filter), bot.players, bot.waitForTicks(ticks)
 
-## Bot state / observation APIs
-These are mainly for observing state or selecting a target.
+## Non-existent APIs — never use
+bot.inventory.findInventoryItem(), bot.inventory.findItem() → use bot.inventory.items().find()
+bot.tossStack() → use bot.toss(itemId, null, count)
+bot.equip() with string → pass the item object from bot.inventory.items()
 
-- bot.entity.position, bot.health, bot.food
-- bot.inventory.items() — returns array of {name, count}. To find an item: bot.inventory.items().find(i => i.name === 'oak_log')
-- bot.findBlock({matching: b => b.name === 'name', maxDistance: 32})
-- bot.lookAt(pos), bot.look(yaw, pitch)
-- bot.nearestEntity(filter), bot.players
-- bot.waitForTicks(ticks)
-
-## APIs that do NOT exist — never use these
-- bot.inventory.findInventoryItem() — DOES NOT EXIST. Use bot.inventory.items().find(i => i.name === 'x') instead.
-- bot.inventory.findItem() — DOES NOT EXIST.
-- bot.tossStack() — DOES NOT EXIST. Use bot.toss(itemId, null, count) instead.
-- bot.equip() with string argument — use the item object from bot.inventory.items().
-
-## Hard rules
-1. Output a SINGLE async function: async function functionName(bot) { ... }
-2. The function name must be meaningful camelCase.
-3. You may call any previously saved skill functions shown in context - they accept (bot) as parameter.
-4. Use await for all async operations.
-5. Do NOT wrap the entire function body in try/catch. Let errors propagate so they can be detected. Only use try/catch around specific risky operations if needed.
-6. Do NOT call bot.chat(). The bot should work silently.
-7. Keep code concise and reusable. Do not assume the inventory already contains required items.
-8. Do NOT use bot.on() or bot.once() event listeners.
-9. Do NOT write infinite loops or recursive functions.
-10. maxDistance must always be 32 for bot.findBlock().
-11. Output ONLY the function code. No explanation. No markdown fences.
-
-## Primitive usage requirements
-- For mining or collecting tasks, use mineBlock(...). Do NOT use bot.dig(...) directly.
-- For crafting tasks, use craftItem(...). Do NOT use bot.craft(...) or bot.recipesFor(...) directly.
-- For smelting tasks, use smeltItem(...). Do NOT use bot.openFurnace(...) directly.
-- For placement tasks, use placeItem(...). Do NOT use bot.placeBlock(...) directly.
-- For combat tasks, use killMob(...). Do NOT use bot.attack(...) directly.
-- For chest or container tasks, use withdrawItem(...) and depositItem(...) instead of scripting container UI manually.
-- Use inspectContainer(...) when you need to check what is inside a nearby chest/container.
-- For movement tasks, use moveTo(...).
-- If the target is not nearby or cannot be found immediately, use exploreUntil(...) before giving up.
-- Do NOT use bot.pathfinder.setGoal(...) directly unless there is no primitive that can solve the task.
-
-## Behavioral guidance
-- First identify the target.
-- If the target is nearby, use the appropriate primitive.
-- If the target is not nearby, explore outward with exploreUntil(...) and then use the primitive.
-- Do not stop after only locating a target when the task implies going to it, collecting it, or interacting with it.
-
-## Previously saved skills
-You may call previously saved skill functions shown in context. They accept (bot) as parameter.
-
-## Composition priority
-- Prefer composing 2-3 previously saved skills plus primitives over writing long fresh logic from scratch.
-- If a retrieved skill already solves a prerequisite (for example gathering wood, crafting a table, moving to a player, or finding a target), call that skill instead of rewriting it.
-- For compound tasks, write a short orchestrator function that calls existing skills/primitives in order.`;
+## Rules
+1. Output ONLY a single \`async function functionName(bot) { ... }\` in camelCase. No explanation, no markdown fences.
+2. Use await for all async calls. Do not assume inventory already has required items.
+3. Always use primitives instead of raw bot APIs: mineBlock not bot.dig, craftItem not bot.craft/bot.recipesFor, smeltItem not bot.openFurnace, placeItem not bot.placeBlock, killMob not bot.attack, withdrawItem/depositItem not manual container UI, moveTo not bot.pathfinder.setGoal (unless no primitive fits).
+4. If the target is not nearby, use exploreUntil(...) first, then act on it — do not stop after merely locating the target.
+5. Do NOT: wrap the whole body in try/catch (let errors propagate), call bot.chat(), use bot.on()/bot.once(), write infinite loops or recursion.
+6. maxDistance must be 32 for bot.findBlock().
+7. You may call previously saved skill functions shown in context — they accept (bot). Prefer composing existing skills + primitives over writing long fresh logic.
+8. For compound tasks, write a short orchestrator that calls existing skills/primitives in order.`;
 
 export class ActionAgent {
   private static readonly MAX_PREVIOUS_CODE_CHARS = 800;

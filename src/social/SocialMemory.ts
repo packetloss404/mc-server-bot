@@ -43,6 +43,7 @@ export class SocialMemory {
   private store: SocialMemoryStore = { memories: [], reflections: [], emotionalStates: {} };
   private savePath: string;
   private decayTimer: ReturnType<typeof setInterval>;
+  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.savePath = path.join('data', 'social_memory.json');
@@ -271,9 +272,33 @@ export class SocialMemory {
   }
 
   save(): void {
+    if (this._saveTimer) clearTimeout(this._saveTimer);
+    this._saveTimer = setTimeout(() => {
+      this._saveTimer = null;
+      this.writeAtomic();
+    }, 2000);
+  }
+
+  private writeAtomic(): void {
     const dir = path.dirname(this.savePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.savePath, JSON.stringify(this.store, null, 2));
+    const tmpPath = this.savePath + '.tmp';
+    try {
+      fs.writeFileSync(tmpPath, JSON.stringify(this.store, null, 2));
+      fs.renameSync(tmpPath, this.savePath);
+    } catch {
+      try { fs.writeFileSync(this.savePath, JSON.stringify(this.store, null, 2)); } catch { /* best effort */ }
+      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
+    }
+  }
+
+  shutdown(): void {
+    if (this._saveTimer) {
+      clearTimeout(this._saveTimer);
+      this._saveTimer = null;
+      this.writeAtomic();
+    }
+    clearInterval(this.decayTimer);
   }
 
   load(): void {

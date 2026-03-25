@@ -1,9 +1,16 @@
-async function mine3BlocksOfGrass(bot) {
-  try {
-    await mineBlock("grass_block", 3);
-    bot.chat("Mined 3 grass blocks.");
-  } catch (err) {
-    console.error('Error mining grass_block:', err);
-    bot.chat("Failed to mine grass blocks.");
+async function mineThreeBlocksOfGrass(bot) {
+  const blockName = 'grass_block';
+  let target = bot.findBlock({
+    matching: b => b.name === blockName,
+    maxDistance: 32
+  });
+  if (!target) {
+    await exploreUntil(bot, 'north', 60, () => {
+      return bot.findBlock({
+        matching: b => b.name === blockName,
+        maxDistance: 32
+      });
+    });
   }
+  await mineBlock(blockName, 3);
 }

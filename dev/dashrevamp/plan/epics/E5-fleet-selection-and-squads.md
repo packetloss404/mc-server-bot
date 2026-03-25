@@ -1,5 +1,12 @@
 # E5 Fleet Selection And Squads
 
+Current status: partial
+
+Current-state note:
+
+- squad backend, fleet page, and selection bar exist now
+- the remaining work is mostly about shared selection state, complete backend-backed squad flows, and better batch result UX
+
 ## Goal
 
 Provide intentional multi-bot control.
@@ -18,6 +25,8 @@ Provide intentional multi-bot control.
 
 ### E5-S1 Add selection model
 
+Status: partial
+
 Acceptance criteria:
 
 - operator can select multiple bots from dashboard, map, or fleet page
@@ -31,6 +40,8 @@ Tasks:
 
 ### E5-S2 Add squad persistence
 
+Status: mostly done
+
 Acceptance criteria:
 
 - squads can be created, renamed, edited, and deleted
@@ -43,6 +54,8 @@ Tasks:
 - add squad editor UI
 
 ### E5-S3 Add batch command execution
+
+Status: partial
 
 Acceptance criteria:
 

@@ -1,5 +1,13 @@
 # Feature Inventory
 
+This file now tracks both scope and implementation status.
+
+Status legend:
+
+- Implemented - present and broadly working
+- Partial - present but incomplete, inconsistent, or not fully wired
+- Missing - not meaningfully implemented yet
+
 ## Scope Summary
 
 This plan covers the full dashboard control program across six control directions:
@@ -13,6 +21,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 1. Command Center
 
+Implementation status: partial
+
 ### Goals
 
 - let operators intervene instantly
@@ -21,11 +31,11 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- per-bot quick actions
-- bulk quick actions for selected bots
-- command pending/running/success/failure states
-- inline feedback and history
-- manual override indicators
+- per-bot quick actions - implemented
+- bulk quick actions for selected bots - partial
+- command pending/running/success/failure states - partial
+- inline feedback and history - partial
+- manual override indicators - partial
 
 ### Initial command set
 
@@ -46,6 +56,12 @@ This plan covers the full dashboard control program across six control direction
 - unstuck / recover
 - clear override
 
+Current notes:
+
+- backend command handlers cover much of this list
+- frontend tactical UI currently exposes only a subset cleanly
+- `deposit_inventory` is still stubbed
+
 ### Future command set
 
 - escort player
@@ -57,6 +73,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 2. Mission Planner
 
+Implementation status: partial
+
 ### Goals
 
 - make planned work visible and manageable
@@ -65,13 +83,18 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- visible current mission and queued missions
-- mission priorities
-- append, prepend, cancel, retry, clear, reorder
-- blocked / failed / completed states
-- mission templates
-- mission dependencies
-- per-bot and multi-bot missions
+- visible current mission and queued missions - implemented
+- mission priorities - partial
+- append, prepend, cancel, retry, clear, reorder - partial
+- blocked / failed / completed states - partial
+- mission templates - missing
+- mission dependencies - partial
+- per-bot and multi-bot missions - partial
+
+Current notes:
+
+- mission records exist, but UI/history is not fully driven by them yet
+- queue management is still split between `MissionManager` and raw Voyager queue access
 
 ### Mission types
 
@@ -88,6 +111,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 3. Map-First Control
 
+Implementation status: partial
+
 ### Goals
 
 - make the map a command surface, not just a viewer
@@ -95,13 +120,13 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- click-to-move
-- right-click action menu
-- drag-to-define zone
-- save named markers
-- create patrol routes
-- assign mission from a selected map object
-- display squad locations, trails, areas, build sites, and danger zones
+- click-to-move - partial
+- right-click action menu - partial
+- drag-to-define zone - missing
+- save named markers - implemented
+- create patrol routes - partial
+- assign mission from a selected map object - missing
+- display squad locations, trails, areas, build sites, and danger zones - partial
 
 ### World objects
 
@@ -112,7 +137,15 @@ This plan covers the full dashboard control program across six control direction
 - resource nodes
 - hazard zones
 
+Current notes:
+
+- marker/zone/route persistence exists
+- route and zone editing UX is still incomplete
+- map-first command flows lag behind backend command capabilities
+
 ## 4. Squad Control
+
+Implementation status: partial
 
 ### Goals
 
@@ -121,13 +154,19 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- multi-select bots
-- ad hoc groups from current selection
-- named squads
-- squad default roles
-- batch commands with per-bot result tracking
-- squad missions
-- regroup and formation helpers
+- multi-select bots - partial
+- ad hoc groups from current selection - partial
+- named squads - implemented
+- squad default roles - missing
+- batch commands with per-bot result tracking - partial
+- squad missions - partial
+- regroup and formation helpers - missing
+
+Current notes:
+
+- squads backend exists and fleet page exists
+- selection state is split across multiple frontend stores
+- `activeMissionId` on squads still appears unused
 
 ### Example squads
 
@@ -139,6 +178,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 5. Role-Based Automation
 
+Implementation status: partial
+
 ### Goals
 
 - reduce repetitive operator work
@@ -146,14 +187,19 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- assign role to bot
-- role configuration panel
-- role home marker
-- allowed / preferred zones
-- restock policy
-- interruption policy
-- autonomy level
-- visible role health and status
+- assign role to bot - implemented
+- role configuration panel - implemented
+- role home marker - implemented
+- allowed / preferred zones - partial
+- restock policy - missing
+- interruption policy - missing
+- autonomy level - partial
+- visible role health and status - missing
+
+Current notes:
+
+- CRUD exists, but policy execution and autonomy enforcement are still missing
+- overrides are tracked in backend state but not yet surfaced consistently in UI
 
 ### Proposed roles
 
@@ -168,6 +214,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 6. Chat-As-Control
 
+Implementation status: partial
+
 ### Goals
 
 - support fast high-level operator intent
@@ -175,12 +223,18 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- command console input
-- parser output preview
-- confirmation before execution for impactful actions
-- structured plan display
-- execution history
-- suggested clarifications for ambiguous inputs
+- command console input - implemented
+- parser output preview - partial
+- confirmation before execution for impactful actions - implemented
+- structured plan display - partial
+- execution history - partial
+- suggested clarifications for ambiguous inputs - missing
+
+Current notes:
+
+- commander backend and page exist
+- frontend/backend response contracts need alignment
+- history is currently page-local, not a persistent shared record
 
 ### Example prompts
 
@@ -191,6 +245,8 @@ This plan covers the full dashboard control program across six control direction
 
 ## 7. Recovery, Diagnostics, and Ops Tooling
 
+Implementation status: partial
+
 ### Goals
 
 - make failures actionable
@@ -198,15 +254,22 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- last command result
-- last mission failure and reason
-- blocked state explanation
-- retry suggestions
-- quick recovery actions
-- command and mission history
-- bot detail diagnostics timeline
+- last command result - partial
+- last mission failure and reason - partial
+- blocked state explanation - partial
+- retry suggestions - missing
+- quick recovery actions - partial
+- command and mission history - partial
+- bot detail diagnostics timeline - missing
+
+Current notes:
+
+- diagnostics and history surfaces exist
+- several still rely on activity/task history instead of shared command/mission records
 
 ## 8. Saved Routines And Templates
+
+Implementation status: missing
 
 ### Goals
 
@@ -214,10 +277,14 @@ This plan covers the full dashboard control program across six control direction
 
 ### Core features
 
-- command macros
-- reusable mission templates
-- preset squad operations
-- named loadouts
+- command macros - missing
+- reusable mission templates - missing
+- preset squad operations - missing
+- named loadouts - missing
+
+Current notes:
+
+- only narrow template-like behavior exists today, such as chain templates
 
 ### Examples
 

@@ -1,5 +1,12 @@
 # E1 Shared Control Platform
 
+Current status: mostly implemented
+
+Current-state note:
+
+- shared command types, command service, APIs, persistence, and cancellation are in the repo now
+- the main remaining gap is frontend adoption of lifecycle events and unified command state
+
 ## Goal
 
 Create the common backend and event foundation that every control surface uses.
@@ -21,6 +28,8 @@ Create the common backend and event foundation that every control surface uses.
 
 ### E1-S1 Define shared control types
 
+Status: done
+
 Acceptance criteria:
 
 - repo has typed command status, scope, payload, and result models
@@ -36,6 +45,8 @@ Tasks:
 
 ### E1-S2 Create `CommandCenter`
 
+Status: mostly done
+
 Acceptance criteria:
 
 - commands can be created, started, completed, failed, and cancelled
@@ -50,6 +61,8 @@ Tasks:
 - add structured logging with `commandId`, `bot`, and `source`
 
 ### E1-S3 Migrate current direct APIs to shared control service
+
+Status: done
 
 Acceptance criteria:
 
@@ -68,6 +81,8 @@ Tasks:
 - add `GET /api/commands/:id`
 
 ### E1-S4 Emit command lifecycle over Socket.IO
+
+Status: partial
 
 Acceptance criteria:
 

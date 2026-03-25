@@ -30,7 +30,7 @@ export class VoyagerLoop {
   private criticAgent: CriticAgent;
   private statsTracker: StatsTracker;
   private running = false;
-  private paused = false;
+  private pauseReasons: Set<string> = new Set();
   private loopTimeout: NodeJS.Timeout | null = null;
   private lastExecutionMetrics: {
     attempt: number;
@@ -51,6 +51,8 @@ export class VoyagerLoop {
   private currentTask: string | null = null;
   private lastCompletedTask: string | null = null;
   private lastFailedTask: string | null = null;
+  private currentTaskSource: 'player-request' | 'long-term-goal' | 'blackboard' | 'autonomous' = 'autonomous';
+  private interruptedByPlayer = false;
 
   // Optional callbacks for task lifecycle events
   onTaskSuccess?: (taskDescription: string) => void;
@@ -97,7 +99,7 @@ export class VoyagerLoop {
 
   stop(): void {
     this.running = false;
-    this.paused = false;
+    this.pauseReasons.clear();
     if (this.loopTimeout) {
       clearTimeout(this.loopTimeout);
       this.loopTimeout = null;
@@ -105,30 +107,58 @@ export class VoyagerLoop {
     logger.info({ bot: this.botName }, 'Voyager loop stopped');
   }
 
+  /** Flush all pending debounced writes in owned data managers. */
+  shutdownPersistence(): void {
+    this.statsTracker.shutdown();
+    this.curriculumAgent.shutdown();
+  }
+
   isRunning(): boolean {
     return this.running;
   }
 
   pause(reason = 'paused'): void {
-    if (!this.running || this.paused) return;
-    this.paused = true;
-    if (this.loopTimeout) {
-      clearTimeout(this.loopTimeout);
-      this.loopTimeout = null;
+    if (!this.running) return;
+    const wasEmpty = this.pauseReasons.size === 0;
+    this.pauseReasons.add(reason);
+    if (wasEmpty) {
+      if (this.loopTimeout) {
+        clearTimeout(this.loopTimeout);
+        this.loopTimeout = null;
+      }
+      this.codeExecutor.requestInterrupt(reason);
+      logger.warn({ bot: this.botName, reason, reasons: Array.from(this.pauseReasons), task: this.currentTask }, 'Voyager loop paused');
+    } else {
+      logger.warn({ bot: this.botName, reason, reasons: Array.from(this.pauseReasons) }, 'Voyager loop pause reason added');
     }
-    this.codeExecutor.requestInterrupt(reason);
-    logger.warn({ bot: this.botName, reason, task: this.currentTask }, 'Voyager loop paused');
   }
 
   resume(reason = 'resumed'): void {
-    if (!this.running || !this.paused) return;
-    this.paused = false;
-    logger.info({ bot: this.botName, reason }, 'Voyager loop resumed');
+    if (!this.running) return;
+    this.pauseReasons.delete(reason);
+    if (this.pauseReasons.size === 0) {
+      logger.info({ bot: this.botName, reason }, 'Voyager loop resumed (all pause reasons cleared)');
+      this.scheduleNext();
+    } else {
+      logger.info({ bot: this.botName, reason, remaining: Array.from(this.pauseReasons) }, 'Voyager loop pause reason removed, still paused');
+    }
+  }
+
+  /** Force-clear all pause reasons and restart the loop (e.g. player chat override). */
+  forceResume(reason = 'force-resumed'): void {
+    if (!this.running) return;
+    const had = Array.from(this.pauseReasons);
+    this.pauseReasons.clear();
+    logger.info({ bot: this.botName, reason, cleared: had }, 'Voyager loop force-resumed');
     this.scheduleNext();
   }
 
   isPaused(): boolean {
-    return this.paused;
+    return this.pauseReasons.size > 0;
+  }
+
+  getPauseReasons(): string[] {
+    return Array.from(this.pauseReasons);
   }
 
   /** Get the current task description, or null if idle */
@@ -270,29 +300,45 @@ export class VoyagerLoop {
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
-    // Decompose asynchronously — subtasks get queued when ready
-    this.decomposeAndQueue(description, requestedBy).catch((err) => {
-      logger.warn({ err: err.message, task: description }, 'Decompose failed, queuing raw task');
-      const keywords = description
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter((w) => w.length > 2);
-      this.playerTaskQueue.push({ description, keywords });
-    });
+    const interruptIfAutonomous = () => {
+      if (this.currentTaskSource === 'autonomous' || this.currentTaskSource === 'blackboard') {
+        this.interruptedByPlayer = true;
+        this.codeExecutor.requestInterrupt(`player task from ${requestedBy}: ${description}`);
+        logger.info({ bot: this.botName, task: description, requestedBy }, 'Interrupting autonomous task for player request');
+      }
+    };
+
+    // Decompose asynchronously — subtasks get queued when ready, then interrupt if needed
+    this.decomposeAndQueue(description, requestedBy)
+      .then(() => interruptIfAutonomous())
+      .catch((err) => {
+        logger.warn({ err: err.message, task: description }, 'Decompose failed, queuing raw task');
+        const keywords = description
+          .toLowerCase()
+          .replace(/[^a-z0-9\s]/g, '')
+          .split(/\s+/)
+          .filter((w) => w.length > 2);
+        this.playerTaskQueue.push({ description, keywords });
+        interruptIfAutonomous();
+      });
   }
 
   private async decomposeAndQueue(description: string, requestedBy: string): Promise<void> {
-    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
-    for (const task of subtasks) {
-      this.playerTaskQueue.push(task);
-    }
+    // Don't decompose player chat requests — queue them directly and let the
+    // codegen execution handle prerequisites dynamically. Decomposition was
+    // turning "scout for an island" into "mine logs → craft planks → craft boat"
+    // which defeats the player's intent.
+    const keywords = description
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    this.playerTaskQueue.push({ description, keywords });
     logger.info({
       bot: this.botName,
-      goal: description,
+      task: description,
       requestedBy,
-      subtasks: subtasks.map((t) => t.description),
-    }, subtasks.length > 1 ? 'Player goal decomposed and queued' : 'Player task queued');
+    }, 'Player task queued');
     this.blackboardManager?.postMessage(this.botName, 'info', `Queued local task: ${description}`);
   }
 
@@ -335,10 +381,10 @@ export class VoyagerLoop {
   }
 
   private scheduleNext(): void {
-    if (!this.running || this.paused) return;
+    if (!this.running || this.isPaused()) return;
 
     this.loopTimeout = setTimeout(async () => {
-      if (!this.running || this.paused) return;
+      if (!this.running || this.isPaused()) return;
 
       try {
         await this.runOneCycle();
@@ -351,7 +397,7 @@ export class VoyagerLoop {
   }
 
   private async runOneCycle(): Promise<void> {
-    if (this.paused) return;
+    if (this.isPaused()) return;
     if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
       await this.runBuildGoalCycle();
       return;
@@ -373,20 +419,23 @@ export class VoyagerLoop {
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);
     const plan = buildTaskPlan(task, progression);
     this.currentTask = task.description;
+    this.currentTaskSource = goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous';
+    this.interruptedByPlayer = false;
 
     logger.info({
       bot: this.botName,
       task: task.description,
-      source: goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous',
+      source: this.currentTaskSource,
       plan: plan.steps.map((step) => step.description),
     }, 'Voyager task proposed');
 
     for (const step of plan.steps) {
       const ok = await this.executeTaskStep(step);
       if (!ok) {
-        // If the failure was caused by an instinct pause (damage), don't treat it as
-        // a real failure — just bail out so the goal resumes when instinct ends.
-        if (this.paused) {
+        // If the failure was caused by an instinct pause (damage) or a player task
+        // interrupting an autonomous task, don't treat it as a real failure.
+        if (this.isPaused() || this.interruptedByPlayer) {
+          this.interruptedByPlayer = false;
           this.currentTask = null;
           return;
         }
@@ -503,7 +552,7 @@ export class VoyagerLoop {
       const gatherOk = await this.executeTaskStep({ description: gatherTask.description, keywords: gatherTask.keywords, spec: gatherTask.spec });
       if (!gatherOk) {
         // If paused by instinct (damage), don't mark the build goal as blocked
-        if (this.paused) {
+        if (this.isPaused()) {
           this.currentTask = null;
           return;
         }

@@ -25,6 +25,8 @@ export interface BuildJob {
   totalBlocks: number;
   placedBlocks: number;
   assignments: BotAssignment[];
+  /** Bot names to remove when the build finishes (created specifically for this build) */
+  cleanupBotNames?: string[];
 }
 
 export interface BotAssignment {
@@ -165,6 +167,7 @@ export class BuildCoordinator {
     schematicFile: string,
     origin: { x: number; y: number; z: number },
     botNames: string[],
+    options?: { cleanupBotNames?: string[]; fillFoundation?: boolean; snapToGround?: boolean },
   ): Promise<BuildJob> {
     const { Schematic } = require('prismarine-schematic');
     const fullPath = path.join(this.schematicsDir, schematicFile);
@@ -229,6 +232,137 @@ export class BuildCoordinator {
 
     if (blocks.length === 0) {
       throw new Error('Schematic contains no blocks');
+    }
+
+    // ── Snap-to-ground: adjust origin Y to average terrain height ──
+    const fillFoundation = options?.fillFoundation !== false; // default true
+    const snapToGround = options?.snapToGround === true; // default false
+
+    // Find a connected bot to query world blocks
+    const probeInstance = botNames
+      .map((n) => this.botManager.getBot(n))
+      .find((inst) => inst?.bot);
+    const probeBot = probeInstance?.bot;
+
+    if (snapToGround && probeBot) {
+      // Build a grid of sample points across the footprint
+      const footprintXZ = new Map<string, { wx: number; wz: number }>();
+      for (const b of blocks) {
+        const key = `${b.wx},${b.wz}`;
+        if (!footprintXZ.has(key)) footprintXZ.set(key, { wx: b.wx, wz: b.wz });
+      }
+
+      // Sample up to 50 evenly-spaced columns
+      const allColumns = [...footprintXZ.values()];
+      const sampleStep = Math.max(1, Math.floor(allColumns.length / 50));
+      const samples: number[] = [];
+      for (let i = 0; i < allColumns.length; i += sampleStep) {
+        const col = allColumns[i];
+        // Scan downward from origin Y + 10 to find the first solid block
+        for (let y = oy + 10; y >= oy - 30; y--) {
+          const wb = probeBot.blockAt(new Vec3(col.wx, y, col.wz));
+          if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
+            samples.push(y + 1); // ground surface is top of this block
+            break;
+          }
+        }
+      }
+
+      if (samples.length > 0) {
+        // Use median ground level
+        samples.sort((a, b) => a - b);
+        const medianGround = samples[Math.floor(samples.length / 2)];
+        const diff = medianGround - oy;
+        if (Math.abs(diff) <= 5 && diff !== 0) {
+          logger.info(
+            { oldY: oy, newY: medianGround, diff, samples: samples.length },
+            'Snap-to-ground: adjusting origin Y to median terrain height',
+          );
+          // Shift all block world-Y positions by the difference
+          for (const b of blocks) {
+            b.wy += diff;
+          }
+          origin.y = medianGround;
+        } else if (Math.abs(diff) > 5) {
+          logger.info(
+            { originY: oy, medianGround, diff },
+            'Snap-to-ground: terrain difference too large, skipping adjustment',
+          );
+        }
+      }
+    }
+
+    // ── Foundation filling: add support blocks under schematic footprint ──
+    if (fillFoundation && probeBot) {
+      const MAX_FILL_DEPTH = 20;
+
+      // For each (wx, wz) column, find the lowest schematic block Y
+      const columnMinY = new Map<string, number>();
+      for (const b of blocks) {
+        const key = `${b.wx},${b.wz}`;
+        const prev = columnMinY.get(key);
+        if (prev === undefined || b.wy < prev) {
+          columnMinY.set(key, b.wy);
+        }
+      }
+
+      const foundationBlocks: BlockEntry[] = [];
+      let skippedLiquid = 0;
+      let skippedOutOfRange = 0;
+
+      for (const [key, minBlockY] of columnMinY) {
+        const [wxStr, wzStr] = key.split(',');
+        const wx = parseInt(wxStr, 10);
+        const wz = parseInt(wzStr, 10);
+
+        // Scan downward from minBlockY - 1 to find ground
+        let filledCount = 0;
+        for (let y = minBlockY - 1; y >= minBlockY - MAX_FILL_DEPTH; y--) {
+          const wb = probeBot.blockAt(new Vec3(wx, y, wz));
+          if (!wb) {
+            // Bot too far to query — skip this column
+            skippedOutOfRange++;
+            break;
+          }
+
+          if (wb.name === 'air' || wb.name === 'cave_air' || wb.name === 'void_air') {
+            // Air gap — fill with stone
+            foundationBlocks.push({
+              wx, wy: y, wz,
+              name: 'stone',
+              stateStr: '',
+              localY: -1 - filledCount, // negative localY so they sort before schematic blocks
+            });
+            filledCount++;
+          } else if (wb.name === 'water' || wb.name === 'lava'
+            || wb.name === 'flowing_water' || wb.name === 'flowing_lava') {
+            logger.warn(
+              { wx, y, wz, liquid: wb.name },
+              'Foundation fill: liquid detected under schematic, skipping column',
+            );
+            skippedLiquid++;
+            break;
+          } else {
+            // Hit solid ground — done with this column
+            break;
+          }
+        }
+      }
+
+      if (foundationBlocks.length > 0) {
+        logger.info(
+          { foundationBlocks: foundationBlocks.length, columns: columnMinY.size, skippedLiquid, skippedOutOfRange },
+          'Foundation fill: adding support blocks under schematic',
+        );
+        // Sort foundation blocks bottom-up so they build from ground level
+        foundationBlocks.sort((a, b) => a.wy - b.wy);
+        // Prepend foundation blocks before schematic blocks
+        blocks.unshift(...foundationBlocks);
+      } else {
+        logger.info('Foundation fill: no gaps detected, no fill needed');
+      }
+    } else if (fillFoundation && !probeBot) {
+      logger.warn('Foundation fill requested but no connected bot available to probe terrain');
     }
 
     // Safety limit on actual block count to prevent OOM
@@ -297,6 +431,7 @@ export class BuildCoordinator {
       totalBlocks: blocks.length,
       placedBlocks: 0,
       assignments,
+      cleanupBotNames: options?.cleanupBotNames,
     };
 
     this.jobs.set(jobId, job);
@@ -497,6 +632,21 @@ export class BuildCoordinator {
         { jobId, status: job.status, placed: job.placedBlocks, total: job.totalBlocks },
         'Build finished',
       );
+
+      // Remove bots that were created specifically for this build
+      if (job.cleanupBotNames && job.cleanupBotNames.length > 0) {
+        for (const botName of job.cleanupBotNames) {
+          try {
+            const removed = await this.botManager.removeBot(botName);
+            if (removed) {
+              logger.info({ botName, jobId }, 'Cleaned up build bot');
+              this.io.emit('bot:disconnect', { bot: botName });
+            }
+          } catch (err) {
+            logger.warn({ botName, jobId, err }, 'Failed to cleanup build bot');
+          }
+        }
+      }
     }
 
     // Cleanup cancellation tracking

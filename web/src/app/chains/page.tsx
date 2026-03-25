@@ -173,7 +173,6 @@ function ChainCard({
 }
 
 function StageCard({ stage, index, isActive }: { stage: ChainStage; index: number; isActive: boolean }) {
-  const color = STAGE_STATUS_COLORS[stage.status] ?? '#6B7280';
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -351,8 +350,8 @@ function CreateChainForm({
       };
       await api.createChain(payload);
       onCreated();
-    } catch (err: any) {
-      setError(err.message || 'Failed to create chain');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to create chain');
     } finally {
       setCreating(false);
     }
@@ -671,7 +670,6 @@ export default function ChainsPage() {
   const [chainMissions, setChainMissions] = useState<Record<string, MissionRecord>>({});
 
   const botList = useBotStore((s) => s.botList);
-  const storeChains = useBotStore((s) => s.chains);
   const setStoreChains = useBotStore((s) => s.setChains);
 
   const botNames = botList.map((b) => b.name);
@@ -697,15 +695,17 @@ export default function ChainsPage() {
   }, []);
 
   useEffect(() => {
-    Promise.all([fetchChains(), fetchTemplates()]).finally(() => setLoading(false));
+    let cancelled = false;
+    (async () => {
+      await Promise.all([fetchChains(), fetchTemplates()]);
+      if (!cancelled) {
+        setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [fetchChains, fetchTemplates]);
-
-  // Sync store chains to local state
-  useEffect(() => {
-    if (storeChains.length > 0) {
-      setLocalChains(storeChains);
-    }
-  }, [storeChains]);
 
   const selectedChain = chains.find((c) => c.id === selectedChainId) ?? null;
 
@@ -723,7 +723,7 @@ export default function ChainsPage() {
             type: 'supply_chain',
             title: chain.name,
             description: chain.description || `Supply chain with ${chain.stages.length} stage(s)`,
-            assigneeType: 'squad',
+            assigneeType: 'bot',
             assigneeIds: stageBotNames,
             priority: 'normal',
             source: 'dashboard',
@@ -733,8 +733,8 @@ export default function ChainsPage() {
           // Mission creation is best-effort
         }
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to start chain');
     }
   };
 
@@ -742,8 +742,8 @@ export default function ChainsPage() {
     try {
       await api.pauseChain(id);
       await fetchChains();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to pause chain');
     }
   };
 
@@ -761,8 +761,8 @@ export default function ChainsPage() {
           return next;
         });
       }
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel chain');
     }
   };
 
@@ -770,8 +770,8 @@ export default function ChainsPage() {
     try {
       await api.deleteChain(id);
       await fetchChains();
-    } catch (err: any) {
-      setError(err.message);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to resume chain');
     }
   };
 

@@ -29,22 +29,12 @@ It is tailored to the current repo shape:
 - `vision.md` - product goals, personas, and control philosophy
 - `features.md` - complete feature inventory and requirements
 - `milestones.md` - delivery milestones and acceptance criteria
-- `sprints.md` - sprint-by-sprint work plan
 - `roadmap.md` - rollout sequence from MVP to advanced control
-- `backend-architecture.md` - service and module design for backend control systems
 - `frontend-architecture.md` - UI architecture, store evolution, and interaction patterns
-- `api-plan.md` - repo-specific REST and Socket.IO plan
-- `schemas.md` - domain models and persistence shapes
 - `backlog.md` - execution backlog with epics, stories, tasks, and PM-style ownership lanes
 - `epics/` - one markdown file per epic for easier execution tracking
-- `page-plans.md` - page-by-page screen plan
-- `wireframes.md` - low-fidelity text wireframes
 - `user-flows.md` - core operator workflows
-- `implementation-notes.md` - repo-specific extension points and migration guidance
-- `risks-and-open-questions.md` - main risks, tradeoffs, and unresolved decisions
-- `testing-strategy.md` - validation plan for control features
 - `telemetry.md` - metrics, logging, and operational visibility plan
-- `migration-plan.md` - how to move from the current dashboard to the new control platform
 
 ## Ten PM Workstreams
 

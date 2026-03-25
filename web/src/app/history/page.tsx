@@ -4,6 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { api, type CommandRecord, type MissionRecord } from '@/lib/api';
+import { useFleetStore } from '@/lib/store';
 
 type Tab = 'commands' | 'missions';
 type StatusFilter = 'all' | 'succeeded' | 'failed' | 'started' | 'queued' | 'cancelled';
@@ -77,6 +78,7 @@ function isCommandRecord(item: HistoryItem): item is CommandRecord {
 }
 
 export default function HistoryPage() {
+  const squads = useFleetStore((s) => s.squads);
   const [tab, setTab] = useState<Tab>('commands');
   const [commands, setCommands] = useState<CommandRecord[]>([]);
   const [missions, setMissions] = useState<MissionRecord[]>([]);
@@ -122,7 +124,12 @@ export default function HistoryPage() {
   });
 
   const filteredMissions = missions.filter((mission) => {
-    if (botFilter !== 'all' && !mission.assigneeIds.some((id) => id.toLowerCase() === botFilter.toLowerCase())) return false;
+    if (botFilter !== 'all') {
+      const matchesBot = mission.assigneeType === 'bot'
+        ? mission.assigneeIds.some((id) => id.toLowerCase() === botFilter.toLowerCase())
+        : mission.assigneeIds.some((id) => squads.find((squad) => squad.id === id)?.botNames.some((name) => name.toLowerCase() === botFilter.toLowerCase()));
+      if (!matchesBot) return false;
+    }
     if (statusFilter !== 'all' && missionStatusFilterValue(mission.status) !== statusFilter) return false;
     if (typeFilter !== 'all' && mission.type !== typeFilter) return false;
     return true;

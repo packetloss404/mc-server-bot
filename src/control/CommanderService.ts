@@ -55,6 +55,16 @@ export interface CommanderExecuteResult {
   missions: MissionRecord[];
 }
 
+export interface CommanderHistoryEntry {
+  planId: string;
+  input: string;
+  plan: CommanderPlan;
+  result?: CommanderExecuteResult;
+  status: 'parsed' | 'executed' | 'partial_failure';
+  createdAt: string;
+  executedAt?: string;
+}
+
 export class CommanderService {
   private llmClient: LLMClient | null;
   private botManager: BotManager;
@@ -62,6 +72,7 @@ export class CommanderService {
   private missionManager: MissionManager;
   private markerStore: MarkerStore;
   private plans: Map<string, CommanderPlan> = new Map();
+  private history: CommanderHistoryEntry[] = [];
 
   constructor(deps: CommanderServiceDeps) {
     this.llmClient = deps.llmClient;
@@ -75,6 +86,14 @@ export class CommanderService {
 
   private generateId(): string {
     return `plan_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+  }
+
+  getHistory(limit = 20): CommanderHistoryEntry[] {
+    return this.history.slice(0, limit);
+  }
+
+  private upsertHistory(entry: CommanderHistoryEntry): void {
+    this.history = [entry, ...this.history.filter((item) => item.planId !== entry.planId)].slice(0, 100);
   }
 
   // ── Parse NL input into a structured plan ───────────────
@@ -97,6 +116,7 @@ export class CommanderService {
         createdAt: now,
       };
       this.plans.set(planId, plan);
+      this.upsertHistory({ planId, input, plan, status: 'parsed', createdAt: now });
       logger.warn({ planId }, 'Commander parse: no LLM client configured');
       return plan;
     }
@@ -158,6 +178,7 @@ Rules:
           createdAt: now,
         };
         this.plans.set(planId, plan);
+        this.upsertHistory({ planId, input, plan, status: 'parsed', createdAt: now });
         logger.warn({ planId, rawResponse: response.text.slice(0, 500) }, 'Commander parse: invalid JSON from LLM');
         return plan;
       }
@@ -184,6 +205,7 @@ Rules:
       };
 
       this.plans.set(planId, plan);
+      this.upsertHistory({ planId, input, plan, status: 'parsed', createdAt: now });
       logger.info(
         { planId, intent: plan.intent, confidence, commandCount: commands.length, missionCount: missions.length },
         'Commander plan parsed',
@@ -202,6 +224,7 @@ Rules:
         createdAt: now,
       };
       this.plans.set(planId, plan);
+      this.upsertHistory({ planId, input, plan, status: 'parsed', createdAt: now });
       logger.error({ err, planId }, 'Commander parse failed');
       return plan;
     }
@@ -223,7 +246,7 @@ Rules:
           type: cmd.type,
           targets: cmd.targets,
           params: cmd.payload,
-          source: 'api',
+          source: 'commander',
           priority: 'normal',
         });
         await this.commandCenter.dispatchCommand(command);
@@ -257,7 +280,18 @@ Rules:
       'Commander plan executed',
     );
 
-    return { commands, missions };
+    const result = { commands, missions };
+    const status = commands.some((command) => command.status === 'failed') ? 'partial_failure' : 'executed';
+    this.upsertHistory({
+      planId,
+      input: plan.input,
+      plan,
+      result,
+      status,
+      createdAt: plan.createdAt,
+      executedAt: new Date().toISOString(),
+    });
+    return result;
   }
 
   // ── Get a stored plan ───────────────────────────────────

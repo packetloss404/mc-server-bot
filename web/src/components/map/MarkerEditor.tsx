@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import type { MarkerRecord, MarkerKind } from '@/lib/api';
 
 const MARKER_KINDS: { value: MarkerKind; label: string }[] = [
@@ -28,18 +28,6 @@ export default function MarkerEditor({ marker, defaultX, defaultZ, onSave, onCan
   const [z, setZ] = useState(marker?.position?.z ?? defaultZ ?? 0);
   const [tags, setTags] = useState(marker?.tags?.join(', ') ?? '');
   const [notes, setNotes] = useState(marker?.notes ?? '');
-
-  useEffect(() => {
-    if (marker) {
-      setName(marker.name);
-      setKind(marker.kind);
-      setX(marker.position.x);
-      setY(marker.position.y);
-      setZ(marker.position.z);
-      setTags(marker.tags?.join(', ') ?? '');
-      setNotes(marker.notes ?? '');
-    }
-  }, [marker]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

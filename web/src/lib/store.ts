@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import type {
   BotStatus, BotEvent, WorldState,
   MarkerRecord, ZoneRecord, RouteRecord,
-  SquadRecord, RoleAssignmentRecord,
+  SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
   BuildJob, SupplyChain, CommandRecord, MissionRecord,
 } from './api';
 
@@ -41,6 +41,7 @@ interface BotStore {
   setConnected: (connected: boolean) => void;
   setWorld: (world: WorldState) => void;
   setPlayers: (players: PlayerData[]) => void;
+  setActivityFeed: (events: BotEvent[]) => void;
   updatePlayerPosition: (name: string, x: number, y: number, z: number) => void;
   addPlayer: (name: string) => void;
   removePlayer: (name: string) => void;
@@ -125,19 +126,14 @@ export const useControlStore = create<ControlStore>((set) => ({
 }));
 
 // Squad store for fleet management (persisted in memory)
-export interface Squad {
-  id: string;
-  name: string;
-  botNames: string[];
-  createdAt: number;
-}
+export type Squad = SquadRecord;
 
 interface FleetStore {
   squads: Squad[];
   selectedSquadId: string | null;
   addSquad: (name: string, botNames: string[]) => Squad;
   removeSquad: (id: string) => void;
-  updateSquad: (id: string, patch: Partial<Pick<Squad, 'name' | 'botNames'>>) => void;
+  updateSquad: (id: string, patch: Partial<Squad>) => void;
   selectSquad: (id: string | null) => void;
   addBotToSquad: (squadId: string, botName: string) => void;
   removeBotFromSquad: (squadId: string, botName: string) => void;
@@ -149,11 +145,12 @@ function generateId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
 }
 
-export const useFleetStore = create<FleetStore>((set, get) => ({
+export const useFleetStore = create<FleetStore>((set) => ({
   squads: [],
   selectedSquadId: null,
   addSquad: (name, botNames) => {
-    const squad: Squad = { id: generateId(), name, botNames, createdAt: Date.now() };
+    const now = Date.now();
+    const squad: Squad = { id: generateId(), name, botNames, createdAt: now, updatedAt: now };
     set((state) => ({ squads: [...state.squads, squad] }));
     return squad;
   },
@@ -208,10 +205,10 @@ export const useBotStore = create<BotStore>((set) => ({
 
   setBots: (bots) =>
     set((state) => {
-      const updated = { ...state.botsById };
+      const updated: Record<string, BotLiveData> = {};
       for (const bot of bots) {
         const key = bot.name.toLowerCase();
-        updated[key] = { ...(updated[key] || {}), ...bot } as BotLiveData;
+        updated[key] = { ...(state.botsById[key] || {}), ...bot } as BotLiveData;
       }
       return { botsById: updated, botList: toBotList(updated) };
     }),
@@ -236,6 +233,13 @@ export const useBotStore = create<BotStore>((set) => ({
   setConnected: (connected) => set({ connected }),
 
   setWorld: (world) => set({ world }),
+
+  setActivityFeed: (events) =>
+    set({
+      activityFeed: [...events]
+        .sort((a, b) => b.timestamp - a.timestamp)
+        .slice(0, 200),
+    }),
 
   setPlayers: (players) =>
     set(() => {
@@ -346,14 +350,22 @@ export const useWorldStore = create<WorldPlanningStore>((set) => ({
 
 interface RoleStore {
   assignments: RoleAssignmentRecord[];
+  overrides: Record<string, RoleOverrideRecord>;
+  approvals: RoleApprovalRecord[];
   setAssignments: (assignments: RoleAssignmentRecord[]) => void;
+  setOverrides: (overrides: Record<string, RoleOverrideRecord>) => void;
+  setApprovals: (approvals: RoleApprovalRecord[]) => void;
   upsertAssignment: (assignment: RoleAssignmentRecord) => void;
   removeAssignment: (id: string) => void;
 }
 
 export const useRoleStore = create<RoleStore>((set) => ({
   assignments: [],
+  overrides: {},
+  approvals: [],
   setAssignments: (assignments) => set({ assignments }),
+  setOverrides: (overrides) => set({ overrides }),
+  setApprovals: (approvals) => set({ approvals }),
   upsertAssignment: (assignment) =>
     set((s) => ({ assignments: upsertById(s.assignments, assignment) })),
   removeAssignment: (id) =>

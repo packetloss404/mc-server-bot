@@ -29,8 +29,8 @@ export default function ManagePage() {
       setSuccess(`Bot "${newName.trim()}" created successfully`);
       setNewName('');
       setTimeout(() => setSuccess(null), 3000);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to create bot');
     }
     setCreating(false);
   };
@@ -40,8 +40,8 @@ export default function ManagePage() {
     setError(null);
     try {
       await api.deleteBot(name);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to delete bot');
     }
   };
 
@@ -49,8 +49,8 @@ export default function ManagePage() {
     const mode = currentMode === 'codegen' ? 'primitive' : 'codegen';
     try {
       await api.setMode(name, mode);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to update mode');
     }
   };
 

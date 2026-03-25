@@ -2,6 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
+import Image from 'next/image';
 import { useBotStore } from '@/lib/store';
 import { api, type ChatMessage } from '@/lib/api';
 import { getPersonalityColor } from '@/lib/constants';
@@ -53,7 +54,7 @@ export default function ChatPage() {
     loadAll();
     const interval = setInterval(loadAll, 5000);
     return () => clearInterval(interval);
-  }, [bots.length]);
+  }, [bots]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -167,9 +168,12 @@ export default function ChatPage() {
                   className="w-8 h-8 rounded-lg flex items-center justify-center"
                   style={{ backgroundColor: `${getPersonalityColor(bots.find((b) => b.name === selectedThread.botName)?.personality ?? '')}20` }}
                 >
-                  <img
+                  <Image
                     src={`https://mc-heads.net/avatar/${selectedThread.botName}/20`}
                     alt=""
+                    unoptimized
+                    width={20}
+                    height={20}
                     className="w-5 h-5 rounded pixelated"
                     style={{ imageRendering: 'pixelated' }}
                   />

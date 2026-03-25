@@ -1,9 +1,9 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useBotStore, useFleetStore, useControlStore, type Squad } from '@/lib/store';
-import { api } from '@/lib/api';
+import { api, type MissionRecord } from '@/lib/api';
 import { FleetSelectionBar } from '@/components/FleetSelectionBar';
 
 export default function FleetPage() {
@@ -321,8 +321,18 @@ function SquadDetail({
   const [nameValue, setNameValue] = useState(squad.name);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
   const [showAddBot, setShowAddBot] = useState(false);
+  const [showMissionForm, setShowMissionForm] = useState(false);
+  const [missionTitle, setMissionTitle] = useState('');
+  const [missionType, setMissionType] = useState<'queue_task' | 'patrol_zone' | 'gather_items'>('queue_task');
+  const [missionDescription, setMissionDescription] = useState('');
+  const [activeMission, setActiveMission] = useState<MissionRecord | null>(null);
 
   const nonMembers = bots.filter((b) => !squad.botNames.includes(b.name));
+  const squadMeta = useMemo(() => [
+    squad.defaultRole ? `role: ${squad.defaultRole}` : null,
+    squad.homeMarkerId ? `home: ${squad.homeMarkerId}` : null,
+    squad.activeMissionId ? `mission: ${squad.activeMissionId}` : null,
+  ].filter(Boolean), [squad.defaultRole, squad.homeMarkerId, squad.activeMissionId]);
 
   const handleBatchAction = async (action: 'stop' | 'pause' | 'resume') => {
     setActionLoading(action);
@@ -332,10 +342,8 @@ function SquadDetail({
         : action === 'pause'
           ? 'pause_voyager'
           : 'resume_voyager';
-      await api.createCommand({
+      await api.sendSquadCommand(squad.id, {
         type,
-        targets: squad.botNames,
-        scope: 'selection',
         source: 'dashboard',
       });
     } catch {
@@ -360,6 +368,27 @@ function SquadDetail({
   const handleRemoveBot = async (botName: string) => {
     await api.removeSquadMember(squad.id, botName);
     removeBotFromSquad(squad.id, botName);
+  };
+
+  const handleCreateMission = async () => {
+    if (!missionTitle.trim()) return;
+    setActionLoading('mission');
+    try {
+      const result = await api.sendSquadMission(squad.id, {
+        type: missionType,
+        title: missionTitle.trim(),
+        description: missionDescription.trim() || undefined,
+        source: 'dashboard',
+      });
+      updateSquad(squad.id, { activeMissionId: result.mission.id });
+      setActiveMission(result.mission);
+      setShowMissionForm(false);
+      setMissionTitle('');
+      setMissionDescription('');
+      setMissionType('queue_task');
+    } finally {
+      setActionLoading(null);
+    }
   };
 
   return (
@@ -396,6 +425,15 @@ function SquadDetail({
             {squad.botNames.length} member{squad.botNames.length !== 1 ? 's' : ''}
           </span>
         </div>
+        {squadMeta.length > 0 && (
+          <div className="flex flex-wrap gap-2 mt-3">
+            {squadMeta.map((item) => (
+              <span key={item} className="text-[10px] text-zinc-500 px-2 py-1 rounded-full bg-zinc-800/60 border border-zinc-700/40">
+                {item}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Batch actions */}
@@ -422,7 +460,80 @@ function SquadDetail({
         >
           {actionLoading === 'resume' ? 'Resuming...' : 'Resume All'}
         </button>
+        <button
+          onClick={() => setShowMissionForm((value) => !value)}
+          disabled={!!actionLoading}
+          className="text-xs font-medium px-3 py-1.5 rounded-lg bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 transition-colors disabled:opacity-50"
+        >
+          {showMissionForm ? 'Cancel Mission' : 'Create Mission'}
+        </button>
       </div>
+
+      <AnimatePresence>
+        {showMissionForm && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden border-b border-zinc-800/40"
+          >
+            <div className="px-5 py-4 grid grid-cols-1 md:grid-cols-3 gap-3">
+              <input
+                type="text"
+                value={missionTitle}
+                onChange={(e) => setMissionTitle(e.target.value)}
+                placeholder="Mission title"
+                className="text-sm bg-zinc-800 border border-zinc-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500 transition-colors"
+              />
+              <select
+                value={missionType}
+                onChange={(e) => setMissionType(e.target.value as 'queue_task' | 'patrol_zone' | 'gather_items')}
+                className="text-sm bg-zinc-800 border border-zinc-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500 transition-colors"
+              >
+                <option value="queue_task">queue_task</option>
+                <option value="patrol_zone">patrol_zone</option>
+                <option value="gather_items">gather_items</option>
+              </select>
+              <button
+                onClick={handleCreateMission}
+                disabled={!!actionLoading || !missionTitle.trim()}
+                className="text-xs font-medium px-3 py-2 rounded-lg bg-violet-500/15 text-violet-300 hover:bg-violet-500/25 transition-colors disabled:opacity-50"
+              >
+                {actionLoading === 'mission' ? 'Creating...' : 'Create Squad Mission'}
+              </button>
+              <textarea
+                value={missionDescription}
+                onChange={(e) => setMissionDescription(e.target.value)}
+                placeholder="Optional description"
+                rows={3}
+                className="md:col-span-3 text-sm bg-zinc-800 border border-zinc-700 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+              />
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {activeMission && (
+        <div className="px-5 py-3 border-b border-zinc-800/40 bg-violet-500/[0.03]">
+          <p className="text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-1">Active Squad Mission</p>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <p className="text-sm text-white">{activeMission.title}</p>
+              <p className="text-[11px] text-zinc-500">{activeMission.type} - {activeMission.status}</p>
+            </div>
+            <button
+              onClick={async () => {
+                await api.cancelMission(activeMission.id);
+                setActiveMission(null);
+                updateSquad(squad.id, { activeMissionId: undefined });
+              }}
+              className="text-xs font-medium px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+            >
+              Cancel Mission
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Member list */}
       <div className="px-5 py-4 space-y-3">

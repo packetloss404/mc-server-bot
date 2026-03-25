@@ -87,7 +87,10 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
     if (initializedRef.current) return;
     offsetRef.current = { x: -origin.x * scaleRef.current, y: -origin.z * scaleRef.current };
     initializedRef.current = true;
-    loadTerrain(origin.x, origin.z);
+    const timeout = window.setTimeout(() => {
+      void loadTerrain(origin.x, origin.z);
+    }, 0);
+    return () => window.clearTimeout(timeout);
   }, [origin, loadTerrain]);
 
   // Draw loop

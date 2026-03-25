@@ -15,6 +15,7 @@ vi.mock('fs', () => ({
 }));
 
 import { MissionManager } from '../../src/control/MissionManager';
+import { SquadManager } from '../../src/control/SquadManager';
 
 function createMockIO() {
   return { emit: vi.fn() } as any;
@@ -31,6 +32,7 @@ describe('MissionManager', () => {
   let mm: MissionManager;
   let io: ReturnType<typeof createMockIO>;
   let bm: ReturnType<typeof createMockBotManager>;
+  let squadManager: SquadManager;
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -38,6 +40,8 @@ describe('MissionManager', () => {
     io = createMockIO();
     bm = createMockBotManager();
     mm = new MissionManager(bm, io);
+    squadManager = new SquadManager(io as any);
+    mm.setSquadManager(squadManager);
   });
 
   afterEach(() => {
@@ -116,6 +120,26 @@ describe('MissionManager', () => {
 
     const allMissions = mm.getMissions();
     expect(allMissions).toHaveLength(3);
+  });
+
+  it('includes squad missions when filtering by bot name', () => {
+    const squad = squadManager.createSquad({ name: 'Builders', botNames: ['Alpha', 'Bravo'] });
+
+    const squadMission = mm.createMission({
+      type: 'build_schematic',
+      title: 'Build watchtower',
+      assigneeType: 'squad',
+      assigneeIds: [squad.id],
+    });
+
+    const alphaMissions = mm.getMissions({ bot: 'Alpha' });
+    expect(alphaMissions.map((mission) => mission.id)).toContain(squadMission.id);
+
+    const bravoMissions = mm.getMissions({ bot: 'Bravo' });
+    expect(bravoMissions.map((mission) => mission.id)).toContain(squadMission.id);
+
+    const charlieMissions = mm.getMissions({ bot: 'Charlie' });
+    expect(charlieMissions).toHaveLength(0);
   });
 
   it('supports mission cancellation', () => {
@@ -346,7 +370,7 @@ describe('MissionManager', () => {
 
   // ── Per-bot queue ordering ──────────────────────────
 
-  it('getBotMissionQueue returns missions sorted by priority then createdAt', () => {
+  it('getBotMissionQueue preserves explicit queue order', () => {
     mm.createMission({
       type: 'gather_items',
       title: 'Low priority task',
@@ -371,9 +395,9 @@ describe('MissionManager', () => {
 
     const queue = mm.getBotMissionQueue('TestBot');
     expect(queue).toHaveLength(3);
-    expect(queue[0].title).toBe('Urgent task');
-    expect(queue[1].title).toBe('Normal task');
-    expect(queue[2].title).toBe('Low priority task');
+    expect(queue[0].title).toBe('Low priority task');
+    expect(queue[1].title).toBe('Urgent task');
+    expect(queue[2].title).toBe('Normal task');
   });
 
   // ── Socket event completeness ────────────────────────

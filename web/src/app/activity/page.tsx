@@ -1,34 +1,26 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { api, type BotEvent } from '@/lib/api';
+import { useBotStore } from '@/lib/store';
 import { EVENT_CONFIG } from '@/lib/constants';
 import { PageHeader } from '@/components/PageHeader';
 
 const EVENT_TYPES = [
   'all', 'bot:state', 'bot:task', 'bot:chat', 'bot:spawn',
-  'bot:disconnect', 'bot:skill_learned', 'bot:death',
+  'bot:disconnect', 'bot:skill_learned', 'bot:death', 'commander:parse', 'commander:execute',
 ];
 
 export default function ActivityPage() {
-  const [events, setEvents] = useState<BotEvent[]>([]);
+  const events = useBotStore((s) => s.activityFeed);
   const [filter, setFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [livePaused, setLivePaused] = useState(false);
+  const [pausedEvents, setPausedEvents] = useState<typeof events>([]);
 
-  useEffect(() => {
-    const load = () => {
-      api.getActivity(200).then((data) => setEvents(data.events)).catch(() => {});
-    };
-    load();
-    if (autoRefresh) {
-      const interval = setInterval(load, 3000);
-      return () => clearInterval(interval);
-    }
-  }, [autoRefresh]);
+  const visibleEvents = useMemo(() => (livePaused ? pausedEvents : events), [events, livePaused, pausedEvents]);
 
-  const filtered = events.filter((e) => {
+  const filtered = visibleEvents.filter((e) => {
     if (typeFilter !== 'all' && e.type !== typeFilter) return false;
     if (filter && !e.botName.toLowerCase().includes(filter.toLowerCase()) && !e.description.toLowerCase().includes(filter.toLowerCase())) return false;
     return true;
@@ -39,15 +31,20 @@ export default function ActivityPage() {
       <PageHeader title="Activity Feed" subtitle={`${filtered.length} events${filter || typeFilter !== 'all' ? ' (filtered)' : ''}`}>
         <div className="flex items-center gap-3">
           <button
-            onClick={() => setAutoRefresh(!autoRefresh)}
+            onClick={() => {
+              if (!livePaused) {
+                setPausedEvents(events);
+              }
+              setLivePaused((value) => !value);
+            }}
             className={`flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border transition-colors ${
-              autoRefresh
+              !livePaused
                 ? 'border-emerald-500/30 text-emerald-400 bg-emerald-500/10'
                 : 'border-zinc-700 text-zinc-500 hover:text-zinc-300'
             }`}
           >
-            <span className={`w-1.5 h-1.5 rounded-full ${autoRefresh ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
-            {autoRefresh ? 'Live' : 'Paused'}
+            <span className={`w-1.5 h-1.5 rounded-full ${!livePaused ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'}`} />
+            {!livePaused ? 'Live' : 'Paused'}
           </button>
         </div>
       </PageHeader>

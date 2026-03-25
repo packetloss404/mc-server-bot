@@ -17,11 +17,18 @@ function createMockIO() {
 describe('RoleManager', () => {
   let rm: RoleManager;
   let io: ReturnType<typeof createMockIO>;
+  let mockMissionManager: { createMission: ReturnType<typeof vi.fn>; getMissions: ReturnType<typeof vi.fn>; cancelMission: ReturnType<typeof vi.fn> };
 
   beforeEach(() => {
     vi.clearAllMocks();
     io = createMockIO();
     rm = new RoleManager(io);
+    mockMissionManager = {
+      createMission: vi.fn().mockReturnValue({ id: 'mission-1' }),
+      getMissions: vi.fn().mockReturnValue([]),
+      cancelMission: vi.fn(),
+    };
+    rm.setMissionManager(mockMissionManager as any);
   });
 
   // ── Create assignment ─────────────────────────────────
@@ -216,6 +223,34 @@ describe('RoleManager', () => {
     rm.checkOverrideTimeouts();
 
     expect(rm.isOverridden('Bot1')).toBe(true);
+  });
+
+  it('creates approval requests for assisted automation instead of missions', () => {
+    rm.createAssignment({
+      botName: 'Builder1',
+      role: 'builder',
+      autonomyLevel: 'assisted',
+    });
+
+    const approvals = rm.getApprovalRequests();
+    expect(approvals).toHaveLength(1);
+    expect(approvals[0].status).toBe('pending');
+    expect(mockMissionManager.createMission).not.toHaveBeenCalled();
+  });
+
+  it('approves approval requests into missions', () => {
+    const assignment = rm.createAssignment({
+      botName: 'Miner1',
+      role: 'miner',
+      autonomyLevel: 'assisted',
+    });
+    const approval = rm.getApprovalRequests()[0];
+
+    const result = rm.approveApprovalRequest(approval.id, 'tester');
+    expect(result).toBeDefined();
+    expect(mockMissionManager.createMission).toHaveBeenCalledOnce();
+    expect(rm.getApprovalRequests()[0].status).toBe('approved');
+    expect(rm.getApprovalRequests()[0].assignmentId).toBe(assignment.id);
   });
 
   // ── Socket events ─────────────────────────────────────

@@ -27,7 +27,7 @@ interface Props {
   accentColor: string;
 }
 
-export function BotActivityPanel({ state, voyager, combat, health, accentColor }: Props) {
+export function BotActivityPanel({ state, voyager, combat, health }: Props) {
   const stateColor = STATE_COLORS[state] ?? '#6B7280';
   const stateLabel = STATE_LABELS[state] ?? state;
   const isActive = !['IDLE', 'DISCONNECTED', 'SPAWNING'].includes(state);

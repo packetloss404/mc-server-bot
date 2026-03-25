@@ -10,16 +10,16 @@ The program is split into 10 PM-style workstreams. These are planning lanes that
 
 | PM | Workstream | Status | Primary Outcome | Main Docs |
 |---|---|---|---|---|
-| PM-01 | Control Platform | Mostly done | Shared command lifecycle and backend control foundation | `backend-architecture.md`, `api-plan.md`, `schemas.md` |
-| PM-02 | Tactical Controls | Partial | Upgraded command center and manual override UX | `features.md`, `page-plans.md` |
+| PM-01 | Control Platform | Mostly done | Shared command lifecycle and backend control foundation | `features.md`, `current-state.md` |
+| PM-02 | Tactical Controls | Partial | Upgraded command center and manual override UX | `features.md`, `current-state.md` |
 | PM-03 | Mission Planner | Partial | Visible queueing, planning, retries, and task history | `features.md`, `milestones.md` |
-| PM-04 | Spatial Control | Partial | Markers, zones, routes, and map-first control | `page-plans.md`, `wireframes.md` |
+| PM-04 | Spatial Control | Partial | Markers, zones, routes, and map-first control | `features.md`, `current-state.md` |
 | PM-05 | Fleet Ops | Partial | Multi-select, squads, and batch operations | `features.md`, `user-flows.md` |
-| PM-06 | Role Automation | Partial | Persistent roles, policy settings, and override rules | `schemas.md`, `frontend-architecture.md` |
+| PM-06 | Role Automation | Partial | Persistent roles, policy settings, and override rules | `features.md`, `frontend-architecture.md` |
 | PM-07 | Commander | Partial | Natural language planning and confirmation workflows | `vision.md`, `user-flows.md` |
 | PM-08 | Diagnostics | Partial | History, blockers, recovery, and operator confidence | `telemetry.md`, `features.md` |
-| PM-09 | Frontend System | Partial | Store, socket, and component architecture cleanup | `frontend-architecture.md`, `implementation-notes.md` |
-| PM-10 | QA And Release | Partial | Tests, telemetry, rollout, and migration | `testing-strategy.md`, `migration-plan.md` |
+| PM-09 | Frontend System | Partial | Store, socket, and component architecture cleanup | `frontend-architecture.md`, `current-state.md` |
+| PM-10 | QA And Release | Partial | Tests, telemetry, rollout, and migration | `telemetry.md`, `current-state.md` |
 
 ## Epic Files
 

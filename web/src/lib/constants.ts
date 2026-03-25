@@ -93,4 +93,6 @@ export const EVENT_CONFIG: Record<string, { icon: string; label: string; color: 
   'chain:started': { icon: '\u26D3', label: 'Chain Started', color: '#F59E0B' },
   'chain:completed': { icon: '\u26D3', label: 'Chain Complete', color: '#10B981' },
   'chain:failed': { icon: '\u26D3', label: 'Chain Failed', color: '#EF4444' },
+  'commander:parse': { icon: '?', label: 'Commander Parse', color: '#06B6D4' },
+  'commander:execute': { icon: '!', label: 'Commander Execute', color: '#A855F7' },
 };

@@ -1,8 +1,10 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { api, type RoleAssignmentRecord, type BotStatus, type RoleOverrideRecord } from '@/lib/api';
+import Image from 'next/image';
+import { api } from '@/lib/api';
+import { useBotStore, useRoleStore } from '@/lib/store';
 import {
   RoleAssignmentPanel,
   ROLE_COLORS,
@@ -12,33 +14,17 @@ import {
 } from '@/components/RoleAssignmentPanel';
 
 export default function RolesPage() {
-  const [assignments, setAssignments] = useState<RoleAssignmentRecord[]>([]);
-  const [bots, setBots] = useState<BotStatus[]>([]);
+  const assignments = useRoleStore((s) => s.assignments);
+  const overrides = useRoleStore((s) => s.overrides);
+  const approvals = useRoleStore((s) => s.approvals);
+  const bots = useBotStore((s) => s.botList);
   const [editingBot, setEditingBot] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [overrides, setOverrides] = useState<Record<string, RoleOverrideRecord>>({});
-
-  const loadData = useCallback(async () => {
-    try {
-      const [assignData, botData] = await Promise.all([
-        api.getRoleAssignments(),
-        api.getBots(),
-      ]);
-      setAssignments(assignData.assignments);
-      setOverrides(assignData.overrides ?? {});
-      setBots(botData.bots);
-    } catch {
-      // silently fail
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [now, setNow] = useState(0);
 
   useEffect(() => {
-    loadData();
-    const interval = setInterval(loadData, 8000);
+    const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
-  }, [loadData]);
+  }, []);
 
   const assignedBotNames = new Set(assignments.map((a) => a.botName));
   const unassignedBots = bots.filter((b) => !assignedBotNames.has(b.name));
@@ -46,13 +32,11 @@ export default function RolesPage() {
 
   const handleSave = () => {
     setEditingBot(null);
-    loadData();
   };
 
   const handleDelete = async (assignmentId: string) => {
     try {
       await api.deleteRoleAssignment(assignmentId);
-      loadData();
     } catch {
       // ignore
     }
@@ -61,7 +45,22 @@ export default function RolesPage() {
   const handleClearOverride = async (botName: string) => {
     try {
       await api.clearBotOverride(botName);
-      loadData();
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleApprove = async (approvalId: string) => {
+    try {
+      await api.approveRoleApproval(approvalId, { decidedBy: 'dashboard' });
+    } catch {
+      // ignore
+    }
+  };
+
+  const handleReject = async (approvalId: string) => {
+    try {
+      await api.rejectRoleApproval(approvalId, { decidedBy: 'dashboard' });
     } catch {
       // ignore
     }
@@ -72,6 +71,8 @@ export default function RolesPage() {
   for (const a of assignments) {
     roleCounts[a.role] = (roleCounts[a.role] || 0) + 1;
   }
+
+  const loading = useMemo(() => bots.length === 0 && assignments.length === 0, [bots.length, assignments.length]);
 
   if (loading) {
     return (
@@ -143,6 +144,44 @@ export default function RolesPage() {
         </motion.div>
       )}
 
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.03 }}
+        className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl overflow-hidden"
+      >
+        <div className="px-5 py-4 border-b border-zinc-800/40">
+          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
+            Assisted Approvals ({approvals.filter((approval) => approval.status === 'pending').length})
+          </h2>
+        </div>
+        {approvals.filter((approval) => approval.status === 'pending').length === 0 ? (
+          <div className="px-5 py-6 text-center text-xs text-zinc-600">
+            No approvals waiting.
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800/40">
+            {approvals.filter((approval) => approval.status === 'pending').map((approval) => (
+              <div key={approval.id} className="px-5 py-4 flex items-start gap-4 hover:bg-zinc-800/20 transition-colors">
+                <div className="min-w-[140px]">
+                  <p className="text-sm text-white font-medium">{approval.botName}</p>
+                  <p className="text-[10px] text-zinc-600 capitalize">{approval.role}</p>
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm text-zinc-200">{approval.missionDraft.title}</p>
+                  <p className="text-xs text-zinc-500 mt-1">{approval.missionDraft.description}</p>
+                  <p className="text-[10px] text-zinc-600 mt-2">Expires in {Math.max(0, Math.round((approval.expiresAt - now) / 1000))}s</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => handleApprove(approval.id)} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25 transition-colors">Approve</button>
+                  <button onClick={() => handleReject(approval.id)} className="text-xs font-medium px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors">Reject</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </motion.div>
+
       {/* Assignment table */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
@@ -165,14 +204,17 @@ export default function RolesPage() {
             {assignments.map((a) => {
               const color = ROLE_COLORS[a.role] || '#6B7280';
               const override = overrides[a.botName];
-              const overrideAge = override ? Math.max(0, Math.round((Date.now() - override.at) / 1000)) : 0;
+               const overrideAge = override ? Math.max(0, Math.round((now - override.at) / 1000)) : 0;
               return (
                 <div key={a.botName} className="px-5 py-3 flex items-center gap-4 hover:bg-zinc-800/20 transition-colors">
                   {/* Bot name */}
                   <div className="flex items-center gap-2.5 min-w-[140px]">
-                    <img
+                    <Image
                       src={`https://mc-heads.net/avatar/${a.botName}/20`}
                       alt=""
+                      unoptimized
+                      width={20}
+                      height={20}
                       className="w-5 h-5 rounded pixelated shrink-0"
                       style={{ imageRendering: 'pixelated' }}
                     />
@@ -280,9 +322,12 @@ export default function RolesPage() {
             {unassignedBots.map((bot) => (
               <div key={bot.name} className="px-5 py-3 flex items-center gap-4 hover:bg-zinc-800/20 transition-colors">
                 <div className="flex items-center gap-2.5 min-w-[140px]">
-                  <img
+                  <Image
                     src={`https://mc-heads.net/avatar/${bot.name}/20`}
                     alt=""
+                    unoptimized
+                    width={20}
+                    height={20}
                     className="w-5 h-5 rounded pixelated shrink-0"
                     style={{ imageRendering: 'pixelated' }}
                   />

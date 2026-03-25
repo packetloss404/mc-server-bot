@@ -124,6 +124,11 @@ export class MissionManager {
     return [...new Set(botNames)]; // deduplicate
   }
 
+  private missionTargetsBot(mission: MissionRecord, botName: string): boolean {
+    const lower = botName.toLowerCase();
+    return this.resolveAssigneeBotNames(mission).some((name) => name.toLowerCase() === lower);
+  }
+
   // ── CRUD ───────────────────────────────────────────
 
   createMission(params: CreateMissionParams): MissionRecord {
@@ -162,7 +167,7 @@ export class MissionManager {
     let results = Array.from(this.missions.values());
 
     if (filters?.bot) {
-      results = results.filter((m) => m.assigneeIds.includes(filters.bot!));
+      results = results.filter((m) => this.missionTargetsBot(m, filters.bot!));
     }
     if (filters?.squad) {
       results = results.filter(

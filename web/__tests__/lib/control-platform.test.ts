@@ -111,4 +111,10 @@ describe('control platform frontend helpers', () => {
     expect(useMissionStore.getState().getRunningForBot('Ada').map((mission) => mission.id)).toEqual(['mission-1']);
     expect(useMissionStore.getState().getRunningForBot('Bee')).toEqual([]);
   });
+
+  it('keeps selection state unique when selecting all bots', () => {
+    useControlStore.getState().selectAll(['Ada', 'Bee', 'Ada']);
+
+    expect(Array.from(useControlStore.getState().selectedBotIds)).toEqual(['Ada', 'Bee']);
+  });
 });

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, SchematicInfo, BuildJob, MissionRecord } from '@/lib/api';
+import { api, SchematicInfo, MissionRecord } from '@/lib/api';
 import { useBotStore, useSchematicPlacementStore } from '@/lib/store';
 import { SchematicMiniMap } from '@/components/build/SchematicMiniMap';
 import { PageHeader } from '@/components/PageHeader';
@@ -99,6 +99,10 @@ export default function BuildPage() {
   const [personality, setPersonality] = useState('builder');
   const [createProgress, setCreateProgress] = useState('');
   const [buildMission, setBuildMission] = useState<MissionRecord | null>(null);
+  const [fillFoundation, setFillFoundation] = useState(true);
+  const [snapToGround, setSnapToGround] = useState(false);
+  const [groundInfo, setGroundInfo] = useState<{ y: number; block: string } | null>(null);
+  const [groundLoading, setGroundLoading] = useState(false);
 
   const botList = useBotStore((s) => s.botList);
   const playerList = useBotStore((s) => s.playerList);
@@ -145,6 +149,35 @@ export default function BuildPage() {
     return Math.ceil(selectedSchematic.blockCount / (effectiveBotNames.length * 4) / 60);
   }, [selectedSchematic, effectiveBotNames]);
 
+  // Fetch ground height at current origin
+  const fetchGroundHeight = useCallback((x: number, z: number) => {
+    setGroundLoading(true);
+    api.getTerrainHeight(x, z)
+      .then((data) => setGroundInfo({ y: data.y, block: data.block }))
+      .catch(() => setGroundInfo(null))
+      .finally(() => setGroundLoading(false));
+  }, []);
+
+  // Auto-fetch ground height when origin X/Z changes
+  useEffect(() => {
+    if (!selectedSchematic) return;
+    const timer = setTimeout(() => fetchGroundHeight(origin.x, origin.z), 400);
+    return () => clearTimeout(timer);
+  }, [origin.x, origin.z, selectedSchematic, fetchGroundHeight]);
+
+  const handleSnapToGround = async () => {
+    setGroundLoading(true);
+    try {
+      const data = await api.getTerrainHeight(origin.x, origin.z);
+      setGroundInfo({ y: data.y, block: data.block });
+      setOrigin((prev) => ({ ...prev, y: data.y + 1 }));
+    } catch {
+      setError('Failed to fetch ground height');
+    } finally {
+      setGroundLoading(false);
+    }
+  };
+
   const toggleBot = (name: string) => {
     setSelectedBots((prev) => {
       const next = new Set(prev);
@@ -186,9 +219,9 @@ export default function BuildPage() {
           setCreateProgress(`Creating ${botNames[i]}... (${i + 1}/${botNames.length})`);
           try {
             await api.createBot(botNames[i], personality, 'codegen');
-          } catch (err: any) {
+          } catch (err: unknown) {
             // Bot might already exist -- that's ok
-            if (!err.message?.includes('already exists')) throw err;
+            if (!(err instanceof Error) || !err.message.includes('already exists')) throw err;
           }
           if (i < botNames.length - 1) await delay(5000);
         }
@@ -222,7 +255,8 @@ export default function BuildPage() {
       if (botMode === 'create') setCreatedBotNames(botNames);
 
       setCreateProgress('Starting build...');
-      const result = await api.startBuild(selectedSchematic.filename, origin, botNames);
+      const cleanupBotNames = botMode === 'create' ? botNames : undefined;
+      const result = await api.startBuild(selectedSchematic.filename, origin, botNames, cleanupBotNames, { fillFoundation, snapToGround });
       setActiveBuild(result.build);
 
       // Create a mission to track this build
@@ -232,7 +266,7 @@ export default function BuildPage() {
           type: 'build_schematic',
           title: `Build: ${schematicName}`,
           description: `Building ${schematicName} at (${origin.x}, ${origin.y}, ${origin.z}) with ${botNames.length} bot(s). ${selectedSchematic.blockCount.toLocaleString()} blocks total.`,
-          assigneeType: 'squad',
+          assigneeType: 'bot',
           assigneeIds: botNames,
           priority: 'normal',
           source: 'dashboard',
@@ -244,8 +278,8 @@ export default function BuildPage() {
 
       setSelectedSchematic(null);
       setSelectedBots(new Set());
-    } catch (err: any) {
-      setError(err.message || 'Failed to start build');
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to start build');
     } finally {
       setStarting(false);
       setCreateProgress('');
@@ -496,7 +530,46 @@ export default function BuildPage() {
                           />
                         </div>
                       ))}
+                      <button
+                        onClick={handleSnapToGround}
+                        disabled={groundLoading}
+                        className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-[10px] font-medium bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-amber-300 hover:border-amber-500/40 transition-all disabled:opacity-40"
+                        title="Set Y to ground level + 1 at this X/Z position"
+                      >
+                        {groundLoading ? (
+                          <div className="w-3 h-3 border border-zinc-600 border-t-zinc-300 rounded-full animate-spin" />
+                        ) : (
+                          <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M12 19V5" />
+                            <path d="M5 12l7 7 7-7" />
+                          </svg>
+                        )}
+                        Snap to Ground
+                      </button>
                     </div>
+                    {/* Ground height indicator */}
+                    {groundInfo && (
+                      <div className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[11px] font-medium border ${
+                        (() => {
+                          const delta = origin.y - groundInfo.y;
+                          if (delta < 0) return 'bg-red-500/10 border-red-500/30 text-red-400';
+                          if (delta > 10) return 'bg-red-500/10 border-red-500/30 text-red-400';
+                          if (delta > 2) return 'bg-amber-500/10 border-amber-500/30 text-amber-400';
+                          return 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400';
+                        })()
+                      }`}>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M2 22h20" />
+                          <path d="M6 18V2" />
+                          <path d="M18 18V8" />
+                          <path d="M12 18V12" />
+                        </svg>
+                        Ground at Y={groundInfo.y} ({groundInfo.block})
+                        {' '}&mdash; Building {origin.y - groundInfo.y < 0
+                          ? `${Math.abs(origin.y - groundInfo.y)} blocks underground`
+                          : `${origin.y - groundInfo.y} block${origin.y - groundInfo.y !== 1 ? 's' : ''} above ground`}
+                      </div>
+                    )}
                     {/* Footprint summary */}
                     {selectedSchematic && (
                       <p className="text-[10px] text-zinc-500 mt-1">
@@ -511,7 +584,11 @@ export default function BuildPage() {
                       {playerList.filter((p) => p.isOnline && p.position).map((player) => (
                         <button
                           key={player.name}
-                          onClick={() => setOrigin({ x: Math.floor(player.position!.x), y: Math.floor(player.position!.y), z: Math.floor(player.position!.z) })}
+                          onClick={() => {
+                            const pos = { x: Math.floor(player.position!.x), y: Math.floor(player.position!.y), z: Math.floor(player.position!.z) };
+                            setOrigin(pos);
+                            fetchGroundHeight(pos.x, pos.z);
+                          }}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-medium bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-cyan-300 hover:border-cyan-500/40 transition-all"
                         >
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -524,7 +601,11 @@ export default function BuildPage() {
                       {connectedBots.map((bot) => bot.position && (
                         <button
                           key={bot.name}
-                          onClick={() => setOrigin({ x: Math.floor(bot.position!.x), y: Math.floor(bot.position!.y), z: Math.floor(bot.position!.z) })}
+                          onClick={() => {
+                            const pos = { x: Math.floor(bot.position!.x), y: Math.floor(bot.position!.y), z: Math.floor(bot.position!.z) };
+                            setOrigin(pos);
+                            fetchGroundHeight(pos.x, pos.z);
+                          }}
                           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md text-[10px] font-medium bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-teal-300 hover:border-teal-500/40 transition-all"
                         >
                           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -538,7 +619,7 @@ export default function BuildPage() {
                     </div>
                     {/* Pick on Map mini-map */}
                     {selectedSchematic && (
-                      <MiniMapSection schematic={selectedSchematic} origin={origin} setOrigin={setOrigin} />
+                      <MiniMapSection schematic={selectedSchematic} origin={origin} setOrigin={setOrigin} onOriginPicked={fetchGroundHeight} />
                     )}
                   </div>
 
@@ -681,6 +762,53 @@ export default function BuildPage() {
                     )}
                   </div>
 
+                  {/* Build Options */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-400 font-medium">Build Options</label>
+                    <div className="flex flex-wrap gap-4">
+                      <label className="flex items-center gap-2 cursor-pointer group" title="Fill gaps under the build with stone to prevent floating">
+                        <span
+                          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
+                            fillFoundation ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
+                          }`}
+                          onClick={() => setFillFoundation((v) => !v)}
+                        >
+                          {fillFoundation && (
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </span>
+                        <span className="text-xs text-zinc-300" onClick={() => setFillFoundation((v) => !v)}>
+                          Fill Foundation
+                        </span>
+                        <span className="text-[10px] text-zinc-600" onClick={() => setFillFoundation((v) => !v)}>
+                          Fill gaps under the build with stone
+                        </span>
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer group" title="Auto-adjust Y to average ground level under the footprint">
+                        <span
+                          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
+                            snapToGround ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
+                          }`}
+                          onClick={() => setSnapToGround((v) => !v)}
+                        >
+                          {snapToGround && (
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </span>
+                        <span className="text-xs text-zinc-300" onClick={() => setSnapToGround((v) => !v)}>
+                          Snap to Ground
+                        </span>
+                        <span className="text-[10px] text-zinc-600" onClick={() => setSnapToGround((v) => !v)}>
+                          Auto-adjust Y to average ground level
+                        </span>
+                      </label>
+                    </div>
+                  </div>
+
                   {/* Layer Preview */}
                   {layerPreview.length > 0 && (
                     <div className="space-y-2">
@@ -757,7 +885,7 @@ export default function BuildPage() {
   );
 }
 
-function MiniMapSection({ schematic, origin, setOrigin }: { schematic: SchematicInfo; origin: { x: number; y: number; z: number }; setOrigin: (o: { x: number; y: number; z: number }) => void }) {
+function MiniMapSection({ schematic, origin, setOrigin, onOriginPicked }: { schematic: SchematicInfo; origin: { x: number; y: number; z: number }; setOrigin: (o: { x: number; y: number; z: number }) => void; onOriginPicked?: (x: number, z: number) => void }) {
   const [showMap, setShowMap] = useState(false);
 
   return (
@@ -800,7 +928,7 @@ function MiniMapSection({ schematic, origin, setOrigin }: { schematic: Schematic
             <SchematicMiniMap
               schematic={schematic}
               origin={origin}
-              onOriginChange={(o) => setOrigin(o)}
+              onOriginChange={(o) => { setOrigin(o); onOriginPicked?.(o.x, o.z); }}
               height={300}
             />
           </motion.div>

@@ -3,13 +3,13 @@
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
 import { useBotStore, useWorldStore, useFleetStore, useRoleStore, useControlStore, useMissionStore } from '@/lib/store';
-import { api, normalizeMissionRecord } from '@/lib/api';
+import { api, normalizeMissionRecord, type BotEvent, type MarkerRecord, type MissionRecord, type RouteRecord, type ZoneRecord } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
-    setPlayers, updatePlayerPosition, addPlayer, removePlayer,
+    setPlayers, setActivityFeed, updatePlayerPosition, addPlayer, removePlayer,
     incrementUnreadChats,
   } = useBotStore();
 
@@ -18,13 +18,18 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    api.getActivity(200).then((data) => setActivityFeed(data.events)).catch(() => {});
 
     // World planning, fleet, and role initial fetches
     api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {});
     api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {});
     api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {});
     api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
-    api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
+    api.getRoleAssignments().then((d) => {
+      useRoleStore.getState().setAssignments(d.assignments);
+      useRoleStore.getState().setOverrides(d.overrides ?? {});
+      useRoleStore.getState().setApprovals(d.approvalRequests ?? []);
+    }).catch(() => {});
     api.getCommands({ limit: 100 }).then((d) => useControlStore.getState().setCommands(d.commands)).catch(() => {});
     api.getMissions({ limit: 100 }).then((d) => useMissionStore.getState().setMissions(d.missions)).catch(() => {});
 
@@ -65,7 +70,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       updateInventory(data.bot, data.items);
     });
 
-    socket.on('activity', (event: any) => {
+    socket.on('activity', (event: BotEvent) => {
       pushEvent(event);
     });
 
@@ -108,41 +113,41 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('command:failed', refreshCommand);
     socket.on('command:cancelled', refreshCommand);
 
-    socket.on('mission:created', (data: any) => {
+    socket.on('mission:created', (data: MissionRecord) => {
       useMissionStore.getState().upsertMission(normalizeMissionRecord(data));
     });
-    socket.on('mission:updated', (data: any) => {
+    socket.on('mission:updated', (data: MissionRecord) => {
       useMissionStore.getState().upsertMission(normalizeMissionRecord(data));
     });
-    socket.on('mission:completed', (data: any) => {
+    socket.on('mission:completed', (data: MissionRecord) => {
       useMissionStore.getState().upsertMission(normalizeMissionRecord(data));
     });
-    socket.on('mission:failed', (data: any) => {
+    socket.on('mission:failed', (data: MissionRecord) => {
       useMissionStore.getState().upsertMission(normalizeMissionRecord(data));
     });
-    socket.on('mission:cancelled', (data: any) => {
+    socket.on('mission:cancelled', (data: MissionRecord) => {
       useMissionStore.getState().upsertMission(normalizeMissionRecord(data));
     });
 
     // World planning events
-    socket.on('marker:created', (data: any) => {
+    socket.on('marker:created', (data: MarkerRecord) => {
       useWorldStore.getState().upsertMarker(data);
     });
-    socket.on('marker:updated', (data: any) => {
+    socket.on('marker:updated', (data: MarkerRecord & { deleted?: boolean }) => {
       if (data?.deleted) {
         useWorldStore.getState().removeMarker(data.id);
         return;
       }
       useWorldStore.getState().upsertMarker(data);
     });
-    socket.on('zone:updated', (data: any) => {
+    socket.on('zone:updated', (data: ZoneRecord & { deleted?: boolean }) => {
       if (data?.deleted) {
         useWorldStore.getState().removeZone(data.id);
         return;
       }
       useWorldStore.getState().upsertZone(data);
     });
-    socket.on('route:updated', (data: any) => {
+    socket.on('route:updated', (data: RouteRecord & { deleted?: boolean }) => {
       if (data?.deleted) {
         useWorldStore.getState().removeRoute(data.id);
         return;
@@ -157,7 +162,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     // Role events
     socket.on('role:updated', () => {
-      api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments(d.assignments)).catch(() => {});
+      api.getRoleAssignments().then((d) => {
+        useRoleStore.getState().setAssignments(d.assignments);
+        useRoleStore.getState().setOverrides(d.overrides ?? {});
+        useRoleStore.getState().setApprovals(d.approvalRequests ?? []);
+      }).catch(() => {});
     });
 
     return () => {
@@ -197,9 +206,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   }, [
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
-    setPlayers, updatePlayerPosition, addPlayer, removePlayer,
-    incrementUnreadChats,
-  ]);
+      setPlayers, setActivityFeed, updatePlayerPosition, addPlayer, removePlayer,
+      incrementUnreadChats,
+    ]);
 
   return <>{children}</>;
 }

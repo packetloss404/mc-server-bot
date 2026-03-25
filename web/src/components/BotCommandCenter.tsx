@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useMemo } from 'react';
 import { motion } from 'framer-motion';
+import Image from 'next/image';
 import { api, type CommandType, type CommandRecord } from '@/lib/api';
 import { useBotStore, useControlStore, useWorldStore } from '@/lib/store';
 
@@ -286,7 +287,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
                   onClick={() => handleFollow(p.name)}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
                 >
-                  <img src={`https://mc-heads.net/avatar/${p.name}/16`} alt="" className="w-4 h-4 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
+                  <Image src={`https://mc-heads.net/avatar/${p.name}/16`} alt="" unoptimized width={16} height={16} className="w-4 h-4 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
                   {p.name}
                 </button>
               ))}

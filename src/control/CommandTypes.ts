@@ -21,7 +21,7 @@ export type CommandScope = 'single' | 'squad' | 'selection' | 'all';
 
 export type CommandPriority = 'low' | 'normal' | 'high' | 'critical';
 
-export type CommandSource = 'dashboard' | 'api' | 'hotkey' | 'automated';
+export type CommandSource = 'dashboard' | 'api' | 'hotkey' | 'automated' | 'commander';
 
 export type CommandStatus =
   | 'queued'

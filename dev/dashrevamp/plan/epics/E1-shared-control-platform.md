@@ -33,7 +33,7 @@ Status: done
 Acceptance criteria:
 
 - repo has typed command status, scope, payload, and result models
-- types align with `dev/dashrevamp/plan/schemas.md`
+- types align with the current backend control types under `src/control/`
 - frontend and backend import from a stable shared contract location or parallel equivalent models
 
 Tasks:

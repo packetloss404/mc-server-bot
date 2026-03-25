@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, type CommandRecord } from '@/lib/api';
+import { api } from '@/lib/api';
 import { useControlStore } from '@/lib/store';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -49,13 +49,12 @@ interface Props {
 }
 
 export function CommandHistoryPanel({ botName }: Props) {
-  const [loading, setLoading] = useState(true);
-  const [expanded, setExpanded] = useState(true);
   const commandHistory = useControlStore((s) => s.commandHistory);
+  const [loading, setLoading] = useState(commandHistory.length === 0);
+  const [expanded, setExpanded] = useState(true);
 
   useEffect(() => {
     if (commandHistory.length > 0) {
-      setLoading(false);
       return;
     }
 

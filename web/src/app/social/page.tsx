@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
+import Image from 'next/image';
 import { api } from '@/lib/api';
 import { getPersonalityColor, getAffinityTier, PERSONALITY_ICONS } from '@/lib/constants';
 import { useBotStore } from '@/lib/store';
@@ -84,9 +85,12 @@ export default function SocialPage() {
                 {Array.from(allPlayers).map((player) => (
                   <th key={player} className="px-3 py-3 text-zinc-400 font-medium text-center min-w-[100px]">
                     <div className="flex items-center justify-center gap-1.5">
-                      <img
+                      <Image
                         src={`https://mc-heads.net/avatar/${player}/16`}
                         alt=""
+                        unoptimized
+                        width={16}
+                        height={16}
                         className="w-4 h-4 rounded pixelated"
                         style={{ imageRendering: 'pixelated' }}
                       />
@@ -166,9 +170,12 @@ export default function SocialPage() {
                       return (
                         <div key={player} className="group">
                           <div className="flex items-center gap-2.5">
-                            <img
+                            <Image
                               src={`https://mc-heads.net/avatar/${player}/20`}
                               alt=""
+                              unoptimized
+                              width={20}
+                              height={20}
                               className="w-5 h-5 rounded pixelated shrink-0"
                               style={{ imageRendering: 'pixelated' }}
                             />

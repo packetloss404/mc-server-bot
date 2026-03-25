@@ -1,5 +1,5 @@
 import { Server as SocketIOServer } from 'socket.io';
-import { RoleAssignmentRecord, RoleType, AutonomyLevel, FLEET_EVENTS } from './FleetTypes';
+import { RoleApprovalRequestRecord, RoleAssignmentRecord, RoleType, AutonomyLevel, FLEET_EVENTS } from './FleetTypes';
 import type { MissionManager } from './MissionManager';
 import type { MissionType } from './MissionTypes';
 import { logger } from '../util/logger';
@@ -17,10 +17,12 @@ export interface OverrideRecord {
 }
 
 const OVERRIDE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const APPROVAL_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 
 export class RoleManager {
   private assignments: RoleAssignmentRecord[] = [];
   private overrides: Map<string, OverrideRecord> = new Map();
+  private approvalRequests: RoleApprovalRequestRecord[] = [];
   private readonly filePath: string;
   private readonly io: SocketIOServer;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -46,13 +48,15 @@ export class RoleManager {
 
   setOverride(botName: string, reason: string, commandId: string): void {
     this.overrides.set(botName, { reason, commandId, at: Date.now() });
-    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, { assignments: this.assignments, overrides: this.getOverrides() });
+    this.emit();
+    this.save();
     logger.info({ botName, reason, commandId }, 'RoleManager: override set');
   }
 
   clearOverride(botName: string): void {
     if (this.overrides.delete(botName)) {
-      this.io.emit(FLEET_EVENTS.ROLE_UPDATED, { assignments: this.assignments, overrides: this.getOverrides() });
+      this.emit();
+      this.save();
       logger.info({ botName }, 'RoleManager: override cleared');
       this.evaluateAutomation(botName);
     }
@@ -79,10 +83,19 @@ export class RoleManager {
         this.overrides.delete(botName);
         logger.info({ botName, ageMs: now - record.at }, 'RoleManager: override expired');
         changed = true;
+        this.evaluateAutomation(botName);
+      }
+    }
+    for (const request of this.approvalRequests) {
+      if (request.status === 'pending' && now > request.expiresAt) {
+        request.status = 'expired';
+        request.decidedAt = now;
+        changed = true;
       }
     }
     if (changed) {
-      this.io.emit(FLEET_EVENTS.ROLE_UPDATED, { assignments: this.assignments, overrides: this.getOverrides() });
+      this.emit();
+      this.save();
     }
   }
 
@@ -95,13 +108,21 @@ export class RoleManager {
       const raw = fs.readFileSync(this.filePath, 'utf-8');
       const parsed = JSON.parse(raw);
 
-      if (!Array.isArray(parsed)) {
-        logger.warn('roles.json is corrupt (not an array), starting empty');
+      if (Array.isArray(parsed)) {
+        this.assignments = parsed;
+        this.approvalRequests = [];
+      } else if (parsed && typeof parsed === 'object') {
+        this.assignments = Array.isArray(parsed.assignments) ? parsed.assignments : [];
+        this.approvalRequests = Array.isArray(parsed.approvalRequests) ? parsed.approvalRequests : [];
+        if (parsed.overrides && typeof parsed.overrides === 'object') {
+          this.overrides = new Map(Object.entries(parsed.overrides as Record<string, OverrideRecord>));
+        }
+      } else {
+        logger.warn('roles.json is corrupt, starting empty');
         this.assignments = [];
+        this.approvalRequests = [];
         return;
       }
-
-      this.assignments = parsed;
       logger.info({ count: this.assignments.length }, 'RoleManager: loaded assignments');
     } catch (err) {
       logger.warn({ err }, 'RoleManager: failed to load roles.json, starting empty');
@@ -126,7 +147,11 @@ export class RoleManager {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(this.filePath, JSON.stringify(this.assignments, null, 2));
+      fs.writeFileSync(this.filePath, JSON.stringify({
+        assignments: this.assignments,
+        approvalRequests: this.approvalRequests,
+        overrides: this.getOverrides(),
+      }, null, 2));
     } catch (err) {
       logger.error({ err }, 'RoleManager: failed to save roles.json');
     }
@@ -180,6 +205,48 @@ export class RoleManager {
     }
   }
 
+  private buildMissionDraft(assignment: RoleAssignmentRecord): RoleApprovalRequestRecord['missionDraft'] | null {
+    const missionType = this.getDefaultMissionType(assignment);
+    if (!missionType) return null;
+
+    const loadoutHint = assignment.loadoutPolicy ? ' Loadout policy configured.' : '';
+    const zoneHint = assignment.allowedZoneIds.length > 0 ? ` Allowed zones: ${assignment.allowedZoneIds.join(', ')}.` : '';
+    const description = assignment.homeMarkerId
+      ? `Auto-generated ${assignment.role} mission near ${assignment.homeMarkerId}`
+      : `Auto-generated ${assignment.role} mission`;
+
+    return {
+      type: missionType,
+      title: this.getDefaultMissionTitle(assignment),
+      description: `${description}.${zoneHint}${loadoutHint}`.trim(),
+      assigneeType: 'bot',
+      assigneeIds: [assignment.botName],
+      priority: 'normal',
+      source: 'role',
+    };
+  }
+
+  private createApprovalRequest(assignment: RoleAssignmentRecord, missionDraft: RoleApprovalRequestRecord['missionDraft']): void {
+    const existing = this.approvalRequests.find((request) => request.botName === assignment.botName && request.status === 'pending');
+    if (existing) return;
+
+    const now = Date.now();
+    this.approvalRequests.unshift({
+      id: `approval_${now}_${Math.random().toString(36).slice(2, 8)}`,
+      assignmentId: assignment.id,
+      assignmentUpdatedAt: assignment.updatedAt,
+      botName: assignment.botName,
+      role: assignment.role,
+      status: 'pending',
+      createdAt: now,
+      expiresAt: now + APPROVAL_EXPIRY_MS,
+      missionDraft,
+    });
+    this.approvalRequests = this.approvalRequests.slice(0, 100);
+    this.emit();
+    this.save();
+  }
+
   private canReplaceActiveMission(assignment: RoleAssignmentRecord, activeMission: { priority: string; source: string; status: string } | undefined): boolean {
     if (!activeMission) return true;
     if (activeMission.source === 'role') return false;
@@ -195,6 +262,21 @@ export class RoleManager {
     }
   }
 
+  private handleInterruptibleMission(assignment: RoleAssignmentRecord, activeMission: { id: string; priority: string; source: string; status: string } | undefined): boolean {
+    if (!activeMission) return true;
+    if (activeMission.source === 'role') return false;
+    if (assignment.interruptPolicy !== 'always') return false;
+    if (!this.missionManager) return false;
+
+    if (['queued', 'paused', 'draft'].includes(activeMission.status)) {
+      this.missionManager.cancelMission(activeMission.id);
+      logger.info({ botName: assignment.botName, interruptedMissionId: activeMission.id }, 'RoleManager: interrupted queued mission for role automation');
+      return true;
+    }
+
+    return false;
+  }
+
   evaluateAutomation(botName?: string): void {
     if (!this.missionManager) return;
 
@@ -205,7 +287,7 @@ export class RoleManager {
     const now = Date.now();
 
     for (const assignment of candidates) {
-      if (assignment.autonomyLevel !== 'autonomous') continue;
+      if (assignment.autonomyLevel === 'manual') continue;
       if (assignment.role === 'free-agent') continue;
       if (this.isOverridden(assignment.botName)) continue;
 
@@ -215,31 +297,30 @@ export class RoleManager {
       if (activeRoleMission) continue;
 
       const activeNonRoleMission = activeMissions.find((mission) => mission.source !== 'role');
-      if (!this.canReplaceActiveMission(assignment, activeNonRoleMission)) continue;
+      if (activeNonRoleMission && !this.canReplaceActiveMission(assignment, activeNonRoleMission)) {
+        const interrupted = this.handleInterruptibleMission(assignment, activeNonRoleMission);
+        if (!interrupted) continue;
+      }
 
       const lastGeneratedAt = this.lastGeneratedAt.get(assignment.botName) ?? 0;
       if (now - lastGeneratedAt < 60_000) continue;
 
-      const missionType = this.getDefaultMissionType(assignment);
-      if (!missionType) continue;
+      const missionDraft = this.buildMissionDraft(assignment);
+      if (!missionDraft) continue;
 
-      const loadoutHint = assignment.loadoutPolicy ? ' Loadout policy configured.' : '';
-      const zoneHint = assignment.allowedZoneIds.length > 0 ? ` Allowed zones: ${assignment.allowedZoneIds.join(', ')}.` : '';
-      const description = assignment.homeMarkerId
-        ? `Auto-generated ${assignment.role} mission near ${assignment.homeMarkerId}`
-        : `Auto-generated ${assignment.role} mission`;
+      if (assignment.autonomyLevel === 'assisted') {
+        this.createApprovalRequest(assignment, missionDraft);
+        this.lastGeneratedAt.set(assignment.botName, now);
+        logger.info({ botName: assignment.botName, role: assignment.role }, 'RoleManager: created assisted approval request');
+        continue;
+      }
 
       this.missionManager.createMission({
-        type: missionType,
-        title: this.getDefaultMissionTitle(assignment),
-        description: `${description}.${zoneHint}${loadoutHint}`.trim(),
-        assigneeType: 'bot',
-        assigneeIds: [assignment.botName],
-        priority: 'normal',
-        source: 'role',
+        ...missionDraft,
+        type: missionDraft.type as MissionType,
       });
       this.lastGeneratedAt.set(assignment.botName, now);
-      logger.info({ botName: assignment.botName, role: assignment.role, missionType }, 'RoleManager: auto-generated role mission');
+      logger.info({ botName: assignment.botName, role: assignment.role, missionType: missionDraft.type }, 'RoleManager: auto-generated role mission');
     }
   }
 
@@ -248,7 +329,52 @@ export class RoleManager {
   }
 
   private emit(): void {
-    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, { assignments: this.assignments });
+    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, {
+      assignments: this.assignments,
+      overrides: this.getOverrides(),
+      approvalRequests: this.approvalRequests,
+    });
+  }
+
+  getApprovalRequests(): RoleApprovalRequestRecord[] {
+    return this.approvalRequests;
+  }
+
+  approveApprovalRequest(id: string, decidedBy?: string, decisionNote?: string): { approvalRequest: RoleApprovalRequestRecord; missionId: string } | null {
+    if (!this.missionManager) return null;
+    const request = this.approvalRequests.find((entry) => entry.id === id);
+    if (!request || request.status !== 'pending') return null;
+    const assignment = this.getAssignment(request.assignmentId);
+    if (!assignment || assignment.updatedAt !== request.assignmentUpdatedAt || assignment.autonomyLevel !== 'assisted') {
+      request.status = 'expired';
+      request.decidedAt = Date.now();
+      this.emit();
+      this.save();
+      return null;
+    }
+    const missionRecord = this.missionManager.createMission({
+      ...request.missionDraft,
+      type: request.missionDraft.type as MissionType,
+    });
+    request.status = 'approved';
+    request.decidedAt = Date.now();
+    request.decidedBy = decidedBy;
+    request.decisionNote = decisionNote;
+    this.emit();
+    this.save();
+    return { approvalRequest: request, missionId: missionRecord.id };
+  }
+
+  rejectApprovalRequest(id: string, decidedBy?: string, decisionNote?: string): RoleApprovalRequestRecord | null {
+    const request = this.approvalRequests.find((entry) => entry.id === id);
+    if (!request || request.status !== 'pending') return null;
+    request.status = 'rejected';
+    request.decidedAt = Date.now();
+    request.decidedBy = decidedBy;
+    request.decisionNote = decisionNote;
+    this.emit();
+    this.save();
+    return request;
   }
 
   // ── CRUD ─────────────────────────────────────────────────
@@ -260,6 +386,8 @@ export class RoleManager {
     homeMarkerId?: string;
     allowedZoneIds?: string[];
     preferredMissionTypes?: string[];
+    interruptPolicy?: RoleAssignmentRecord['interruptPolicy'];
+    loadoutPolicy?: RoleAssignmentRecord['loadoutPolicy'];
   }): RoleAssignmentRecord {
     // Validate role
     if (!VALID_ROLES.includes(data.role)) {
@@ -288,6 +416,9 @@ export class RoleManager {
       homeMarkerId: data.homeMarkerId,
       allowedZoneIds: data.allowedZoneIds ?? [],
       preferredMissionTypes: data.preferredMissionTypes ?? [],
+      interruptPolicy: data.interruptPolicy,
+      loadoutPolicy: data.loadoutPolicy,
+      updatedAt: Date.now(),
     };
 
     this.assignments.push(record);
@@ -325,7 +456,7 @@ export class RoleManager {
 
     // Don't allow changing id
     const { id: _ignoreId, ...updateFields } = data;
-    this.assignments[idx] = { ...this.assignments[idx], ...updateFields };
+    this.assignments[idx] = { ...this.assignments[idx], ...updateFields, updatedAt: Date.now() };
 
     this.save();
     this.emit();

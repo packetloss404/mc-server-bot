@@ -1,6 +1,7 @@
 'use client';
 
 import { motion } from 'framer-motion';
+import Image from 'next/image';
 import { formatItemName, getItemCategoryColorByName, SLOT_PLACEHOLDERS } from '@/lib/items';
 
 interface EquipmentSlot {
@@ -97,9 +98,12 @@ export function EquipmentDisplay({ botName, armor, mainHand, offhand, accentColo
           className="absolute inset-0 rounded-xl opacity-10 blur-xl"
           style={{ backgroundColor: accentColor }}
         />
-        <img
+        <Image
           src={`https://mc-heads.net/body/${botName}/180`}
           alt={botName}
+          unoptimized
+          width={140}
+          height={180}
           className="w-[140px] h-auto relative pixelated"
           style={{ imageRendering: 'pixelated' }}
         />

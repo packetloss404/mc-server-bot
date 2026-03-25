@@ -42,9 +42,9 @@ interface Props {
 
 export function MissionQueuePanel({ botName }: Props) {
   const missionStore = useMissionStore((s) => s.missions);
-  const setMissions = useMissionStore((s) => s.setMissions);
   const upsertMission = useMissionStore((s) => s.upsertMission);
   const [queueMissionIds, setQueueMissionIds] = useState<string[]>([]);
+  const [fetchedMissionIds, setFetchedMissionIds] = useState<string[]>([]);
   const [queueMissionMap, setQueueMissionMap] = useState<Record<string, MissionRecord>>({});
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
@@ -58,22 +58,22 @@ export function MissionQueuePanel({ botName }: Props) {
       ]);
       setQueueMissionIds(queueData.missions.map((mission) => mission.id));
       setQueueMissionMap(Object.fromEntries(queueData.missions.map((mission) => [mission.id, mission])));
-      setMissions(missionData.missions);
+      setFetchedMissionIds(missionData.missions.map((mission) => mission.id));
+      missionData.missions.forEach((mission) => upsertMission(mission));
     } catch {
       setQueueMissionIds([]);
+      setFetchedMissionIds([]);
       setQueueMissionMap({});
     } finally {
       setLoading(false);
     }
-  }, [botName, setMissions]);
+  }, [botName, upsertMission]);
 
   useEffect(() => {
     void fetchMissions();
   }, [fetchMissions]);
 
-  const botMissions = missionStore.filter((mission) =>
-    mission.assigneeIds.some((id) => id.toLowerCase() === botName.toLowerCase()),
-  );
+  const botMissions = missionStore.filter((mission) => fetchedMissionIds.includes(mission.id));
 
   const runningMission = botMissions.find((mission) => mission.status === 'running');
   const queuedMissions = queueMissionIds

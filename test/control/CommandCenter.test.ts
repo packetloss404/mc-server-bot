@@ -137,6 +137,44 @@ describe('CommandCenter', () => {
     expect(allCommands).toHaveLength(3);
   });
 
+  it('fans out squad-scoped commands across squad members', async () => {
+    const secondVoyager = {
+      pause: vi.fn(),
+      resume: vi.fn(),
+      isRunning: vi.fn().mockReturnValue(true),
+      isPaused: vi.fn().mockReturnValue(false),
+    };
+    const secondBot = {
+      pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
+      players: {},
+      entity: { position: { x: 10, y: 64, z: 10 } },
+      inventory: { items: vi.fn().mockReturnValue([]) },
+    };
+    const secondInstance = {
+      bot: secondBot,
+      getVoyagerLoop: vi.fn().mockReturnValue(secondVoyager),
+      name: 'Bravo',
+    };
+
+    bm.getBot.mockImplementation((name: string) => {
+      if (name === 'Bravo') return secondInstance;
+      return bm._mockInstance;
+    });
+
+    const parent = cc.createCommand({
+      type: 'pause_voyager',
+      scope: 'squad',
+      targets: ['TestBot', 'Bravo'],
+    });
+
+    const result = await cc.dispatchCommand(parent);
+
+    expect(result.status).toBe('succeeded');
+    expect(result.childCommandIds).toHaveLength(2);
+    expect(bm._mockVoyager.pause).toHaveBeenCalledOnce();
+    expect(secondVoyager.pause).toHaveBeenCalledOnce();
+  });
+
   // ── Task 1: Cancellation stops pathfinder for movement commands ──
 
   it('stops pathfinder when cancelling a started movement command', async () => {

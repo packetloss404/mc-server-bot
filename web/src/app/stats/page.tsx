@@ -46,7 +46,7 @@ export default function StatsPage() {
       setLoading(false);
     };
     loadStats();
-  }, [bots.length]);
+  }, [bots]);
 
   const sorted = [...stats].sort((a, b) => {
     if (sortBy === 'completed') return b.completedTasks - a.completedTasks;

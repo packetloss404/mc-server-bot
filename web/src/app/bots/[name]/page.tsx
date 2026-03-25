@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { useParams } from 'next/navigation';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { api, type BotDetailed, type ChatMessage, type RoleAssignmentRecord } from '@/lib/api';
@@ -153,8 +154,8 @@ export default function BotProfilePage() {
 
             {/* Vitals */}
             <div className="flex-1 min-w-[200px] max-w-xs space-y-3">
-              <VitalBar label="Health" value={bot.health} max={20} color="#EF4444" icon="HP" />
-              <VitalBar label="Hunger" value={bot.food} max={20} color="#F59E0B" icon="FD" />
+              <VitalBar value={bot.health} max={20} color="#EF4444" icon="HP" />
+              <VitalBar value={bot.food} max={20} color="#F59E0B" icon="FD" />
               {bot.experience && (
                 <div>
                   <div className="flex items-center justify-between mb-1">
@@ -353,7 +354,7 @@ export default function BotProfilePage() {
                         className={`w-full text-left rounded-lg p-2 transition-colors ${selectedPlayer === player ? 'bg-zinc-800/60' : 'hover:bg-zinc-800/30'}`}
                       >
                         <div className="flex items-center gap-2">
-                          <img src={`https://mc-heads.net/avatar/${player}/20`} alt="" className="w-5 h-5 rounded pixelated shrink-0" style={{ imageRendering: 'pixelated' }} />
+                          <Image src={`https://mc-heads.net/avatar/${player}/20`} alt="" unoptimized width={20} height={20} className="w-5 h-5 rounded pixelated shrink-0" style={{ imageRendering: 'pixelated' }} />
                           <span className="text-xs text-zinc-300 flex-1 truncate">{player}</span>
                           <span style={{ color: tier.color }} className="text-[10px] font-medium">{tier.label} ({score})</span>
                         </div>
@@ -375,7 +376,7 @@ export default function BotProfilePage() {
                   <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M19 12H5M12 19l-7-7 7-7" /></svg> Back
                 </button>
                 <div className="flex items-center gap-2 pb-2 border-b border-zinc-800/40">
-                  <img src={`https://mc-heads.net/avatar/${selectedPlayer}/20`} alt="" className="w-5 h-5 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
+                  <Image src={`https://mc-heads.net/avatar/${selectedPlayer}/20`} alt="" unoptimized width={20} height={20} className="w-5 h-5 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
                   <span className="text-xs text-zinc-300 font-medium">{selectedPlayer}</span>
                 </div>
                 <div className="max-h-72 overflow-y-auto space-y-2">
@@ -402,7 +403,7 @@ export default function BotProfilePage() {
                   Object.entries(conversations).map(([player, msgs]) => (
                     <button key={player} onClick={() => { setSelectedPlayer(player); setChatPlayer(player); }}
                       className="w-full text-left flex items-center gap-2.5 py-2 px-2 rounded-lg hover:bg-zinc-800/40 transition-colors">
-                      <img src={`https://mc-heads.net/avatar/${player}/20`} alt="" className="w-5 h-5 rounded pixelated shrink-0" style={{ imageRendering: 'pixelated' }} />
+                      <Image src={`https://mc-heads.net/avatar/${player}/20`} alt="" unoptimized width={20} height={20} className="w-5 h-5 rounded pixelated shrink-0" style={{ imageRendering: 'pixelated' }} />
                       <div className="flex-1 min-w-0">
                         <span className="text-xs text-zinc-300 font-medium">{player}</span>
                         {msgs[msgs.length - 1] && <p className="text-[10px] text-zinc-600 truncate">{msgs[msgs.length - 1].text}</p>}
@@ -449,7 +450,7 @@ function InfoPill({ label, value, color, mono }: { label: string; value: string;
   );
 }
 
-function VitalBar({ label, value, max, color, icon }: { label: string; value: number; max: number; color: string; icon: string }) {
+function VitalBar({ value, max, color, icon }: { value: number; max: number; color: string; icon: string }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
   return (
     <div className="flex items-center gap-2.5">

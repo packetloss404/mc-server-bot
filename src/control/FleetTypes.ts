@@ -15,6 +15,31 @@ export type AutonomyLevel = 'manual' | 'assisted' | 'autonomous';
 
 export type InterruptPolicy = 'always' | 'confirm-if-busy' | 'never-while-critical';
 
+export type RoleApprovalStatus = 'pending' | 'approved' | 'rejected' | 'expired';
+
+export interface RoleApprovalRequestRecord {
+  id: string;
+  assignmentId: string;
+  assignmentUpdatedAt: number;
+  botName: string;
+  role: RoleType;
+  status: RoleApprovalStatus;
+  createdAt: number;
+  expiresAt: number;
+  decidedAt?: number;
+  decidedBy?: string;
+  decisionNote?: string;
+  missionDraft: {
+    type: string;
+    title: string;
+    description: string;
+    assigneeType: 'bot';
+    assigneeIds: string[];
+    priority: 'normal';
+    source: 'role';
+  };
+}
+
 export interface RoleAssignmentRecord {
   id: string;
   botName: string;
@@ -25,6 +50,7 @@ export interface RoleAssignmentRecord {
   preferredMissionTypes: string[];
   loadoutPolicy?: Record<string, unknown>;
   interruptPolicy?: InterruptPolicy;
+  updatedAt: number;
 }
 
 // Socket event names

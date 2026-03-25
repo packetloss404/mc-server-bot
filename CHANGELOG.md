@@ -28,6 +28,14 @@ All notable changes to DyoBot are documented in this file.
 - **Emotional state drives behavior** — Bot mood now affects ambient chat frequency: lonely bots chat more (5-10 min), annoyed bots chat less (20-40 min), scared bots are quiet (15-30 min). Idle detection triggers `idle_long` → lonely mood after 10 minutes of no interaction.
 - **Bot-to-bot task coordination** — Bots can now process incoming inter-bot messages and queue tasks from direct requests (e.g., "can you mine some iron").
 - **Event-driven socket updates** — Position, health, state, and inventory changes now emit immediately via EventEmitter instead of relying solely on 2-second polling. Polling interval reduced to 10-second fallback.
+- **Dashboard control platform consolidation** — Unified frontend command/mission state, normalized dashboard API contracts, and live `command:*` / `mission:*` socket updates now drive tactical UI state more consistently.
+- **Mission and history UX upgrade** — Mission queue actions now support real retry/cancel/reorder behavior, and history/commander surfaces are tied more closely to shared command and mission records.
+- **Fleet, roles, and commander polish** — Fleet actions now use shared commands, role management supports override visibility and policy fields, and commander drafts/history persist locally with richer execution audit views.
+- **Map-first control expansion** — Map supports marker/zone/route creation and editing, selected-object actions for missions and commands, squad and mission overlays, and canvas-level selection for more world objects.
+
+### Maintenance
+- **Planning docs refreshed** — Updated `dev/dashrevamp/plan/` with current-state health checks, milestone/epic status, and next-sprint guidance.
+- **Frontend tests expanded** — Replaced placeholder web tests with shared control store/helper coverage and added more tactical control assertions.
 
 ### Performance
 - **Trim ActionAgent prompt** — Consolidated duplicate rules sections, ~60% line reduction.

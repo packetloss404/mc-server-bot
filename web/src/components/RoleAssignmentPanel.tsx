@@ -93,8 +93,8 @@ export function RoleAssignmentPanel({ botName, existingAssignment, onSave, onCan
         await api.createRoleAssignment(payload);
       }
       onSave();
-    } catch (e: any) {
-      setError(e.message || 'Failed to save assignment');
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to save assignment');
     } finally {
       setSaving(false);
     }
@@ -238,6 +238,15 @@ export function RoleAssignmentPanel({ botName, existingAssignment, onSave, onCan
           ))}
         </div>
       </div>
+
+      {autonomy === 'assisted' && (
+        <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 px-3 py-2">
+          <p className="text-[11px] font-semibold text-amber-300">Approval behavior</p>
+          <p className="text-[10px] text-zinc-500 mt-1">
+            Assisted bots do not auto-start role work. They create approval cards on the Roles page for review.
+          </p>
+        </div>
+      )}
 
       <div>
         <label className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold mb-2 block">Preferred Mission Types</label>

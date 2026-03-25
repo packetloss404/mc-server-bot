@@ -16,19 +16,21 @@ const EXAMPLE_PROMPTS = [
 ];
 
 const DRAFT_KEY = 'commander-draft';
-const HISTORY_KEY = 'commander-history';
 
 interface HistoryEntry {
   input: string;
   plan: CommanderPlan;
-  result?: CommanderResult;
+  result?: CommanderResult | null;
   timestamp: number;
 }
 
 export default function CommanderPage() {
-  const recentCommands = useControlStore((s) => s.commandHistory.filter((command) => command.source === 'api').slice(0, 5));
+  const recentCommands = useControlStore((s) => s.commandHistory.filter((command) => command.source === 'commander').slice(0, 5));
   const recentMissions = useMissionStore((s) => s.missions.filter((mission) => mission.source === 'commander').slice(0, 5));
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem(DRAFT_KEY) ?? '';
+  });
   const [parsing, setParsing] = useState(false);
   const [plan, setPlan] = useState<CommanderPlan | null>(null);
   const [executing, setExecuting] = useState(false);
@@ -39,30 +41,25 @@ export default function CommanderPage() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const savedDraft = window.localStorage.getItem(DRAFT_KEY);
-    const savedHistory = window.localStorage.getItem(HISTORY_KEY);
-    if (savedDraft) {
-      setInput(savedDraft);
-    }
-    if (savedHistory) {
-      try {
-        setHistory(JSON.parse(savedHistory) as HistoryEntry[]);
-      } catch {
-        // ignore invalid local storage
-      }
-    }
+    let cancelled = false;
+    void api.getCommanderHistory({ limit: 20 }).then((data) => {
+      if (cancelled) return;
+      setHistory(data.entries.map((entry) => ({
+        input: entry.input,
+        plan: entry.plan,
+        result: entry.result ?? null,
+        timestamp: entry.executedAt ? Date.parse(entry.executedAt) : Date.parse(entry.createdAt),
+      })));
+    }).catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(DRAFT_KEY, input);
   }, [input]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 20)));
-  }, [history]);
 
   const handleParse = useCallback(async () => {
     if (!input.trim() || parsing) return;
@@ -90,6 +87,14 @@ export default function CommanderPage() {
         { input, plan, result: data.result, timestamp: Date.now() },
         ...prev,
       ]);
+      api.getCommanderHistory({ limit: 20 }).then((historyData) => {
+        setHistory(historyData.entries.map((entry) => ({
+          input: entry.input,
+          plan: entry.plan,
+          result: entry.result ?? null,
+          timestamp: entry.executedAt ? Date.parse(entry.executedAt) : Date.parse(entry.createdAt),
+        })));
+      }).catch(() => {});
       setPlan(null);
       setInput('');
     } catch (e: unknown) {
@@ -309,6 +314,7 @@ export default function CommanderPage() {
                     )}
                     <span className="font-mono">{cr.command.type}</span>
                     <span className="text-zinc-500">{cr.command.targets.join(', ')}</span>
+                    {cr.command.status && <span className="text-zinc-500">{cr.command.status}</span>}
                     {cr.error && <span className="ml-auto text-red-400">{cr.error}</span>}
                   </div>
                 ))}
@@ -329,6 +335,7 @@ export default function CommanderPage() {
                     </svg>
                     <span>{m.title}</span>
                     <span className="text-zinc-500">{m.assigneeIds.join(', ')}</span>
+                    {m.status && <span className="text-zinc-500">{m.status}</span>}
                   </div>
                 ))}
               </div>
@@ -434,6 +441,7 @@ export default function CommanderPage() {
                                   </span>
                                   <span className="font-mono">{cr.command.type}</span>
                                   <span>{cr.command.targets.join(', ')}</span>
+                                  {cr.command.status && <span className="text-zinc-600">[{cr.command.status}]</span>}
                                   {cr.error && (
                                     <span className="text-red-400/70">({cr.error})</span>
                                   )}
@@ -446,7 +454,7 @@ export default function CommanderPage() {
                               <p className="text-[10px] text-zinc-600 mb-1">Missions</p>
                               {entry.result.missionsCreated.map((m, j) => (
                                 <div key={j} className="text-xs text-zinc-400">
-                                  {m.title} ({m.assigneeIds.join(', ')})
+                                  {m.title} ({m.assigneeIds.join(', ')}){m.status ? ` [${m.status}]` : ''}
                                 </div>
                               ))}
                             </div>

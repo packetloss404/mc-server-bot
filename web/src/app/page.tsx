@@ -2,10 +2,11 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useBotStore, type BotLiveData } from '@/lib/store';
+import Image from 'next/image';
+import { useBotStore, useRoleStore, type BotLiveData } from '@/lib/store';
 import { useControlStore } from '@/lib/controlStore';
 import { useMissionStore } from '@/lib/missionStore';
-import { api, type BotEvent, type RoleAssignmentRecord, type CommandType } from '@/lib/api';
+import { api, type BotEvent, type CommandType, type RoleAssignmentRecord } from '@/lib/api';
 import { EVENT_CONFIG, getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 import Link from 'next/link';
 
@@ -24,7 +25,7 @@ export default function DashboardPage() {
   const commands = useControlStore((s) => s.commandHistory);
   const missions = useMissionStore((s) => s.missions);
 
-  const [roleMap, setRoleMap] = useState<Record<string, RoleAssignmentRecord>>({});
+  const roleAssignments = useRoleStore((s) => s.assignments);
   const [dismissedAlerts, setDismissedAlerts] = useState<Set<string>>(new Set());
 
   // --- Data fetching ---------------------------------------------------------
@@ -36,25 +37,12 @@ export default function DashboardPage() {
       }
     }).catch(() => {});
 
-    // Commands
-    api.getCommands({ limit: 50 }).then((data) => {
-      useControlStore.getState().setCommands(data.commands);
-    }).catch(() => {});
-
-    // Missions
-    api.getMissions({ limit: 50 }).then((data) => {
-        useMissionStore.getState().setMissions(data.missions);
-    }).catch(() => {});
-
-    // Roles
-    api.getRoleAssignments().then((data) => {
-      const map: Record<string, RoleAssignmentRecord> = {};
-      for (const a of data.assignments) {
-        map[a.botName.toLowerCase()] = a;
-      }
-      setRoleMap(map);
-    }).catch(() => {});
   }, []);
+
+  const roleMap = roleAssignments.reduce<Record<string, typeof roleAssignments[number]>>((map, assignment) => {
+    map[assignment.botName.toLowerCase()] = assignment;
+    return map;
+  }, {});
 
   // --- Derived data ----------------------------------------------------------
   const botNames = new Set(bots.map((b) => b.name.toLowerCase()));
@@ -348,9 +336,12 @@ export default function DashboardPage() {
                 transition={{ delay: i * 0.05 }}
                 className="bg-zinc-900/80 border border-zinc-800/60 rounded-lg p-3 flex items-center gap-2.5"
               >
-                <img
+                <Image
                   src={`https://mc-heads.net/avatar/${player.name}/24`}
                   alt={player.name}
+                  unoptimized
+                  width={24}
+                  height={24}
                   className="w-6 h-6 rounded pixelated"
                   style={{ imageRendering: 'pixelated' }}
                 />
@@ -453,7 +444,7 @@ function EnhancedBotCard({
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
 
   // Voyager state from extended BotDetailed (may not be on BotLiveData, accessed via type assertion)
-  const voyager = (bot as any).voyager as { currentTask?: string | null } | undefined;
+  const voyager = (bot as BotLiveData & { voyager?: { currentTask?: string | null } }).voyager;
   const currentTask = voyager?.currentTask ?? null;
 
   return (

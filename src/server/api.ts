@@ -913,20 +913,76 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     if (!removed) { res.status(404).json({ error: 'Squad not found or bot not a member' }); return; }
     res.json({ success: true });
   });
+  app.post('/api/squads/:id/commands', async (req: Request, res: Response) => {
+    const squad = squadManager.getSquad(req.params.id as string);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+
+    const { type, payload, priority, source } = req.body;
+    if (!type) { res.status(400).json({ error: 'type is required' }); return; }
+    if (!Array.isArray(squad.botNames) || squad.botNames.length === 0) {
+      res.status(400).json({ error: 'Squad has no members' });
+      return;
+    }
+
+    try {
+      const command = commandCenter.createCommand({
+        type,
+        scope: 'squad',
+        priority: priority === 'urgent' ? 'critical' : (priority ?? 'normal'),
+        source: source ?? 'dashboard',
+        targets: squad.botNames,
+        params: payload ?? {},
+      });
+      const result = await commandCenter.dispatchCommand(command);
+      res.json({ command: result, squad });
+    } catch (err: any) {
+      logger.error({ err, squadId: squad.id, type }, 'Squad command dispatch failed');
+      res.status(500).json({ error: err.message ?? 'Failed to dispatch squad command' });
+    }
+  });
+  app.post('/api/squads/:id/missions', (req: Request, res: Response) => {
+    const squad = squadManager.getSquad(req.params.id as string);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+
+    const { type, title, description, priority, steps, linkedCommandIds, source } = req.body;
+    if (!type || !title) {
+      res.status(400).json({ error: 'type and title are required' });
+      return;
+    }
+
+    try {
+      const mission = missionManager.createMission({
+        type,
+        title,
+        description,
+        assigneeType: 'squad',
+        assigneeIds: [squad.id],
+        priority: priority ?? 'normal',
+        source: source ?? 'dashboard',
+        steps,
+        linkedCommandIds,
+      });
+      squadManager.updateSquad(squad.id, { activeMissionId: mission.id });
+      res.status(201).json({ mission, squadId: squad.id });
+    } catch (err: any) {
+      logger.error({ err, squadId: squad.id, type }, 'Squad mission creation failed');
+      res.status(500).json({ error: err.message ?? 'Failed to create squad mission' });
+    }
+  });
 
   // ═══════════════════════════════════════
   //  CONTROL PLATFORM - ROLE ENDPOINTS
   // ═══════════════════════════════════════
 
   app.get('/api/roles', (_req: Request, res: Response) => {
-    res.json({ assignments: roleManager.getAssignments(), overrides: roleManager.getOverrides?.() ?? [] });
+    res.json({ assignments: roleManager.getAssignments(), overrides: roleManager.getOverrides?.() ?? [], approvalRequests: roleManager.getApprovalRequests?.() ?? [] });
   });
   app.post('/api/roles/assignments', (req: Request, res: Response) => {
-    const { botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes } = req.body;
+    const { botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes, interruptPolicy, loadoutPolicy } = req.body;
     if (!botName || !role || !autonomyLevel) { res.status(400).json({ error: 'botName, role, and autonomyLevel are required' }); return; }
     if (!botManager.getBot(botName)) { res.status(404).json({ error: `Bot "${botName}" not found` }); return; }
     try {
-      const assignment = roleManager.createAssignment({ botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes });
+      const assignment = roleManager.createAssignment({ botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes, interruptPolicy, loadoutPolicy });
       res.status(201).json({ assignment });
     } catch (err: any) { res.status(400).json({ error: err.message }); }
   });
@@ -956,6 +1012,16 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   app.delete('/api/bots/:name/override', (req: Request, res: Response) => {
     roleManager.clearOverride?.(req.params.name as string);
     res.json({ success: true });
+  });
+  app.post('/api/roles/approvals/:id/approve', (req: Request, res: Response) => {
+    const result = roleManager.approveApprovalRequest?.(req.params.id as string, req.body?.decidedBy, req.body?.decisionNote);
+    if (!result) { res.status(404).json({ error: 'Approval request not found or no longer valid' }); return; }
+    res.json(result);
+  });
+  app.post('/api/roles/approvals/:id/reject', (req: Request, res: Response) => {
+    const result = roleManager.rejectApprovalRequest?.(req.params.id as string, req.body?.decidedBy, req.body?.decisionNote);
+    if (!result) { res.status(404).json({ error: 'Approval request not found or no longer valid' }); return; }
+    res.json({ approvalRequest: result });
   });
 
   // ═══════════════════════════════════════
@@ -1107,11 +1173,23 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     try {
       const plan = await commanderService.parse(input.trim());
+      const event = eventLog.push({
+        type: 'commander:parse',
+        botName: 'system',
+        description: `Commander parsed input: ${input.trim().slice(0, 80)}`,
+        metadata: { planId: plan.id, confidence: plan.confidence, warnings: plan.warnings.length },
+      });
+      io.emit('activity', event);
       res.json({ plan });
     } catch (err: any) {
       logger.error({ err }, 'Commander parse failed');
       res.status(500).json({ error: err.message });
     }
+  });
+
+  app.get('/api/commander/history', (req: Request, res: Response) => {
+    const limit = Number(req.query.limit ?? 20);
+    res.json({ entries: commanderService.getHistory(Number.isFinite(limit) ? limit : 20) });
   });
 
   app.post('/api/commander/execute', async (req: Request, res: Response) => {
@@ -1121,6 +1199,15 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     if (!plan) { res.status(404).json({ error: 'Plan not found' }); return; }
     try {
       const result = await commanderService.execute(planId);
+      if (result) {
+        const event = eventLog.push({
+          type: 'commander:execute',
+          botName: 'system',
+          description: `Commander executed plan ${planId}`,
+          metadata: { planId, commands: result.commands.length, missions: result.missions.length },
+        });
+        io.emit('activity', event);
+      }
       res.json(result);
     } catch (err: any) {
       logger.error({ err }, 'Commander execute failed');

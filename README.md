@@ -20,7 +20,11 @@ Java Edition 1.21+
 - **Autonomous learning** — Bots propose, execute, and evaluate their own tasks
 - **Skill library** — Learned skills are saved and reused across sessions
 - **Affinity tracking** — Bots remember players and build relationships
+- **Social memory** — Bot-to-bot messaging and shared world knowledge
 - **LLM-powered chat** — Natural conversations with context awareness
+- **Fleet control platform** — Centralized commands, missions, squads, roles, and world markers
+- **Natural language commander** — Issue orders in plain English, parsed into structured plans
+- **Web dashboard** — Next.js dashboard for monitoring and controlling your fleet
 - **HTTP API** — Spawn and manage bots programmatically
 
 ## Quick Start
@@ -35,13 +39,13 @@ npm install
 
 # Configure your bot
 cp .env.example .env
-# Add your Google Gemini API key to .env
+# Add your API key to .env (ANTHROPIC_API_KEY for Anthropic, GOOGLE_API_KEY for Gemini)
 
 # Edit config.yml to customize your bot's personality and behavior
 
 # Build and run
 npm run build
-node dist/index.js
+npm start
 ```
 
 ## Spawning a Bot
@@ -49,9 +53,15 @@ node dist/index.js
 Send a POST request to the API:
 
 ```bash
-curl -X POST http://localhost:3000/api/bots \
+curl -X POST http://localhost:3001/api/bots \
   -H "Content-Type: application/json" \
   -d '{"name": "MyBot", "personality": "farmer", "mode": "codegen"}'
+```
+
+Check status:
+
+```bash
+curl -s http://localhost:3001/api/bots
 ```
 
 ### Available Personalities
@@ -69,16 +79,42 @@ curl -X POST http://localhost:3000/api/bots \
 
 ```
 src/
-├── bot/          # Bot lifecycle and state management
-├── ai/           # LLM client and prompt templates
+├── bot/          # Bot lifecycle and Mineflayer connection management
+├── ai/           # LLM client and prompt logic (Anthropic, Gemini)
 ├── voyager/      # Learning loop, task planning, skill library
 ├── actions/      # Bot actions (mine, craft, follow, attack, etc.)
 ├── personality/  # Personality types, affinity, and conversation
-├── server/       # Express HTTP API
+├── social/       # Bot-to-bot messaging and memory
+├── control/      # Fleet control platform (commands, missions, squads, roles, markers)
+├── server/       # Express HTTP API and socket events
 └── util/         # Logger and helpers
+web/              # Next.js dashboard
 skills/           # Learned skills saved as JS modules
 data/             # Persistent bot state and memory
 ```
+
+## Control Platform
+
+The control platform provides centralized fleet management:
+
+- **Commands** — Immediate bot actions (pause, move, follow, guard, patrol) with dispatch and cancellation
+- **Missions** — Longer-running tasks with lifecycle management (start, pause, cancel, retry), dependency checking, and per-bot priority queues
+- **Squads** — Group bots into squads for coordinated operations
+- **Roles** — Assign roles with autonomy levels and manual override tracking
+- **World markers** — Named positions, zones (rectangular/circular areas), and routes (waypoint sequences)
+- **Natural language commander** — Parse plain English orders into structured plans and execute them
+
+## API
+
+The bot server runs on port **3001** and exposes REST endpoints for:
+
+- Bot CRUD and status
+- Command dispatch and cancellation
+- Mission lifecycle management
+- Per-bot mission queues
+- World markers, zones, and routes
+- Squad and role management
+- Natural language command parsing and execution
 
 ## Configuration
 
@@ -86,7 +122,7 @@ Edit `config.yml` to customize:
 
 - **Bot limits** — Max concurrent bots
 - **Voyager settings** — Learning loop behavior
-- **LLM provider** — Model selection for code generation and chat
+- **LLM provider** — Model selection for code generation and chat (Anthropic or Gemini)
 - **Behaviors** — Toggle ambient chat, wandering, head tracking, combat instincts
 
 ## Contributing

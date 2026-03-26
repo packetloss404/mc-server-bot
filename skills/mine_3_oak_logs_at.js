@@ -1,7 +1,18 @@
-async function mineThreeOakLogsAtLocation(bot) {
-  const currentLogs = bot.inventory.items().filter(i => i.name === 'oak_log').reduce((acc, i) => acc + i.count, 0);
-  const needed = 3 - currentLogs;
+async function mine3OakLogs(bot) {
+  const logName = 'oak_log';
+  const targetCount = 3;
+  const currentLogs = bot.inventory.items().filter(i => i.name === logName).reduce((acc, i) => acc + i.count, 0);
+  const needed = targetCount - currentLogs;
   if (needed <= 0) return;
-  await moveTo(931, 68, 338, 3, 60);
-  await mineBlock('oak_log', needed);
+  const oakLog = bot.findBlock({
+    matching: b => b.name === logName,
+    maxDistance: 32
+  });
+  if (!oakLog) {
+    await exploreUntil('north', 60, () => bot.findBlock({
+      matching: b => b.name === logName,
+      maxDistance: 32
+    }));
+  }
+  await mineBlock(logName, needed);
 }

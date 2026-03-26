@@ -1,10 +1,11 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
+import path from 'path';
+import fs from 'fs';
 import { Vec3 } from 'vec3';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
-import { BotInstance } from '../bot/BotInstance';
 import { EventLog, BotEvent } from './EventLog';
 import { CommandCenter } from '../control/CommandCenter';
 import { CommandType } from '../control/CommandTypes';
@@ -94,14 +95,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   setInterval(() => roleManager.checkOverrideTimeouts?.(), 60000);
 
   // ═══════════════════════════════════════
-  //  EXISTING ENDPOINTS (unchanged logic)
+  //  ENDPOINTS — all use cached worker state
   // ═══════════════════════════════════════
 
   // Health check
   app.get('/api/status', (_req: Request, res: Response) => {
     res.json({
       status: 'ok',
-      botCount: botManager.getAllBots().length,
+      botCount: botManager.getAllWorkers().length,
       controlPlatform: {
         commandCount: commandCenter.getCommands().length,
         missionCount: missionManager.getMissions().length,
@@ -122,18 +123,18 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // List all bots (basic status)
   app.get('/api/bots', (_req: Request, res: Response) => {
-    const bots = botManager.getAllBots().map((b) => b.getStatus());
+    const bots = botManager.getAllBotStatuses();
     res.json({ bots });
   });
 
   // Get single bot (basic)
   app.get('/api/bots/:name', (req: Request, res: Response) => {
-    const bot = botManager.getBot(req.params.name as string);
-    if (!bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    res.json({ bot: bot.getStatus() });
+    res.json({ bot: handle.getCachedStatus() });
   });
 
   // Create bot
@@ -145,8 +146,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
 
-    const bot = await botManager.spawnBot(name, personality, location, mode);
-    if (!bot) {
+    const handle = await botManager.spawnBot(name, personality, location, mode);
+    if (!handle) {
       res.status(409).json({ error: 'Bot already exists or max limit reached' });
       return;
     }
@@ -155,7 +156,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     io.emit('bot:spawn', { bot: name });
     io.emit('activity', event);
 
-    res.status(201).json({ success: true, bot: bot.getStatus() });
+    res.status(201).json({ success: true, bot: handle.getCachedStatus() });
   });
 
   // Remove single bot
@@ -200,9 +201,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Event relay endpoints (for Java plugin)
   app.post('/api/events/chat', (req: Request, res: Response) => {
     const { playerName, message, nearestBot } = req.body;
-    const bot = nearestBot ? botManager.getBot(nearestBot) : null;
+    const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
 
-    if (!bot || !bot.bot) {
+    if (!handle) {
       res.json({ handled: false });
       return;
     }
@@ -224,45 +225,40 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // ═══════════════════════════════════════
-  //  NEW DASHBOARD ENDPOINTS
+  //  DASHBOARD ENDPOINTS
   // ═══════════════════════════════════════
 
-  // Detailed bot status (enriched)
+  // Detailed bot status (enriched) — uses cached state from worker
   app.get('/api/bots/:name/detailed', (req: Request, res: Response) => {
-    const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    res.json({ bot: bot.getDetailedStatus() });
+    const detailed = handle.getCachedDetailedStatus();
+    if (!detailed) {
+      res.json({ bot: handle.getCachedStatus() });
+      return;
+    }
+    res.json({ bot: detailed });
   });
 
-  // Bot inventory
+  // Bot inventory — from cached detailed status
   app.get('/api/bots/:name/inventory', (req: Request, res: Response) => {
-    const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    if (!bot.bot) {
-      res.json({ inventory: [] });
-      return;
-    }
-    const items = bot.bot.inventory.items().map((item) => ({
-      name: item.name,
-      count: item.count,
-      slot: item.slot,
-    }));
-    res.json({ inventory: items });
+    const detailed = handle.getCachedDetailedStatus();
+    res.json({ inventory: detailed?.inventory || [] });
   });
 
-  // Bot relationships (affinities)
+  // Bot relationships (affinities) — read directly from main thread manager
   app.get('/api/bots/:name/relationships', (req: Request, res: Response) => {
     const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(name);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
@@ -270,11 +266,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ relationships: affinities });
   });
 
-  // Bot conversations
+  // Bot conversations — read directly from main thread manager
   app.get('/api/bots/:name/conversations', (req: Request, res: Response) => {
     const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(name);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
@@ -282,94 +278,86 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ conversations });
   });
 
-  // Bot tasks (completed, failed, current)
+  // Bot tasks — from cached detailed status
   app.get('/api/bots/:name/tasks', (req: Request, res: Response) => {
-    const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    const voyager = bot.getVoyagerLoop();
-    if (!voyager) {
+    const detailed = handle.getCachedDetailedStatus();
+    if (!detailed?.voyager) {
       res.json({ currentTask: null, completedTasks: [], failedTasks: [] });
       return;
     }
     res.json({
-      currentTask: voyager.getCurrentTask(),
-      queuedTasks: voyager.getQueuedTasks(),
-      longTermGoal: voyager.getLongTermGoal(),
-      completedTasks: voyager.getCompletedTasks(),
-      failedTasks: voyager.getFailedTasks(),
+      currentTask: detailed.voyager.currentTask,
+      queuedTasks: detailed.voyager.queuedTasks,
+      longTermGoal: detailed.voyager.longTermGoal,
+      completedTasks: detailed.voyager.completedTasks,
+      failedTasks: detailed.voyager.failedTasks,
     });
   });
 
-  // Full social graph (all bots, all players)
+  // Full social graph (all bots, all players) — direct from main thread
   app.get('/api/relationships', (_req: Request, res: Response) => {
     const allAffinities = botManager.getAffinityManager().getAll();
     res.json({ relationships: allAffinities });
   });
 
-  // Global skill library
+  // Global skill library — read from disk
   app.get('/api/skills', (_req: Request, res: Response) => {
-    // Try to get skill library from any active codegen bot
-    const bots = botManager.getAllBots();
-    for (const bot of bots) {
-      const voyager = bot.getVoyagerLoop();
-      if (voyager) {
-        const library = voyager.getSkillLibrary();
-        const names = library.getSkillNames();
-        const skills = names.map((name) => {
-          const code = library.getCode(name);
-          return { name, code: code?.slice(0, 2000) ?? null };
+    try {
+      const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+      if (!fs.existsSync(indexPath)) {
+        res.json({ skills: [], count: 0 });
+        return;
+      }
+      const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+      const skills = Object.keys(index).map((name) => {
+        const skillPath = path.join(process.cwd(), 'skills', `${name}.js`);
+        const code = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf-8').slice(0, 2000) : null;
+        return { name, code };
+      });
+      res.json({ skills, count: skills.length });
+    } catch {
+      res.json({ skills: [], count: 0 });
+    }
+  });
+
+  // Single skill with code — read from disk
+  app.get('/api/skills/:name', (req: Request, res: Response) => {
+    const skillName = req.params.name as string;
+    const skillPath = path.join(process.cwd(), 'skills', `${skillName}.js`);
+    if (!fs.existsSync(skillPath)) {
+      res.status(404).json({ error: 'Skill not found' });
+      return;
+    }
+    const code = fs.readFileSync(skillPath, 'utf-8');
+    res.json({ name: skillName, code });
+  });
+
+  // Aggregate world state — from first bot's cached detailed status
+  app.get('/api/world', (_req: Request, res: Response) => {
+    const workers = botManager.getAllWorkers();
+    for (const w of workers) {
+      const detailed = w.getCachedDetailedStatus();
+      if (detailed?.world) {
+        const timeOfDay = detailed.world.timeOfDay;
+        res.json({
+          timeOfDay,
+          timeOfDayTicks: null,
+          day: null,
+          isRaining: detailed.world.isRaining,
+          onlineBots: workers.filter((h) => h.isAlive()).length,
         });
-        res.json({ skills, count: skills.length });
         return;
       }
     }
-    res.json({ skills: [], count: 0 });
+    res.json({ timeOfDay: null, day: null, isRaining: null, onlineBots: 0 });
   });
 
-  // Single skill with code
-  app.get('/api/skills/:name', (req: Request, res: Response) => {
-    const skillName = req.params.name as string;
-    const bots = botManager.getAllBots();
-    for (const bot of bots) {
-      const voyager = bot.getVoyagerLoop();
-      if (voyager) {
-        const code = voyager.getSkillLibrary().getCode(skillName);
-        if (code) {
-          res.json({ name: skillName, code });
-          return;
-        }
-      }
-    }
-    res.status(404).json({ error: 'Skill not found' });
-  });
-
-  // Aggregate world state
-  app.get('/api/world', (_req: Request, res: Response) => {
-    const bots = botManager.getAllBots();
-    const firstConnected = bots.find((b) => b.bot);
-    if (!firstConnected?.bot) {
-      res.json({ timeOfDay: null, day: null, isRaining: null, onlineBots: 0 });
-      return;
-    }
-    const bot = firstConnected.bot;
-    const timeOfDay = bot.time.timeOfDay < 6000 ? 'sunrise'
-      : bot.time.timeOfDay < 12000 ? 'day'
-      : bot.time.timeOfDay < 18000 ? 'sunset'
-      : 'night';
-    res.json({
-      timeOfDay,
-      timeOfDayTicks: bot.time.timeOfDay,
-      day: bot.time.day,
-      isRaining: bot.isRaining,
-      onlineBots: bots.filter((b) => b.bot).length,
-    });
-  });
-
-  // Shared blackboard state
+  // Shared blackboard state — direct from main thread
   app.get('/api/blackboard', (_req: Request, res: Response) => {
     res.json({ blackboard: botManager.getBlackboardManager().getState() });
   });
@@ -430,51 +418,43 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true, message: msg });
   });
 
-  // Send chat message to a bot (from dashboard)
+  // Send chat message to a bot (from dashboard) — forward to worker
   app.post('/api/bots/:name/chat', (req: Request, res: Response) => {
     const { playerName, message } = req.body;
     if (!playerName || !message) {
       res.status(400).json({ error: 'playerName and message are required' });
       return;
     }
-    const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot || !bot.bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle || !handle.isAlive()) {
       res.status(404).json({ error: 'Bot not found or not connected' });
       return;
     }
-    // Emit the message as if the player said it — the bot's chat listener will handle it
-    (bot.bot as any).emit('chat', playerName, message);
+    handle.sendCommand('queueChat', { playerName, message });
     res.json({ success: true });
   });
 
-  // Queue a task for a bot (from dashboard)
+  // Queue a task for a bot (from dashboard) — forward to worker
   app.post('/api/bots/:name/task', (req: Request, res: Response) => {
     const { description } = req.body;
     if (!description) {
       res.status(400).json({ error: 'description is required' });
       return;
     }
-    const name = req.params.name as string;
-    const bot = botManager.getBot(name);
-    if (!bot) {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    const voyager = bot.getVoyagerLoop();
-    if (!voyager) {
-      res.status(400).json({ error: 'Bot is not in codegen mode' });
-      return;
-    }
-    voyager.queuePlayerTask(description, 'dashboard');
+    handle.sendCommand('queueTask', { description, source: 'dashboard' });
 
     const event = eventLog.push({
       type: 'bot:task',
-      botName: name,
+      botName: req.params.name as string,
       description: `Task queued: ${description}`,
       metadata: { source: 'dashboard' },
     });
-    io.emit('bot:task', { bot: name, task: description, status: 'queued' });
+    io.emit('bot:task', { bot: req.params.name, task: description, status: 'queued' });
     io.emit('activity', event);
 
     res.json({ success: true });

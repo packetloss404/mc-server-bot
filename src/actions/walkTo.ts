@@ -4,30 +4,31 @@ import { ActionResult } from './types';
 
 export async function walkTo(bot: Bot, x: number, y: number, z: number, range = 2): Promise<ActionResult> {
   return new Promise((resolve) => {
-    let finished = false;
-
-    const done = (result: ActionResult) => {
-      if (finished) return;
-      finished = true;
+    let resolved = false;
+    const cleanup = () => {
+      if (resolved) return;
+      resolved = true;
       clearTimeout(timeout);
       bot.removeListener('goal_reached', onReached);
       bot.removeListener('path_update', onPathUpdate);
-      resolve(result);
     };
 
     const timeout = setTimeout(() => {
+      cleanup();
       bot.pathfinder.stop();
-      done({ success: false, message: 'Pathfinding timeout' });
+      resolve({ success: false, message: 'Pathfinding timeout' });
     }, 30000);
 
     const onReached = () => {
-      done({ success: true, message: `Reached ${Math.round(x)}, ${Math.round(y)}, ${Math.round(z)}` });
+      cleanup();
+      resolve({ success: true, message: `Reached ${Math.round(x)}, ${Math.round(y)}, ${Math.round(z)}` });
     };
 
     const onPathUpdate = (r: any) => {
       if (r.status === 'noPath') {
+        cleanup();
         bot.pathfinder.stop();
-        done({ success: false, message: 'No path found' });
+        resolve({ success: false, message: 'No path found' });
       }
     };
 

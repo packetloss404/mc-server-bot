@@ -84,6 +84,27 @@ export class AffinityManager {
     return copy;
   }
 
+  /**
+   * Decay all affinities toward the default over time.
+   * Call periodically (e.g. every 60s). Each call nudges scores
+   * 1 point closer to the default, so hostility fades naturally.
+   */
+  decayTowardDefault(): void {
+    let changed = false;
+    for (const players of Object.values(this.store)) {
+      for (const [player, score] of Object.entries(players)) {
+        if (score < this.config.default) {
+          players[player] = Math.min(score + 1, this.config.default);
+          changed = true;
+        } else if (score > this.config.default) {
+          players[player] = Math.max(score - 1, this.config.default);
+          changed = true;
+        }
+      }
+    }
+    if (changed) this.save();
+  }
+
   clearBot(botName: string): void {
     const key = botName.toLowerCase();
     delete this.store[key];

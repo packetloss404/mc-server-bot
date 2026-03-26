@@ -68,6 +68,11 @@ async function main() {
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
 
+  // Decay hostility over time — every 60s, nudge affinities 1 point toward default
+  setInterval(() => {
+    botManager.getAffinityManager().decayTowardDefault();
+  }, 60000);
+
   const formatMb = (bytes: number) => Number((bytes / 1024 / 1024).toFixed(1));
   const captureHeapSnapshot = (thresholdMb: number, heapUsedMb: number) => {
     try {
@@ -100,11 +105,11 @@ async function main() {
         totalHeapMb: formatMb(heap.total_heap_size),
         usedHeapMb: formatMb(heap.used_heap_size),
         totalBots: diagnostics.totalBots,
-        bots: diagnostics.bots.map((bot) => ({
+        bots: diagnostics.bots.map((bot: any) => ({
           name: bot.name,
           state: bot.state,
-          health: Number(bot.health.toFixed(2)),
-          food: bot.food,
+          health: typeof bot.health === 'number' ? Number(bot.health.toFixed(2)) : 0,
+          food: bot.food ?? 0,
           position: bot.position,
           currentTask: bot.voyager?.currentTask ?? null,
           queuedTasks: bot.voyager?.queuedTasks ?? 0,

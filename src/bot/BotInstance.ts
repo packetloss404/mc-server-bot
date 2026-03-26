@@ -166,16 +166,17 @@ export class BotInstance extends EventEmitter {
         // Set up pathfinder movements
         const mcData = require('minecraft-data')(this.bot.version);
         const movements = new Movements(this.bot);
-        movements.canDig = false; // Don't destroy blocks while pathfinding
+        movements.canDig = true; // Allow digging to escape holes (matches original Voyager)
         this.bot.pathfinder.setMovements(movements);
-        (this.bot.pathfinder as any).searchRadius = 64; // Cap A* search to prevent OOM on unreachable goals
-        (this.bot.pathfinder as any).thinkTimeout = 2000; // Reduce from 5s default to limit node accumulation
         logger.info({ bot: this.name, canDig: movements.canDig }, 'Pathfinder movements configured');
 
         // Auto-dismount to prevent physicsTick from stopping (matches original Voyager)
-        this.bot.on('mount', () => {
+        // Use once + re-register pattern to avoid accumulating listeners on respawn
+        const onMount = () => {
           this.bot?.dismount();
-        });
+          this.bot?.once('mount', onMount);
+        };
+        this.bot.once('mount', onMount);
       }
 
       // Auth with DyoAuth, then select class, before doing anything else
@@ -697,8 +698,11 @@ export class BotInstance extends EventEmitter {
     }, this.config.behavior.wanderIntervalMs);
   }
 
+  private chatListenerBound = false;
+
   private startChatListener(): void {
-    if (!this.bot) return;
+    if (!this.bot || this.chatListenerBound) return;
+    this.chatListenerBound = true;
 
     this.bot.on('chat', async (username: string, message: string) => {
       // Ignore own messages and empty messages
@@ -841,7 +845,7 @@ export class BotInstance extends EventEmitter {
         this.affinityManager.onNegativeSentiment(this.name, playerName);
       }
 
-      const affinity = this.affinityManager.get(this.name, playerName);
+      const affinity = await this.affinityManager.get(this.name, playerName);
       const isCodegen = this.mode === BotMode.CODEGEN;
       const internalState = this.voyagerLoop?.getInternalState();
 
@@ -857,7 +861,7 @@ export class BotInstance extends EventEmitter {
       );
 
       // Build conversation history (current message appended by buildContentsArray)
-      const contents = this.conversationManager.buildContentsArray(this.name, playerName, message);
+      const contents = await this.conversationManager.buildContentsArray(this.name, playerName, message);
 
       const response = await this.llmClient.chat(systemPrompt, contents, this.config.llm.chatMaxTokens);
 

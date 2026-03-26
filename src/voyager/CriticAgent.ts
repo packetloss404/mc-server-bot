@@ -95,11 +95,15 @@ export class CriticAgent {
       };
     }
 
-    // Programmatic checks first (strict)
-    const programmatic = this.programmaticCheck(task, executionResult, preState, postState);
-    if (programmatic) return programmatic;
+    const shouldPreferSemanticCritic = this.shouldPreferSemanticCritic(task);
 
-    // LLM check with rich observation
+    // Programmatic checks first (strict)
+    if (!shouldPreferSemanticCritic) {
+      const programmatic = this.programmaticCheck(task, executionResult, preState, postState);
+      if (programmatic) return programmatic;
+    }
+
+    // LLM check with rich observation (closer to original Voyager)
     if (this.useLLM && this.llmClient) {
       return this.llmCheck(bot, task, executionResult, preState, postState);
     }
@@ -218,6 +222,25 @@ export class CriticAgent {
         critique: '',
       };
     }
+  }
+
+  private shouldPreferSemanticCritic(task: Task): boolean {
+    const lower = task.description.toLowerCase();
+    if (!lower.includes('craft')) return false;
+
+    // Original Voyager relies on semantic critic evaluation instead of
+    // brittle local parsing for multi-step craft tasks with prerequisites
+    // or workstation references.
+    return [
+      ' at ',
+      ' using ',
+      ' from ',
+      ' then ',
+      ' next to ',
+      'crafting table',
+      'furnace',
+      'chest',
+    ].some((marker) => lower.includes(marker));
   }
 
   private formatInventoryDelta(before: Record<string, number>, after: Record<string, number>): string {

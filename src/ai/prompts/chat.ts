@@ -1,5 +1,5 @@
 // Keyword-based sentiment analysis (replaces LLM sentiment call)
-const NEGATIVE_WORDS = ['hate', 'stupid', 'ugly', 'die', 'kill', 'worst', 'terrible', 'idiot', 'dumb', 'suck'];
+const NEGATIVE_WORDS: string[] = [];
 const POSITIVE_WORDS = ['love', 'great', 'awesome', 'thanks', 'friend', 'cool', 'best', 'nice', 'good', 'amazing'];
 
 export function analyzeSentiment(message: string): 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL' {

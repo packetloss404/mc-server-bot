@@ -404,7 +404,7 @@ export class VoyagerLoop {
     }
     // 1. Get task from player queue or curriculum
     const goalTask = this.activeLongTermGoal ? longTermGoalToTask(this.activeLongTermGoal) : null;
-    const blackboardTask = !goalTask ? this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality) || null : null;
+    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
     const task = goalTask
@@ -496,7 +496,8 @@ export class VoyagerLoop {
       return;
     }
 
-    const reservable = missing.filter((placement) => this.tryReserveBuildCell(goal.id, placement.x, placement.y, placement.z));
+    const reserveResults = await Promise.all(missing.map(async (placement) => ({ placement, ok: await this.tryReserveBuildCell(goal.id, placement.x, placement.y, placement.z) })));
+    const reservable = reserveResults.filter((r) => r.ok).map((r) => r.placement);
     const batch = (reservable.length > 0 ? reservable : missing).slice(0, 8);
     const inventoryCounts = new Map<string, number>();
     for (const item of this.bot.inventory.items()) {
@@ -657,7 +658,7 @@ export class VoyagerLoop {
     return 'oak_planks';
   }
 
-  private tryReserveBuildCell(goalId: string, x: number, y: number, z: number): boolean {
+  private async tryReserveBuildCell(goalId: string, x: number, y: number, z: number): Promise<boolean> {
     if (!this.blackboardManager) return true;
     return this.blackboardManager.claimReservation('build-cell', `${goalId}:${x},${y},${z}`, this.botName, goalId, 45000);
   }

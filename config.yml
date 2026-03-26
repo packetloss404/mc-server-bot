@@ -46,7 +46,7 @@ instincts:
 
 voyager:
   enabled: true
-  taskCooldownMs: 10000
+  taskCooldownMs: 2000
   maxRetriesPerTask: 3
   codeExecutionTimeoutMs: 300000
   curriculumLLMCalls: true

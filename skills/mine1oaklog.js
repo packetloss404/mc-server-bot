@@ -12,7 +12,12 @@ async function mineOneOakLog(bot) {
   });
   let target = findTarget();
   if (!target) {
-    await exploreUntil('north', 60, () => findTarget());
+    await exploreUntil("north", 60, () => {
+      return bot.findBlock({
+        matching: b => b.name === 'oak_log',
+        maxDistance: 32
+      });
+    });
   }
   await mineBlock(targetName, targetCount);
 

@@ -1,6 +1,5 @@
 import fs from 'fs';
 import path from 'path';
-import { BotInstance, BotOptions } from './BotInstance';
 import { BotMode } from './BotState';
 import { Config } from '../config';
 import { logger } from '../util/logger';
@@ -10,6 +9,7 @@ import { ConversationManager } from '../personality/ConversationManager';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import { WorkerHandle } from '../worker/WorkerHandle';
 
 interface SavedBot {
   name: string;
@@ -19,7 +19,7 @@ interface SavedBot {
 }
 
 export class BotManager {
-  private bots: Map<string, BotInstance> = new Map();
+  private workers: Map<string, WorkerHandle> = new Map();
   private config: Config;
   private dataPath: string;
   private llmClient: LLMClient | null;
@@ -29,6 +29,7 @@ export class BotManager {
   private botComms: BotComms;
   private blackboardManager: BlackboardManager;
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private nextStaggerAt = 0;
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -46,67 +47,57 @@ export class BotManager {
     personality: string,
     location?: { x: number; y: number; z: number },
     mode?: string
-  ): Promise<BotInstance | null> {
+  ): Promise<WorkerHandle | null> {
     const key = name.toLowerCase();
 
-    if (this.bots.has(key)) {
+    if (this.workers.has(key)) {
       logger.warn({ bot: name }, 'Bot already exists');
       return null;
     }
 
-    if (this.bots.size >= this.config.bots.maxBots) {
+    if (this.workers.size >= this.config.bots.maxBots) {
       logger.warn('Max bot limit reached');
       return null;
     }
 
     const effectiveMode = mode || this.config.bots.defaultMode;
-    const botMode = effectiveMode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
-    // Whitelist and OP the new bot using an already-connected bot
-    const connectedBot = this.getAllBots().find((b) => b.bot);
-    if (connectedBot?.bot) {
-      try {
-        connectedBot.bot.chat(`/whitelist add ${name}`);
-        await new Promise((r) => setTimeout(r, 500));
-        connectedBot.bot.chat(`/op ${name}`);
-        logger.info({ bot: name, via: connectedBot.name }, 'Whitelisted and OP\'d new bot');
-        await new Promise((r) => setTimeout(r, 1000));
-      } catch (e) {
-        logger.warn({ bot: name }, 'Failed to whitelist/OP bot — may need manual setup');
-      }
+    // Stagger bot connections
+    const staggerMs = Math.max(0, this.config.bots.joinStaggerMs || 0);
+    const now = Date.now();
+    const waitUntil = Math.max(now, this.nextStaggerAt);
+    this.nextStaggerAt = waitUntil + staggerMs;
+    const delay = waitUntil - now;
+
+    const handle = new WorkerHandle(
+      { botName: name, personality, mode: effectiveMode, spawnLocation: location },
+      this.llmClient,
+      this.affinityManager,
+      this.conversationManager,
+      this.blackboardManager,
+      (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
+    );
+
+    this.workers.set(key, handle);
+
+    // Start the worker (with optional stagger delay)
+    if (delay > 0) {
+      await new Promise((r) => setTimeout(r, delay));
     }
+    handle.start();
 
-    const instance = new BotInstance({
-      name,
-      personality,
-      mode: botMode,
-      spawnLocation: location,
-      config: this.config,
-      llmClient: this.llmClient,
-      affinityManager: this.affinityManager,
-      conversationManager: this.conversationManager,
-      socialMemory: this.socialMemory,
-      botComms: this.botComms,
-      botManager: this,
-      blackboardManager: this.blackboardManager,
-      onSwarmDirective: (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
-    });
-
-    this.bots.set(key, instance);
-    await instance.connect();
     this.saveBots();
-
-    logger.info({ bot: name, personality, mode: botMode }, 'Bot spawned');
-    return instance;
+    logger.info({ bot: name, personality, mode: effectiveMode, worker: true }, 'Bot spawned in worker thread');
+    return handle;
   }
 
   async removeBot(name: string): Promise<boolean> {
     const key = name.toLowerCase();
-    const instance = this.bots.get(key);
-    if (!instance) return false;
+    const handle = this.workers.get(key);
+    if (!handle) return false;
 
-    await instance.disconnect();
-    this.bots.delete(key);
+    await handle.terminate();
+    this.workers.delete(key);
     this.saveBots();
 
     logger.info({ bot: name }, 'Bot removed');
@@ -114,8 +105,8 @@ export class BotManager {
   }
 
   async removeAllBots(): Promise<number> {
-    const count = this.bots.size;
-    const names = [...this.bots.keys()];
+    const count = this.workers.size;
+    const names = [...this.workers.keys()];
 
     for (const name of names) {
       await this.removeBot(name);
@@ -129,21 +120,26 @@ export class BotManager {
     this.affinityManager.shutdown();
     this.socialMemory.shutdown();
     this.blackboardManager.shutdown();
-    for (const bot of this.bots.values()) {
-      bot.getVoyagerLoop()?.shutdownPersistence();
-    }
   }
 
-  getBot(name: string): BotInstance | undefined {
-    return this.bots.get(name.toLowerCase());
+  getWorker(name: string): WorkerHandle | undefined {
+    return this.workers.get(name.toLowerCase());
   }
 
-  getAllBots(): BotInstance[] {
-    return [...this.bots.values()];
+  /** Get all worker handles */
+  getAllWorkers(): WorkerHandle[] {
+    return [...this.workers.values()];
+  }
+
+  /** Get cached status for all bots (for API compat) */
+  getAllBotStatuses(): any[] {
+    return this.getAllWorkers().map((w) => w.getCachedStatus()).filter(Boolean);
   }
 
   getDiagnosticsSnapshot() {
-    const bots = this.getAllBots().map((bot) => bot.getDiagnosticsSummary());
+    const bots = this.getAllWorkers()
+      .map((w) => w.getCachedDiagnostics())
+      .filter(Boolean);
     return {
       totalBots: bots.length,
       bots,
@@ -166,21 +162,6 @@ export class BotManager {
     return this.botComms;
   }
 
-  getNearbyBotInfo(botName: string, radius: number = 64): { name: string; personality: string; activity: string }[] {
-    const bot = this.getBot(botName);
-    if (!bot?.bot?.entity) return [];
-    const botPos = bot.bot.entity.position;
-
-    return this.getAllBots()
-      .filter(b => b.name !== botName && b.bot?.entity)
-      .filter(b => b.bot!.entity.position.distanceTo(botPos) <= radius)
-      .map(b => ({
-        name: b.name,
-        personality: b.personality,
-        activity: b.getVoyagerLoop()?.getCurrentTask() || 'idle',
-      }));
-  }
-
   getBlackboardManager(): BlackboardManager {
     return this.blackboardManager;
   }
@@ -190,22 +171,22 @@ export class BotManager {
   }
 
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
-    const bots = this.getAllBots().filter((bot) => bot.getVoyagerLoop());
-    for (const bot of bots) {
-      bot.getVoyagerLoop()?.overrideWithSwarmDirective(description, requestedBy);
+    // Broadcast swarm directive to all workers — this clears local queues and interrupts current tasks
+    for (const handle of this.workers.values()) {
+      handle.sendCommand('swarmDirective', { description, requestedBy });
     }
 
-    const leader = bots.find((bot) => !!bot.bot)?.getVoyagerLoop();
-    if (leader) {
-      await leader.queueSwarmGoal(description, requestedBy);
+    // Queue the directive as a player task on each worker so they actually work on it
+    for (const handle of this.workers.values()) {
+      handle.sendCommand('queueTask', { description, source: requestedBy });
     }
   }
 
   setMode(name: string, mode: string): boolean {
-    const instance = this.bots.get(name.toLowerCase());
-    if (!instance) return false;
+    const handle = this.workers.get(name.toLowerCase());
+    if (!handle) return false;
 
-    instance.setMode(mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE);
+    handle.sendCommand('setMode', { mode });
     this.saveBots();
     return true;
   }
@@ -225,25 +206,21 @@ export class BotManager {
   }
 
   private watchdogTick(): void {
-    for (const bot of this.bots.values()) {
-      if (bot.state !== 'DISCONNECTED') continue;
-      if (bot.isDestroyed()) {
-        logger.info({ bot: bot.name }, 'Watchdog: reviving destroyed bot');
-        bot.resetReconnect();
-      } else {
-        logger.info({ bot: bot.name }, 'Watchdog: reconnecting disconnected bot');
-        bot.resetReconnect();
+    for (const handle of this.workers.values()) {
+      const status = handle.getCachedStatus();
+      if (status?.state === 'DISCONNECTED') {
+        logger.info({ bot: handle.botName }, 'Watchdog: restarting disconnected worker');
+        handle.sendCommand('reconnect', {});
       }
-      void bot.connect();
     }
   }
 
   private saveBots(): void {
-    const data: SavedBot[] = this.getAllBots().map((bot) => ({
-      name: bot.name,
-      personality: bot.personality,
-      mode: bot.mode,
-      spawnLocation: bot.getStatus().position || undefined,
+    const data: SavedBot[] = this.getAllWorkers().map((w) => ({
+      name: w.botName,
+      personality: w.personality,
+      mode: w.mode,
+      spawnLocation: w.getCachedStatus()?.position || w.spawnLocation || undefined,
     }));
 
     const dir = path.dirname(this.dataPath);

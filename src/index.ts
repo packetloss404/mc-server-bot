@@ -152,6 +152,7 @@ async function main() {
       clearInterval(memoryInterval);
       memoryInterval = null;
     }
+    eventLog.shutdown();
     io.close();
     await botManager.removeAllBots();
     process.exit(0);

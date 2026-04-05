@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { CommanderService } from '../control/CommanderService';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -381,5 +383,128 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  COMMANDER ENDPOINTS
+  // ═══════════════════════════════════════
+
+  const commanderService = new CommanderService({ llmClient: null });
+
+  app.get('/api/commander/history', (req: Request, res: Response) => {
+    const limit = parseInt(String(req.query.limit ?? '20')) || 20;
+    res.json({ entries: commanderService.getHistory(Number.isFinite(limit) ? limit : 20) });
+  });
+
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    const { input } = req.body;
+    if (!input || typeof input !== 'string') {
+      res.status(400).json({ error: 'input string is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parse(input.trim());
+
+      const event = eventLog.push({
+        type: 'commander:parse',
+        botName: 'commander',
+        description: `Commander parsed: "${input.trim().slice(0, 80)}"`,
+        metadata: { planId: plan.id, intent: plan.intent, confidence: plan.confidence },
+      });
+      io.emit('activity', event);
+
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err, input }, 'Commander parse failed');
+      res.status(500).json({ error: err.message || 'Parse failed' });
+    }
+  });
+
+  app.post('/api/commander/clarify', async (req: Request, res: Response) => {
+    const { originalInput, clarifications } = req.body;
+    if (!originalInput || typeof originalInput !== 'string') {
+      res.status(400).json({ error: 'originalInput string is required' });
+      return;
+    }
+    if (!clarifications || typeof clarifications !== 'object') {
+      res.status(400).json({ error: 'clarifications object is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parseWithClarification(originalInput.trim(), clarifications);
+
+      const event = eventLog.push({
+        type: 'commander:clarify',
+        botName: 'commander',
+        description: `Commander re-parsed with clarification: "${originalInput.trim().slice(0, 60)}"`,
+        metadata: { planId: plan.id, intent: plan.intent, confidence: plan.confidence },
+      });
+      io.emit('activity', event);
+
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err, originalInput }, 'Commander clarification failed');
+      res.status(500).json({ error: err.message || 'Clarification failed' });
+    }
+  });
+
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    const { planId } = req.body;
+    if (!planId) {
+      res.status(400).json({ error: 'planId is required' });
+      return;
+    }
+    const plan = commanderService.getPlan(planId);
+    if (!plan) {
+      res.status(404).json({ error: 'Plan not found' });
+      return;
+    }
+    try {
+      const result = await commanderService.execute(planId);
+      if (!result) {
+        res.status(400).json({ error: 'Plan requires clarification before execution' });
+        return;
+      }
+
+      const event = eventLog.push({
+        type: 'commander:execute',
+        botName: 'commander',
+        description: `Commander executed plan: ${plan.intent}`,
+        metadata: { planId },
+      });
+      io.emit('activity', event);
+
+      res.json({ result });
+    } catch (err: any) {
+      logger.error({ err, planId }, 'Commander execute failed');
+      res.status(500).json({ error: err.message || 'Execute failed' });
+    }
+  });
+
+  app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
+    res.json({ suggestions: commanderService.getSuggestedCommands() });
+  });
+
+  app.get('/api/commander/drafts', (_req: Request, res: Response) => {
+    res.json({ drafts: commanderService.getDrafts() });
+  });
+
+  app.post('/api/commander/drafts', (req: Request, res: Response) => {
+    const { input, plan, notes, id } = req.body;
+    if (!input || typeof input !== 'string') {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    const draft = commanderService.saveDraft({ input: input.trim(), plan, notes, id });
+    res.json({ draft });
+  });
+
+  app.delete('/api/commander/drafts/:id', (req: Request, res: Response) => {
+    const deleted = commanderService.deleteDraft(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Draft not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService };
 }

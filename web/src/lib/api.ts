@@ -133,6 +133,70 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// ===================================
+//  COMMANDER TYPES
+// ===================================
+
+export interface ClarificationQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  field: string;
+}
+
+export interface CommanderPlanCommand {
+  type: string;
+  targets: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface CommanderPlanMission {
+  type: string;
+  title: string;
+  description?: string;
+  assigneeIds: string[];
+}
+
+export interface CommanderPlan {
+  id: string;
+  input: string;
+  intent: string;
+  parsedIntent?: string; // alias used in display
+  confidence: number;
+  warnings: string[];
+  requiresConfirmation: boolean;
+  commands: CommanderPlanCommand[];
+  missions: CommanderPlanMission[];
+  clarificationQuestions: ClarificationQuestion[];
+  needsClarification: boolean;
+  suggestedCommands: string[];
+  createdAt: string;
+}
+
+export interface CommanderResult {
+  commandResults: { command: CommanderPlanCommand; success: boolean; error?: string }[];
+  missionsCreated: CommanderPlanMission[];
+}
+
+export interface CommanderHistoryEntry {
+  planId: string;
+  input: string;
+  plan: CommanderPlan;
+  result?: CommanderResult;
+  status: 'parsed' | 'executed' | 'partial_failure' | 'clarification_needed';
+  createdAt: string;
+  executedAt?: string;
+}
+
+export interface CommanderDraft {
+  id: string;
+  input: string;
+  plan?: CommanderPlan;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -203,5 +267,39 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
+    }),
+
+  // Commander
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }),
+  clarifyCommanderInput: (originalInput: string, clarifications: Record<string, string>) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/clarify', {
+      method: 'POST',
+      body: JSON.stringify({ originalInput, clarifications }),
+    }),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ result: CommanderResult }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+  getCommanderHistory: (opts?: { limit?: number }) =>
+    fetchJSON<{ entries: CommanderHistoryEntry[] }>(
+      `/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`,
+    ),
+  getCommanderSuggestions: () =>
+    fetchJSON<{ suggestions: string[] }>('/api/commander/suggestions'),
+  getCommanderDrafts: () =>
+    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts'),
+  saveCommanderDraft: (data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }) =>
+    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${id}`, {
+      method: 'DELETE',
     }),
 };

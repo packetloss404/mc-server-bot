@@ -362,6 +362,196 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
+  // ═══════════════════════════════════════
+  //  METRICS ENDPOINT
+  // ═══════════════════════════════════════
+
+  app.get('/api/metrics', (_req: Request, res: Response) => {
+    try {
+      const workers = botManager.getAllWorkers();
+      const statuses = botManager.getAllBotStatuses();
+
+      // ── Bot overview ──
+      const totalBots = workers.length;
+      const aliveBots = workers.filter((w) => w.isAlive()).length;
+      const idleBots = statuses.filter((s: any) => s.state === 'IDLE').length;
+      const workingBots = statuses.filter((s: any) => s.state === 'EXECUTING_TASK').length;
+
+      // ── Bot states breakdown ──
+      const stateBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const state = (s as any).state || 'UNKNOWN';
+        stateBreakdown[state] = (stateBreakdown[state] || 0) + 1;
+      }
+
+      // ── Personality breakdown ──
+      const personalityBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const p = (s as any).personality || 'unknown';
+        personalityBreakdown[p] = (personalityBreakdown[p] || 0) + 1;
+      }
+
+      // ── Task metrics (from detailed statuses) ──
+      let totalCompleted = 0;
+      let totalFailed = 0;
+      let totalQueued = 0;
+      let activeTasks = 0;
+      const botTaskStats: Array<{ name: string; personality: string; completed: number; failed: number; queued: number; currentTask: string | null }> = [];
+
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        const name = w.botName;
+        const personality = w.personality;
+        const completed = detailed?.voyager?.completedTasks?.length || 0;
+        const failed = detailed?.voyager?.failedTasks?.length || 0;
+        const queued = detailed?.voyager?.queuedTaskCount || 0;
+        const currentTask = detailed?.voyager?.currentTask || null;
+
+        totalCompleted += completed;
+        totalFailed += failed;
+        totalQueued += queued;
+        if (currentTask) activeTasks++;
+
+        botTaskStats.push({ name, personality, completed, failed, queued, currentTask });
+      }
+
+      const totalTasks = totalCompleted + totalFailed;
+      const taskSuccessRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 0;
+
+      // ── Command metrics (from persisted data if available) ──
+      let commandMetrics = { total: 0, succeeded: 0, failed: 0, pending: 0, cancelled: 0, successRate: 0 };
+      try {
+        const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+        if (fs.existsSync(cmdPath)) {
+          const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+          const commands = cmdData.commands || [];
+          commandMetrics.total = commands.length;
+          commandMetrics.succeeded = commands.filter((c: any) => c.status === 'completed').length;
+          commandMetrics.failed = commands.filter((c: any) => c.status === 'failed').length;
+          commandMetrics.pending = commands.filter((c: any) => c.status === 'pending' || c.status === 'running').length;
+          commandMetrics.cancelled = commands.filter((c: any) => c.status === 'cancelled').length;
+          commandMetrics.successRate = commandMetrics.total > 0
+            ? Math.round((commandMetrics.succeeded / commandMetrics.total) * 100) : 0;
+        }
+      } catch { /* ignore */ }
+
+      // ── Mission metrics (from persisted data if available) ──
+      let missionMetrics = { total: 0, active: 0, completed: 0, failed: 0, paused: 0, completionRate: 0, byType: {} as Record<string, number> };
+      try {
+        const msnPath = path.join(process.cwd(), 'data', 'missions.json');
+        if (fs.existsSync(msnPath)) {
+          const msnData = JSON.parse(fs.readFileSync(msnPath, 'utf-8'));
+          const missions = msnData.missions || [];
+          missionMetrics.total = missions.length;
+          missionMetrics.active = missions.filter((m: any) => m.status === 'running').length;
+          missionMetrics.completed = missions.filter((m: any) => m.status === 'completed').length;
+          missionMetrics.failed = missions.filter((m: any) => m.status === 'failed').length;
+          missionMetrics.paused = missions.filter((m: any) => m.status === 'paused').length;
+          missionMetrics.completionRate = missionMetrics.total > 0
+            ? Math.round((missionMetrics.completed / missionMetrics.total) * 100) : 0;
+          for (const m of missions) {
+            const t = m.type || 'unknown';
+            missionMetrics.byType[t] = (missionMetrics.byType[t] || 0) + 1;
+          }
+        }
+      } catch { /* ignore */ }
+
+      // ── Commander metrics (from persisted data if available) ──
+      let commanderMetrics = { parseCount: 0, avgConfidence: 0, failureRate: 0 };
+      try {
+        const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+        if (fs.existsSync(cmdPath)) {
+          const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+          const commands = cmdData.commands || [];
+          const parsed = commands.filter((c: any) => c.source === 'commander' || c.parsedPlan);
+          commanderMetrics.parseCount = parsed.length;
+          const confidences = parsed.map((c: any) => c.confidence ?? c.parsedPlan?.confidence).filter((c: any) => typeof c === 'number');
+          commanderMetrics.avgConfidence = confidences.length > 0
+            ? Math.round(confidences.reduce((a: number, b: number) => a + b, 0) / confidences.length) : 0;
+          const cmdFailed = parsed.filter((c: any) => c.status === 'failed').length;
+          commanderMetrics.failureRate = parsed.length > 0
+            ? Math.round((cmdFailed / parsed.length) * 100) : 0;
+        }
+      } catch { /* ignore */ }
+
+      // ── Fleet metrics ──
+      let fleetMetrics = { botsByRole: {} as Record<string, number>, overrideCount: 0, activeSquads: 0, totalSquads: 0 };
+      try {
+        const rolesPath = path.join(process.cwd(), 'data', 'roles.json');
+        if (fs.existsSync(rolesPath)) {
+          const rolesData = JSON.parse(fs.readFileSync(rolesPath, 'utf-8'));
+          const assignments = rolesData.assignments || [];
+          for (const a of assignments) {
+            const role = a.role || 'unassigned';
+            fleetMetrics.botsByRole[role] = (fleetMetrics.botsByRole[role] || 0) + 1;
+            if (a.manualOverride) fleetMetrics.overrideCount++;
+          }
+        }
+      } catch { /* ignore */ }
+      try {
+        const squadsPath = path.join(process.cwd(), 'data', 'squads.json');
+        if (fs.existsSync(squadsPath)) {
+          const squadsData = JSON.parse(fs.readFileSync(squadsPath, 'utf-8'));
+          const squads = squadsData.squads || [];
+          fleetMetrics.totalSquads = squads.length;
+          fleetMetrics.activeSquads = squads.filter((s: any) => s.members && s.members.length > 0).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Skill metrics ──
+      let skillCount = 0;
+      try {
+        const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+        if (fs.existsSync(indexPath)) {
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+          skillCount = Object.keys(index).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Health summary ──
+      const healthStats: Array<{ name: string; health: number; food: number }> = [];
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        if (detailed) {
+          healthStats.push({
+            name: w.botName,
+            health: detailed.health ?? 20,
+            food: detailed.food ?? 20,
+          });
+        }
+      }
+
+      res.json({
+        timestamp: Date.now(),
+        bots: {
+          total: totalBots,
+          alive: aliveBots,
+          idle: idleBots,
+          working: workingBots,
+          stateBreakdown,
+          personalityBreakdown,
+          healthStats,
+        },
+        tasks: {
+          totalCompleted,
+          totalFailed,
+          totalQueued,
+          activeTasks,
+          successRate: taskSuccessRate,
+          botTaskStats,
+        },
+        commands: commandMetrics,
+        missions: missionMetrics,
+        commander: commanderMetrics,
+        fleet: fleetMetrics,
+        skills: { count: skillCount },
+      });
+    } catch (err) {
+      logger.error({ err }, 'Failed to gather metrics');
+      res.status(500).json({ error: 'Failed to gather metrics' });
+    }
+  });
+
   // Set a swarm directive from dashboard/UI
   app.post('/api/swarm', async (req: Request, res: Response) => {
     const { description, requestedBy } = req.body;

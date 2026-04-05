@@ -133,6 +133,66 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Metrics types
+export interface MetricsData {
+  timestamp: number;
+  bots: {
+    total: number;
+    alive: number;
+    idle: number;
+    working: number;
+    stateBreakdown: Record<string, number>;
+    personalityBreakdown: Record<string, number>;
+    healthStats: Array<{ name: string; health: number; food: number }>;
+  };
+  tasks: {
+    totalCompleted: number;
+    totalFailed: number;
+    totalQueued: number;
+    activeTasks: number;
+    successRate: number;
+    botTaskStats: Array<{
+      name: string;
+      personality: string;
+      completed: number;
+      failed: number;
+      queued: number;
+      currentTask: string | null;
+    }>;
+  };
+  commands: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    pending: number;
+    cancelled: number;
+    successRate: number;
+  };
+  missions: {
+    total: number;
+    active: number;
+    completed: number;
+    failed: number;
+    paused: number;
+    completionRate: number;
+    byType: Record<string, number>;
+  };
+  commander: {
+    parseCount: number;
+    avgConfidence: number;
+    failureRate: number;
+  };
+  fleet: {
+    botsByRole: Record<string, number>;
+    overrideCount: number;
+    activeSquads: number;
+    totalSquads: number;
+  };
+  skills: {
+    count: number;
+  };
+}
+
 // API functions
 export const api = {
   // Bots
@@ -174,6 +234,9 @@ export const api = {
     if (type) params.set('type', type);
     return fetchJSON<{ events: BotEvent[] }>(`/api/activity?${params}`);
   },
+
+  // Metrics
+  getMetrics: () => fetchJSON<MetricsData>('/api/metrics'),
 
   // Actions
   sendChat: (botName: string, playerName: string, message: string) =>

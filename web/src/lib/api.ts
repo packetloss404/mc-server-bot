@@ -133,6 +133,23 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Zone types
+export interface ZoneRecord {
+  id: string;
+  name: string;
+  type: string; // guard, farm, build, mine, etc.
+  shape: 'rectangular' | 'circular';
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  cx?: number;
+  cz?: number;
+  radius?: number;
+}
+
+export type ZoneCreatePayload = Omit<ZoneRecord, 'id'>;
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +221,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Zones
+  getZones: () => fetchJSON<{ zones: ZoneRecord[] }>('/api/zones'),
+  createZone: (zone: ZoneCreatePayload) =>
+    fetchJSON<{ zone: ZoneRecord }>('/api/zones', {
+      method: 'POST',
+      body: JSON.stringify(zone),
+    }),
+  updateZone: (id: string, patch: Partial<ZoneCreatePayload>) =>
+    fetchJSON<{ zone: ZoneRecord }>(`/api/zones/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteZone: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
 };

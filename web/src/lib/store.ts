@@ -1,7 +1,8 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, ZoneRecord } from './api';
+import type { MapMode, DrawnZone } from '@/components/map/mapDrawing';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +139,33 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// ── World / Map store ────────────────────────────────────────────────────────
+
+interface WorldStore {
+  /** Current map interaction mode. */
+  drawingMode: MapMode;
+  /** Zones loaded from the backend. */
+  zones: ZoneRecord[];
+  /** Zone geometry just drawn by the user, pending dialog confirmation. */
+  pendingZone: DrawnZone | null;
+
+  setDrawingMode: (mode: MapMode) => void;
+  setZones: (zones: ZoneRecord[]) => void;
+  addZone: (zone: ZoneRecord) => void;
+  removeZone: (id: string) => void;
+  setPendingZone: (zone: DrawnZone | null) => void;
+}
+
+export const useWorldStore = create<WorldStore>((set) => ({
+  drawingMode: 'navigate',
+  zones: [],
+  pendingZone: null,
+
+  setDrawingMode: (mode) => set({ drawingMode: mode }),
+  setZones: (zones) => set({ zones }),
+  addZone: (zone) => set((s) => ({ zones: [...s.zones, zone] })),
+  removeZone: (id) => set((s) => ({ zones: s.zones.filter((z) => z.id !== id) })),
+  setPendingZone: (zone) => set({ pendingZone: zone }),
 }));

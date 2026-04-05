@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, Routine } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +138,41 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// ── Routine Store ────────────────────────────────────────────────
+
+interface RoutineStore {
+  routines: Routine[];
+  recording: boolean;
+  draft: Routine | null;
+
+  setRoutines: (routines: Routine[]) => void;
+  addRoutine: (routine: Routine) => void;
+  updateRoutine: (routine: Routine) => void;
+  removeRoutine: (id: string) => void;
+  setRecording: (recording: boolean, draft: Routine | null) => void;
+}
+
+export const useRoutineStore = create<RoutineStore>((set) => ({
+  routines: [],
+  recording: false,
+  draft: null,
+
+  setRoutines: (routines) => set({ routines }),
+
+  addRoutine: (routine) =>
+    set((state) => ({ routines: [...state.routines, routine] })),
+
+  updateRoutine: (routine) =>
+    set((state) => ({
+      routines: state.routines.map((r) => (r.id === routine.id ? routine : r)),
+    })),
+
+  removeRoutine: (id) =>
+    set((state) => ({
+      routines: state.routines.filter((r) => r.id !== id),
+    })),
+
+  setRecording: (recording, draft) => set({ recording, draft }),
 }));

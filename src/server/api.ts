@@ -7,6 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
 import { logger } from '../util/logger';
+import { RoutineManager } from '../control';
 
 export interface APIServerResult {
   app: express.Application;
@@ -39,6 +40,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
+
+  // Routine manager for macro recording and replay
+  const routineManager = new RoutineManager(botManager);
 
   // Socket.IO
   const io = new SocketIOServer(httpServer, {
@@ -350,6 +354,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     handle.sendCommand('queueTask', { description, source: 'dashboard' });
 
+    // Capture step if recording a routine
+    if (routineManager.isRecording()) {
+      routineManager.captureStep({
+        type: 'mission',
+        data: { description },
+      });
+    }
+
     const event = eventLog.push({
       type: 'bot:task',
       botName: req.params.name as string,
@@ -379,6 +391,109 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
     io.emit('activity', event);
     res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  ROUTINE (MACRO) ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List all routines
+  app.get('/api/routines', (_req: Request, res: Response) => {
+    res.json({ routines: routineManager.list() });
+  });
+
+  // Create routine
+  app.post('/api/routines', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const routine = routineManager.create({ name, description, steps });
+    res.status(201).json({ routine });
+  });
+
+  // Recording routes (must come before :id routes to avoid param capture)
+  app.get('/api/routines/recording/status', (_req: Request, res: Response) => {
+    res.json({
+      recording: routineManager.isRecording(),
+      draft: routineManager.getRecordingDraft(),
+    });
+  });
+
+  app.post('/api/routines/recording/start', (req: Request, res: Response) => {
+    const { name } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    try {
+      const draft = routineManager.startRecording(name);
+      res.json({ draft });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/routines/recording/stop', (req: Request, res: Response) => {
+    const { save } = req.body;
+    const routine = routineManager.stopRecording(save !== false);
+    res.json({ routine, saved: save !== false });
+  });
+
+  // Get single routine
+  app.get('/api/routines/:id', (req: Request, res: Response) => {
+    const routine = routineManager.get(req.params.id as string);
+    if (!routine) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine });
+  });
+
+  // Update routine
+  app.put('/api/routines/:id', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    const updated = routineManager.update(req.params.id as string, { name, description, steps });
+    if (!updated) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine: updated });
+  });
+
+  // Delete routine
+  app.delete('/api/routines/:id', (req: Request, res: Response) => {
+    const deleted = routineManager.delete(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Execute routine
+  app.post('/api/routines/:id/execute', async (req: Request, res: Response) => {
+    const { botNames } = req.body;
+    if (!botNames || !Array.isArray(botNames) || botNames.length === 0) {
+      res.status(400).json({ error: 'botNames (string[]) is required' });
+      return;
+    }
+    try {
+      const execution = await routineManager.execute(req.params.id as string, botNames);
+
+      const event = eventLog.push({
+        type: 'routine:execute',
+        botName: botNames.join(', '),
+        description: `Routine "${execution.routineName}" executed on ${botNames.join(', ')}`,
+        metadata: { routineId: req.params.id, status: execution.status },
+      });
+      io.emit('activity', event);
+
+      res.json({ execution });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
   });
 
   return { app, httpServer, io, eventLog };

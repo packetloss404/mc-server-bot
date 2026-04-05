@@ -133,6 +133,32 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Routine types
+export interface RoutineStep {
+  type: 'command' | 'mission';
+  data: Record<string, any>;
+}
+
+export interface Routine {
+  id: string;
+  name: string;
+  description: string;
+  steps: RoutineStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoutineExecution {
+  routineId: string;
+  routineName: string;
+  targetBots: string[];
+  startedAt: string;
+  stepsCompleted: number;
+  totalSteps: number;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -185,6 +211,39 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
       body: JSON.stringify({ description }),
+    }),
+
+  // Routines (macros)
+  getRoutines: () => fetchJSON<{ routines: Routine[] }>('/api/routines'),
+  getRoutine: (id: string) => fetchJSON<{ routine: Routine }>(`/api/routines/${id}`),
+  createRoutine: (data: { name: string; description?: string; steps?: RoutineStep[] }) =>
+    fetchJSON<{ routine: Routine }>('/api/routines', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRoutine: (id: string, data: { name?: string; description?: string; steps?: RoutineStep[] }) =>
+    fetchJSON<{ routine: Routine }>(`/api/routines/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteRoutine: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routines/${id}`, { method: 'DELETE' }),
+  executeRoutine: (id: string, botNames: string[]) =>
+    fetchJSON<{ execution: RoutineExecution }>(`/api/routines/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ botNames }),
+    }),
+  getRecordingStatus: () =>
+    fetchJSON<{ recording: boolean; draft: Routine | null }>('/api/routines/recording/status'),
+  startRecording: (name: string) =>
+    fetchJSON<{ draft: Routine }>('/api/routines/recording/start', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  stopRecording: (save: boolean) =>
+    fetchJSON<{ routine: Routine | null; saved: boolean }>('/api/routines/recording/stop', {
+      method: 'POST',
+      body: JSON.stringify({ save }),
     }),
 
   // Bot commands

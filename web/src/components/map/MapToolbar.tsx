@@ -1,79 +1,125 @@
 'use client';
 
-import { ShowState } from './mapDrawing';
-
-function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick: () => void; label: string; color?: string }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-600 hover:text-zinc-400'}`}
-      style={active && color ? { color } : undefined}
-    >{label}</button>
-  );
-}
+import type { MapMode } from './mapDrawing';
 
 interface MapToolbarProps {
-  show: ShowState;
-  toggleShow: (key: keyof ShowState) => void;
-  scale: number;
-  onZoomIn: () => void;
-  onZoomOut: () => void;
-  terrainStatus: 'idle' | 'loading' | 'loaded' | 'error';
-  onReloadTerrain: () => void;
+  mode: MapMode;
+  onModeChange: (mode: MapMode) => void;
+  routeWaypointCount: number;
+  onUndoWaypoint: () => void;
+  onFinishRoute: () => void;
+  onCancelRoute: () => void;
 }
 
 export function MapToolbar({
-  show,
-  toggleShow,
-  scale,
-  onZoomIn,
-  onZoomOut,
-  terrainStatus,
-  onReloadTerrain,
+  mode,
+  onModeChange,
+  routeWaypointCount,
+  onUndoWaypoint,
+  onFinishRoute,
+  onCancelRoute,
 }: MapToolbarProps) {
+  const isDrawing = mode === 'draw-route';
+
   return (
-    <div className="px-4 py-2.5 border-b border-zinc-800/60 flex items-center justify-between bg-zinc-950/80 backdrop-blur-sm shrink-0">
-      <div className="flex items-center gap-4">
-        <h1 className="text-sm font-bold text-white">World Map</h1>
-        <div className="flex items-center gap-1.5 text-[11px]">
-          <ToggleBtn active={show.terrain} onClick={() => toggleShow('terrain')} label="Terrain" color="#5B8C33" />
-          <ToggleBtn active={show.grid} onClick={() => toggleShow('grid')} label="Grid" />
-          <ToggleBtn active={show.trails} onClick={() => toggleShow('trails')} label="Trails" />
-          <ToggleBtn active={show.coords} onClick={() => toggleShow('coords')} label="Coords" />
-          <span className="w-px h-4 bg-zinc-800 mx-1" />
-          <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
-          <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
-        </div>
-        {terrainStatus === 'loading' && (
-          <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
-            <span className="w-3 h-3 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
-            Loading terrain...
-          </span>
-        )}
-        {terrainStatus === 'error' && <span className="text-[10px] text-red-400/70">Terrain unavailable</span>}
-      </div>
-      <div className="flex items-center gap-2">
-        <button
-          onClick={onReloadTerrain}
-          className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-xs transition-colors"
-          title="Reload terrain"
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-            <polyline points="23 4 23 10 17 10" />
-            <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+    <div className="flex items-center gap-1.5">
+      {/* Navigate tool */}
+      <ToolButton
+        active={mode === 'navigate'}
+        onClick={() => {
+          if (isDrawing) onCancelRoute();
+          onModeChange('navigate');
+        }}
+        title="Navigate (pan & select)"
+        label={
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M5 9l4-4 4 4" />
+            <path d="M9 5v14" />
+            <path d="M19 15l-4 4-4-4" />
+            <path d="M15 19V5" />
           </svg>
-        </button>
-        <span className="w-px h-4 bg-zinc-800" />
-        <button
-          onClick={onZoomIn}
-          className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-        >+</button>
-        <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scale.toFixed(1)}x</span>
-        <button
-          onClick={onZoomOut}
-          className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-        >-</button>
-      </div>
+        }
+      />
+
+      <span className="w-px h-4 bg-zinc-800" />
+
+      {/* Route drawing tool */}
+      <ToolButton
+        active={isDrawing}
+        onClick={() => onModeChange(isDrawing ? 'navigate' : 'draw-route')}
+        title="Draw Route (click to place waypoints)"
+        color="#F59E0B"
+        label={
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="6" cy="6" r="2" />
+            <circle cx="18" cy="18" r="2" />
+            <path d="M6 8v4c0 2 2 4 4 4h4" />
+            <polyline points="15 13 18 16 15 19" />
+          </svg>
+        }
+      />
+
+      {/* Route drawing controls (shown while drawing) */}
+      {isDrawing && (
+        <>
+          <span className="w-px h-4 bg-zinc-800 mx-0.5" />
+          <span className="text-[10px] text-amber-400/80 font-mono tabular-nums px-1">
+            {routeWaypointCount} pt{routeWaypointCount !== 1 ? 's' : ''}
+          </span>
+          <button
+            onClick={onUndoWaypoint}
+            disabled={routeWaypointCount === 0}
+            className="px-2 py-0.5 rounded text-[11px] transition-colors bg-zinc-800 hover:bg-zinc-700 text-zinc-300 disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Undo last waypoint (Ctrl+Z)"
+          >
+            Undo
+          </button>
+          <button
+            onClick={onFinishRoute}
+            disabled={routeWaypointCount < 2}
+            className="px-2 py-0.5 rounded text-[11px] transition-colors bg-amber-600/80 hover:bg-amber-600 text-white disabled:opacity-30 disabled:cursor-not-allowed"
+            title="Finish route (Enter)"
+          >
+            Finish
+          </button>
+          <button
+            onClick={onCancelRoute}
+            className="px-2 py-0.5 rounded text-[11px] transition-colors bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
+            title="Cancel route (Escape)"
+          >
+            Cancel
+          </button>
+        </>
+      )}
     </div>
+  );
+}
+
+function ToolButton({
+  active,
+  onClick,
+  title,
+  label,
+  color,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  label: React.ReactNode;
+  color?: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      className={`w-7 h-7 flex items-center justify-center rounded transition-colors ${
+        active
+          ? 'bg-zinc-700 text-white ring-1 ring-zinc-600'
+          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
+      }`}
+      style={active && color ? { color } : undefined}
+    >
+      {label}
+    </button>
   );
 }

@@ -15,6 +15,7 @@ import { countBlueprintMaterials, generateSimpleHouseBlueprint, getMissingBluepr
 import { placeBlock } from '../actions/placeBlock';
 import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
+import type { RoleManager } from '../control/RoleManager';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -46,6 +47,7 @@ export class VoyagerLoop {
   private activeLongTermGoal: LongTermGoal | null = null;
   private blackboardManager: BlackboardManager | null = null;
   private activeBlackboardTask: BlackboardTask | null = null;
+  private roleManager: RoleManager | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -236,6 +238,10 @@ export class VoyagerLoop {
     return this.blackboardManager;
   }
 
+  setRoleManager(manager: RoleManager): void {
+    this.roleManager = manager;
+  }
+
   /** Returns a short summary of what the bot is currently doing, for chat context. */
   getInternalState(): string {
     const parts: string[] = [];
@@ -373,6 +379,20 @@ export class VoyagerLoop {
     const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
+
+    // Check role policy before falling through to autonomous task generation
+    const hasExplicitTask = !!(goalTask || playerTask || blackboardTask);
+    if (!hasExplicitTask && this.roleManager) {
+      const verdict = this.roleManager.shouldBotAcceptTask(this.botName);
+      if (!verdict.allowed) {
+        logger.info(
+          { bot: this.botName, reason: verdict.reason },
+          'Voyager skipping auto-generated task: role policy denied',
+        );
+        return;
+      }
+    }
+
     const task = goalTask
       || playerTask
       || (blackboardTask ? { description: blackboardTask.description, keywords: blackboardTask.keywords } : null)

@@ -133,35 +133,164 @@ export interface TerrainData {
   blocks: string[];
 }
 
-// Command & Mission types (control platform)
-export type CommandStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
-export type MissionStatus = 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+// ===================================
+//  CONTROL PLATFORM TYPES
+// ===================================
+
+export type CommandType =
+  | 'pause_voyager' | 'resume_voyager' | 'stop_movement' | 'follow_player'
+  | 'walk_to_coords' | 'move_to_marker' | 'return_to_base' | 'regroup'
+  | 'guard_zone' | 'patrol_route' | 'deposit_inventory' | 'equip_best' | 'unstuck';
+
+export type CommandStatus = 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled';
+export type MissionStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
 
 export interface CommandRecord {
   id: string;
-  type: string;
-  botName: string;
-  params: Record<string, any>;
+  type: CommandType;
+  scope: 'bot' | 'squad' | 'selection';
+  targets: string[];
+  payload: Record<string, unknown>;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  source: string;
+  requestedBy?: string;
   status: CommandStatus;
-  createdAt: string;
-  updatedAt: string;
-  error?: string;
-  linkedMissionId?: string;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: Record<string, unknown>;
+  error?: { code: string; message: string; retryable?: boolean };
 }
 
 export interface MissionRecord {
   id: string;
   type: string;
-  botName: string;
-  description: string;
+  title: string;
+  description?: string;
+  assigneeType: 'bot' | 'squad';
+  assigneeIds: string[];
   status: MissionStatus;
-  priority: number;
-  createdAt: string;
-  updatedAt: string;
-  error?: string;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  steps: MissionStep[];
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
   blockedReason?: string;
   linkedCommandIds?: string[];
-  dependencies?: string[];
+  source: string;
+}
+
+export interface MissionStep {
+  id: string;
+  type: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  payload: Record<string, unknown>;
+  error?: string;
+}
+
+export type MarkerKind = 'base' | 'storage' | 'build-site' | 'mine' | 'village' | 'custom';
+
+export interface MarkerRecord {
+  id: string;
+  name: string;
+  kind: MarkerKind;
+  position: { x: number; y: number; z: number };
+  tags: string[];
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ZoneRecord {
+  id: string;
+  name: string;
+  mode: string;
+  shape: 'circle' | 'rectangle';
+  circle?: { x: number; z: number; radius: number };
+  rectangle?: { minX: number; minZ: number; maxX: number; maxZ: number };
+}
+
+export interface RouteRecord {
+  id: string;
+  name: string;
+  waypointIds: string[];
+  loop: boolean;
+}
+
+export interface SquadRecord {
+  id: string;
+  name: string;
+  botNames: string[];
+  defaultRole?: string;
+  homeMarkerId?: string;
+  activeMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoleAssignmentRecord {
+  id: string;
+  botName: string;
+  role: string;
+  autonomyLevel: 'manual' | 'assisted' | 'autonomous';
+  homeMarkerId?: string;
+  allowedZoneIds: string[];
+  preferredMissionTypes: string[];
+  interruptPolicy?: 'always' | 'confirm-if-busy' | 'never-while-critical';
+  loadoutPolicy?: Record<string, unknown>;
+}
+
+export interface RoleOverrideRecord {
+  reason: string;
+  commandId: string;
+  at: number;
+}
+
+export interface RoleApprovalRecord {
+  id: string;
+  assignmentId: string;
+  assignmentUpdatedAt: number;
+  botName: string;
+  role: string;
+  status: 'pending' | 'approved' | 'rejected' | 'expired';
+  createdAt: number;
+  expiresAt: number;
+  decidedAt?: number;
+  decidedBy?: string;
+  decisionNote?: string;
+  missionDraft: {
+    type: string;
+    title: string;
+    description: string;
+    assigneeType: 'bot';
+    assigneeIds: string[];
+    priority: 'normal';
+    source: 'role';
+  };
+}
+
+export interface BuildJob {
+  id: string;
+  schematicFile: string;
+  origin: { x: number; y: number; z: number };
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  createdAt: number;
+  totalBlocks: number;
+  placedBlocks: number;
+  assignments: { botName: string; yMin: number; yMax: number; status: string; blocksTotal: number; blocksPlaced: number; currentY: number }[];
+}
+
+export interface SupplyChain {
+  id: string;
+  name: string;
+  description?: string;
+  stages: { id: string; botName: string; task: string; status: string }[];
+  status: 'idle' | 'running' | 'paused' | 'completed' | 'failed';
+  currentStageIndex: number;
+  loop: boolean;
+  createdAt: number;
+  updatedAt: number;
 }
 
 export interface CommanderHistoryEntry {

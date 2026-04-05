@@ -21,6 +21,7 @@ import { SocialMemory } from '../social/SocialMemory';
 import { BotComms, BotMessage } from '../social/BotComms';
 import type { BotManager } from './BotManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import type { RoleManager } from '../control/RoleManager';
 
 export interface BotOptions {
   name: string;
@@ -93,6 +94,7 @@ export class BotInstance extends EventEmitter {
   private static CHAT_COOLDOWN_MS = 3000;
   private lastPathResetLog: { reason: string; at: number; suppressed: number } | null = null;
   private lastInteractionAt: number = Date.now();
+  private roleManager: RoleManager | null = null;
 
   constructor(options: BotOptions) {
     super();
@@ -109,6 +111,14 @@ export class BotInstance extends EventEmitter {
     this.botManager = options.botManager;
     this.blackboardManager = options.blackboardManager;
     this.onSwarmDirective = options.onSwarmDirective;
+  }
+
+  /** Set a RoleManager so the Voyager loop can check role policies before auto-task generation. */
+  setRoleManager(manager: RoleManager): void {
+    this.roleManager = manager;
+    if (this.voyagerLoop) {
+      this.voyagerLoop.setRoleManager(manager);
+    }
   }
 
   async connect(skipQueue = false): Promise<void> {
@@ -913,8 +923,8 @@ export class BotInstance extends EventEmitter {
       if ((goalDescription || taskDescription) && this.voyagerLoop) {
         // Force-resume if paused so the player's request actually executes
         if (this.voyagerLoop.isPaused()) {
-          this.voyagerLoop.forceResume('player-chat-request');
-          logger.info({ bot: this.name, player: playerName }, 'Force-resumed voyager loop for player request');
+          this.voyagerLoop.resume('player-chat-request');
+          logger.info({ bot: this.name, player: playerName }, 'Resumed voyager loop for player request');
         }
         if (!this.voyagerLoop.isRunning()) {
           this.voyagerLoop.start();
@@ -1044,6 +1054,9 @@ export class BotInstance extends EventEmitter {
       this.llmClient
     );
     this.voyagerLoop.setBlackboardManager(this.blackboardManager);
+    if (this.roleManager) {
+      this.voyagerLoop.setRoleManager(this.roleManager);
+    }
 
     // Wire social memory into task lifecycle
     this.voyagerLoop.onTaskSuccess = (taskDescription: string) => {

@@ -201,25 +201,27 @@ export async function depositAllItems(
   const deposited: Record<string, number> = {};
   const failures: string[] = [];
 
-  for (const item of itemsToDeposit) {
-    try {
-      await container.deposit(item.type, item.metadata, item.count);
-      deposited[item.name] = (deposited[item.name] || 0) + item.count;
-    } catch (err: any) {
-      const msg = String(err?.message ?? err);
-      // If the chest is full, stop trying
-      if (msg.toLowerCase().includes('full') || msg.toLowerCase().includes('no room')) {
-        failures.push(`Chest full — stopped depositing at ${item.name}`);
-        break;
-      }
-      failures.push(`${item.name}: ${msg}`);
-    }
-  }
-
   try {
-    container.close();
-  } catch (_) {
-    // Best-effort close
+    for (const item of itemsToDeposit) {
+      try {
+        await container.deposit(item.type, item.metadata, item.count);
+        deposited[item.name] = (deposited[item.name] || 0) + item.count;
+      } catch (err: any) {
+        const msg = String(err?.message ?? err);
+        // If the chest is full, stop trying
+        if (msg.toLowerCase().includes('full') || msg.toLowerCase().includes('no room')) {
+          failures.push(`Chest full — stopped depositing at ${item.name}`);
+          break;
+        }
+        failures.push(`${item.name}: ${msg}`);
+      }
+    }
+  } finally {
+    try {
+      container.close();
+    } catch (_) {
+      // Best-effort close
+    }
   }
 
   const totalDeposited = Object.values(deposited).reduce((s, n) => s + n, 0);

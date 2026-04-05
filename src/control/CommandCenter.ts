@@ -13,6 +13,7 @@ import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
 import { MarkerStore } from './MarkerStore';
 import type { RoleManager } from './RoleManager';
+import { depositAllItems } from '../actions/container';
 import { logger } from '../util/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -508,8 +509,8 @@ export class CommandCenter {
     if (!voyager) {
       throw { code: 'NO_VOYAGER', message: `${bot.name} is not running a voyager loop` } as CommandError;
     }
-    voyager.forceResume('dashboard');
-    logger.info({ botName: bot.name }, 'Voyager force-resumed via command');
+    voyager.resume('dashboard');
+    logger.info({ botName: bot.name }, 'Voyager resumed via command');
     return { resumed: true };
   }
 
@@ -745,16 +746,42 @@ export class CommandCenter {
     };
   }
 
-  private handleDepositInventory(bot: BotInstance): Record<string, any> {
+  private async handleDepositInventory(bot: BotInstance): Promise<Record<string, any>> {
     if (!bot.bot) {
       throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
     }
 
-    // Deposit is complex (needs async chest interaction). Return a clear message for now.
-    logger.info({ botName: bot.name }, 'Deposit inventory requested (not yet fully implemented)');
+    // Try to find a nearby storage marker to deposit at
+    let position: { x: number; y: number; z: number } | undefined;
+    if (this.markerStore) {
+      const botPos = bot.bot.entity.position;
+      const storageMarker = this.markerStore.findNearestMarker(
+        { x: botPos.x, y: botPos.y, z: botPos.z },
+        'storage',
+      );
+      if (storageMarker) {
+        position = storageMarker.position;
+        logger.info(
+          { botName: bot.name, marker: storageMarker.name, position },
+          'Using storage marker for deposit',
+        );
+      }
+    }
+
+    const result = await depositAllItems(
+      bot.bot,
+      position ? new (require('vec3').Vec3)(position.x, position.y, position.z) : undefined,
+    );
+
+    if (!result.success) {
+      throw { code: 'DEPOSIT_FAILED', message: result.message } as CommandError;
+    }
+
+    logger.info({ botName: bot.name, result: result.message }, 'Deposit inventory completed');
     return {
-      deposited: false,
-      note: 'deposit_inventory is not yet fully implemented — chest interaction requires async flow',
+      deposited: true,
+      message: result.message,
+      ...(result.data ?? {}),
     };
   }
 

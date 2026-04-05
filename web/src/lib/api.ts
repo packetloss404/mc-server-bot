@@ -86,7 +86,6 @@ export interface BotDetailed extends BotStatus {
     failedTasks: string[];
     internalState?: string;
     queuedTaskCount?: number;
-    queuedTasks?: string[];
   } | null;
   armor?: BotArmor;
   offhand?: EquipmentSlot | null;
@@ -134,43 +133,45 @@ export interface TerrainData {
   blocks: string[];
 }
 
-// Commander types
-export interface CommanderPlan {
+// Command & Mission types (control platform)
+export type CommandStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+export type MissionStatus = 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface CommandRecord {
   id: string;
-  input: string;
-  intent?: string;
-  parsedIntent?: string;
-  confidence: number;
-  requiresConfirmation: boolean;
-  warnings: string[];
-  commands: unknown[];
-  missions: unknown[];
-  createdAt?: string;
+  type: string;
+  botName: string;
+  params: Record<string, any>;
+  status: CommandStatus;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+  linkedMissionId?: string;
 }
 
-export interface CommanderResult {
-  success: boolean;
-  commandResults: { success: boolean; command: { id?: string; type: string; targets: string[]; status?: string }; error?: string }[];
-  missionsCreated: { id?: string; title: string; assigneeIds: string[]; status?: string }[];
+export interface MissionRecord {
+  id: string;
+  type: string;
+  botName: string;
+  description: string;
+  status: MissionStatus;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+  blockedReason?: string;
+  linkedCommandIds?: string[];
+  dependencies?: string[];
 }
 
 export interface CommanderHistoryEntry {
-  planId: string;
-  input: string;
-  plan: CommanderPlan;
-  result?: CommanderResult;
-  status: 'parsed' | 'executed' | 'partial_failure';
-  createdAt: string;
-  executedAt?: string;
-}
-
-export interface CommanderDraft {
   id: string;
-  input: string;
-  plan?: CommanderPlan;
-  notes?: string;
+  nlInput: string;
+  parsedIntent: string;
+  resultingCommandIds: string[];
+  resultingMissionIds: string[];
   createdAt: string;
-  updatedAt: string;
+  botName?: string;
 }
 
 // API functions
@@ -221,20 +222,29 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ playerName, message }),
     }),
-  queueTask: (botName: string, description: string, prepend?: boolean) =>
+  queueTask: (botName: string, description: string) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
-      body: JSON.stringify({ description, prepend }),
+      body: JSON.stringify({ description }),
     }),
-  reorderBotMissionQueue: (botName: string, order: string[]) =>
-    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
-      method: 'PUT',
-      body: JSON.stringify({ order }),
-    }),
-  clearBotMissionQueue: (botName: string) =>
-    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
-      method: 'DELETE',
-    }),
+
+  // Commands & Missions (control platform)
+  getCommands: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ commands: CommandRecord[] }>(`/api/commands${qs ? `?${qs}` : ''}`);
+  },
+  getCommand: (id: string) => fetchJSON<{ command: CommandRecord }>(`/api/commands/${id}`),
+  getMissions: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? `?${qs}` : ''}`);
+  },
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+  getCommanderHistory: () =>
+    fetchJSON<{ entries: CommanderHistoryEntry[] }>('/api/commander/history'),
 
   // Bot commands
   pauseBot: (botName: string) =>
@@ -252,49 +262,5 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
-    }),
-
-  // Commander
-  parseCommanderInput: (input: string) =>
-    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
-      method: 'POST',
-      body: JSON.stringify({ input }),
-    }).then((result) => ({
-      plan: {
-        ...result.plan,
-        parsedIntent: result.plan.parsedIntent ?? result.plan.intent ?? 'unknown',
-      },
-    })),
-  executeCommanderPlan: (planId: string) =>
-    fetchJSON<{ commands: unknown[]; missions: unknown[] } | { success: boolean; result: CommanderResult }>('/api/commander/execute', {
-      method: 'POST',
-      body: JSON.stringify({ planId }),
-    }).then((raw) => {
-      if ('result' in raw) return raw;
-      return {
-        success: true,
-        result: {
-          success: true,
-          commandResults: [],
-          missionsCreated: [],
-        },
-      };
-    }),
-  getCommanderHistory: (params?: { limit?: number }) => {
-    const query = new URLSearchParams();
-    if (params?.limit) query.set('limit', String(params.limit));
-    const qs = query.toString();
-    return fetchJSON<{ entries: CommanderHistoryEntry[] }>(`/api/commander/history${qs ? '?' + qs : ''}`);
-  },
-  getCommanderDrafts: () =>
-    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts'),
-  saveCommanderDraft: (data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }) =>
-    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
-  deleteCommanderDraft: (id: string) =>
-    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${encodeURIComponent(id)}`, {
-      method: 'DELETE',
     }),
 };

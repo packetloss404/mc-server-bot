@@ -7,6 +7,7 @@ import { api } from '@/lib/api';
 import { getPersonalityColor, getAffinityTier, PERSONALITY_ICONS } from '@/lib/constants';
 import { useBotStore } from '@/lib/store';
 import { PageHeader } from '@/components/PageHeader';
+import { SkeletonCardGrid } from '@/components/SkeletonLoader';
 
 type ViewMode = 'cards' | 'matrix';
 
@@ -14,9 +15,13 @@ export default function SocialPage() {
   const bots = useBotStore((s) => s.botList);
   const [relationships, setRelationships] = useState<Record<string, Record<string, number>>>({});
   const [viewMode, setViewMode] = useState<ViewMode>('cards');
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.getRelationships().then((data) => setRelationships(data.relationships)).catch(() => {});
+    api.getRelationships()
+      .then((data) => setRelationships(data.relationships))
+      .catch(() => {})
+      .finally(() => setLoading(false));
     const interval = setInterval(() => {
       api.getRelationships().then((data) => setRelationships(data.relationships)).catch(() => {});
     }, 10000);
@@ -57,7 +62,9 @@ export default function SocialPage() {
         )}
       </PageHeader>
 
-      {!hasData ? (
+      {loading ? (
+        <SkeletonCardGrid count={4} />
+      ) : !hasData ? (
         <div className="text-center py-16 bg-zinc-900/50 rounded-xl border border-zinc-800/40">
           <div className="w-12 h-12 rounded-full bg-zinc-800 flex items-center justify-center mx-auto mb-3">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#6B7280" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

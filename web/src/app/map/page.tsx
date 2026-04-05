@@ -671,11 +671,13 @@ export default function MapPage() {
           <button
             onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
+            title="Zoom in"
           >+</button>
           <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
           <button
             onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
+            title="Zoom out"
           >-</button>
         </div>
       </div>
@@ -772,6 +774,7 @@ function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick
   return (
     <button
       onClick={onClick}
+      title={`${active ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
       className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-600 hover:text-zinc-400'}`}
       style={active && color ? { color } : undefined}
     >{label}</button>

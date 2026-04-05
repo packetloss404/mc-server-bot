@@ -1,27 +1,14 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore, useControlStore, useWorldStore, useMapOverlayStore } from '@/lib/store';
+import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
-import type { ZoneRecord } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
-import {
-  type MapMode,
-  type DrawRouteState,
-  type DrawingState,
-  type DrawnZone,
-  createDrawRouteState,
-  screenToWorld,
-  worldToScreen,
-  drawRouteOverlay,
-  drawRouteStatusBar,
-  canvasToWorld,
-  drawMissionOverlays,
-  drawSquadOverlays,
-} from '@/components/map/mapDrawing';
-import { MapToolbar, OverlayToggleButtons, type OverlayToggles } from '@/components/map/MapToolbar';
-import { RouteNameDialog } from '@/components/map/RouteNameDialog';
+import { MapContextMenu, type MapContextMenuAction } from '@/components/map/MapContextMenu';
+import { MapEntitySidebar } from '@/components/map/MapEntitySidebar';
+import { ZoneEditorDialog } from '@/components/map/ZoneEditorDialog';
+import { MarkerEditor } from '@/components/map/MarkerEditor';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
@@ -43,31 +30,6 @@ interface MapEntity {
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
-  const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
-  const selectedBotIds = useControlStore((s) => s.selectedBotIds);
-
-  // Zone drawing state (agent 2-3)
-  const zones = useWorldStore((s) => s.zones);
-  const setZones = useWorldStore((s) => s.setZones);
-  const pendingZone = useWorldStore((s) => s.pendingZone);
-  const setPendingZone = useWorldStore((s) => s.setPendingZone);
-  const zonesRef = useRef(zones);
-  zonesRef.current = zones;
-
-  // Map overlay state (missions, zones, squads for overlay rendering)
-  const overlayMissions = useMapOverlayStore((s) => s.missions);
-  const overlayZones = useMapOverlayStore((s) => s.zones);
-  const overlaySquads = useMapOverlayStore((s) => s.squads);
-  const setOverlayMissions = useMapOverlayStore((s) => s.setMissions);
-  const setOverlayZones = useMapOverlayStore((s) => s.setZones);
-  const setOverlaySquads = useMapOverlayStore((s) => s.setSquads);
-  const overlayMissionsRef = useRef(overlayMissions);
-  const overlayZonesRef = useRef(overlayZones);
-  const overlaySquadsRef = useRef(overlaySquads);
-  overlayMissionsRef.current = overlayMissions;
-  overlayZonesRef.current = overlayZones;
-  overlaySquadsRef.current = overlaySquads;
-
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -79,7 +41,6 @@ export default function MapPage() {
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
-  const overlayRef = useRef<OverlayToggles>({ missions: true, squads: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
@@ -88,28 +49,18 @@ export default function MapPage() {
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
 
-  // Route drawing state
-  const mapModeRef = useRef<MapMode>('navigate');
-  const [mapMode, setMapModeState] = useState<MapMode>('navigate');
-  const drawRouteRef = useRef<DrawRouteState>(createDrawRouteState());
-  const mouseWorldRef = useRef<{ x: number; z: number } | null>(null);
-  const [showRouteDialog, setShowRouteDialog] = useState(false);
-  const [savingRoute, setSavingRoute] = useState(false);
-
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
   const kick = () => forceRender((n) => n + 1);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
-  const setMapMode = useCallback((mode: MapMode) => {
-    mapModeRef.current = mode;
-    setMapModeState(mode);
-    if (mode === 'draw-route') {
-      drawRouteRef.current = createDrawRouteState();
-    }
-    kick();
-  }, []);
+  // Context menu, marker editor, zone editor state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; worldX: number; worldZ: number } | null>(null);
+  const [markerEditorOpen, setMarkerEditorOpen] = useState(false);
+  const [markerEditorPos, setMarkerEditorPos] = useState<{ x: number; z: number } | undefined>();
+  const [zoneEditorOpen, setZoneEditorOpen] = useState(false);
+  const [zoneEditorCenter, setZoneEditorCenter] = useState<{ x: number; z: number } | undefined>();
 
   // Keep refs in sync with zustand
   botsRef.current = bots;
@@ -148,18 +99,6 @@ export default function MapPage() {
     }
   }, []);
 
-  // Fetch overlay data (missions, zones, squads) on mount and periodically
-  useEffect(() => {
-    const fetchOverlays = () => {
-      api.getMissions().then((d) => setOverlayMissions(d.missions as any)).catch(() => {});
-      api.getZones().then((d) => setOverlayZones(d.zones as any)).catch(() => {});
-      api.getSquads().then((d) => setOverlaySquads(d.squads as any)).catch(() => {});
-    };
-    fetchOverlays();
-    const interval = setInterval(fetchOverlays, 15000);
-    return () => clearInterval(interval);
-  }, [setOverlayMissions, setOverlayZones, setOverlaySquads]);
-
   // Track position history
   useEffect(() => {
     for (const e of [...bots, ...players.filter((p) => p.isOnline)]) {
@@ -186,13 +125,6 @@ export default function MapPage() {
       kick();
     }
   }, [bots, players, loadTerrain]);
-
-  // Load zones from backend (agent 2-3)
-  useEffect(() => {
-    api.getZones().then((res) => {
-      if (res.zones) setZones(res.zones as any);
-    }).catch(() => {});
-  }, [setZones]);
 
   // Single stable draw loop — never restarts
   useEffect(() => {
@@ -377,33 +309,6 @@ export default function MapPage() {
         }
       }
 
-      // Route drawing overlay
-      if (mapModeRef.current === 'draw-route') {
-        drawRouteOverlay(ctx, drawRouteRef.current, w, h, offset, scale, mouseWorldRef.current);
-        drawRouteStatusBar(ctx, drawRouteRef.current, w);
-      }
-
-      // --- Overlay layers (missions, squads) ---
-      const overlay = overlayRef.current;
-      const vp = { cx, cy, scale, offsetX: offset.x, offsetY: offset.y };
-
-      // Mission zone overlays
-      if (overlay.missions && overlayMissionsRef.current.length > 0 && overlayZonesRef.current.length > 0) {
-        drawMissionOverlays(ctx, vp, overlayMissionsRef.current, overlayZonesRef.current);
-      }
-
-      // Squad overlays
-      if (overlay.squads && overlaySquadsRef.current.length > 0) {
-        const botPosMap = new Map<string, { x: number; z: number }>();
-        for (const e of entities) {
-          if (e.type === 'bot') {
-            botPosMap.set(e.name, { x: e.x, z: e.z });
-            botPosMap.set(e.name.toLowerCase(), { x: e.x, z: e.z });
-          }
-        }
-        drawSquadOverlays(ctx, vp, overlaySquadsRef.current, botPosMap);
-      }
-
       // HUD overlays
       if (show.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
@@ -421,78 +326,6 @@ export default function MapPage() {
     return () => cancelAnimationFrame(animFrame);
   }, []); // Empty deps — loop runs forever, reads from refs
 
-  // Route drawing helpers
-  const addRouteWaypoint = useCallback((screenX: number, screenY: number) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const container = containerRef.current;
-    if (!container) return;
-    const w = container.clientWidth;
-    const h = container.clientHeight;
-    const world = screenToWorld(screenX, screenY, w, h, offsetRef.current, scaleRef.current);
-    const state = drawRouteRef.current;
-    state.waypoints.push({ x: world.x, z: world.z, index: state.waypoints.length });
-    kick();
-  }, []);
-
-  const undoLastWaypoint = useCallback(() => {
-    const state = drawRouteRef.current;
-    if (state.waypoints.length > 0) {
-      state.waypoints.pop();
-      kick();
-    }
-  }, []);
-
-  const finishRoute = useCallback(() => {
-    const state = drawRouteRef.current;
-    if (state.waypoints.length < 2) return;
-    state.finalized = true;
-    setShowRouteDialog(true);
-    kick();
-  }, []);
-
-  const cancelRoute = useCallback(() => {
-    drawRouteRef.current = createDrawRouteState();
-    setShowRouteDialog(false);
-    setMapMode('navigate');
-  }, [setMapMode]);
-
-  const saveRoute = useCallback(async (name: string, description: string) => {
-    const state = drawRouteRef.current;
-    if (state.waypoints.length < 2) return;
-    setSavingRoute(true);
-    try {
-      // Create a marker for each waypoint
-      const markerIds: string[] = [];
-      for (let i = 0; i < state.waypoints.length; i++) {
-        const wp = state.waypoints[i];
-        const result = await api.createMarker({
-          name: `${name} #${i + 1}`,
-          x: Math.round(wp.x),
-          y: 64, // default y since we're on a 2D map
-          z: Math.round(wp.z),
-          tags: ['route-waypoint'],
-        });
-        markerIds.push(result.marker.id);
-      }
-      // Create the route referencing waypoint marker IDs
-      await api.createRoute({
-        name,
-        description: description || undefined,
-        waypointIds: markerIds,
-      });
-      // Reset and exit draw mode
-      drawRouteRef.current = createDrawRouteState();
-      setShowRouteDialog(false);
-      setMapMode('navigate');
-    } catch (err) {
-      console.error('Failed to save route:', err);
-      // Keep dialog open so user can retry
-    } finally {
-      setSavingRoute(false);
-    }
-  }, [setMapMode]);
-
   // Input handlers — all mutate refs directly, no state updates during drag/hover
   const handleMouseDown = (e: React.MouseEvent) => {
     const canvas = canvasRef.current;
@@ -501,25 +334,11 @@ export default function MapPage() {
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    // In draw-route mode, single clicks place waypoints
-    if (mapModeRef.current === 'draw-route' && !drawRouteRef.current.finalized) {
-      // Don't place on double-click (handled by handleDoubleClick)
-      if (e.detail === 1) {
-        addRouteWaypoint(mx, my);
-      }
-      return;
-    }
-
     for (const [name, pos] of entityPositions.current) {
       const dx = mx - pos.sx;
       const dy = my - pos.sy;
       if (dx * dx + dy * dy < pos.radius * pos.radius) {
         selectedRef.current = selectedRef.current === name ? null : name;
-        // Sync bot selections to the global control store
-        const matchedBot = botsRef.current.find((b) => b.name === name);
-        if (matchedBot) {
-          toggleBotSelection(name);
-        }
         kick();
         return;
       }
@@ -529,37 +348,17 @@ export default function MapPage() {
     dragStartRef.current = { x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y };
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    if (mapModeRef.current === 'draw-route' && !drawRouteRef.current.finalized) {
-      e.preventDefault();
-      // Remove the waypoint that was just added by the second click of the double-click
-      const state = drawRouteRef.current;
-      if (state.waypoints.length > 0) {
-        state.waypoints.pop();
-      }
-      finishRoute();
-    }
-  };
-
   const handleMouseMove = (e: React.MouseEvent) => {
-    const canvas = canvasRef.current;
-    const container = containerRef.current;
-    if (!canvas || !container) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
-    // Track mouse world position for route preview line
-    if (mapModeRef.current === 'draw-route') {
-      const w = container.clientWidth;
-      const h = container.clientHeight;
-      mouseWorldRef.current = screenToWorld(mx, my, w, h, offsetRef.current, scaleRef.current);
-    }
-
     if (draggingRef.current) {
       offsetRef.current = { x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y };
       return;
     }
+
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
 
     let found: string | null = null;
     for (const [name, pos] of entityPositions.current) {
@@ -582,6 +381,46 @@ export default function MapPage() {
       kick();
     }
   };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const cx = w / 2;
+    const cy = h / 2;
+    const worldX = (mx - cx - offsetRef.current.x) / scaleRef.current;
+    const worldZ = (my - cy - offsetRef.current.y) / scaleRef.current;
+    setContextMenu({ x: e.clientX, y: e.clientY, worldX, worldZ });
+  };
+
+  const contextMenuActions: MapContextMenuAction[] = contextMenu ? [
+    {
+      label: 'Add Marker Here',
+      icon: '+',
+      onClick: () => {
+        setMarkerEditorPos({ x: contextMenu.worldX, z: contextMenu.worldZ });
+        setMarkerEditorOpen(true);
+      },
+    },
+    {
+      label: 'Create Zone Here',
+      icon: '#',
+      onClick: () => {
+        setZoneEditorCenter({ x: contextMenu.worldX, z: contextMenu.worldZ });
+        setZoneEditorOpen(true);
+      },
+    },
+    {
+      label: 'Center View Here',
+      icon: '@',
+      onClick: () => centerOn(contextMenu.worldX, contextMenu.worldZ),
+    },
+  ] : [];
 
   // Zoom toward cursor with normalized sensitivity
   useEffect(() => {
@@ -615,27 +454,6 @@ export default function MapPage() {
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
   }, []);
-
-  // Keyboard shortcuts for route drawing
-  useEffect(() => {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (mapModeRef.current !== 'draw-route') return;
-      if (drawRouteRef.current.finalized) return;
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        finishRoute();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        cancelRoute();
-      } else if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
-        e.preventDefault();
-        undoLastWaypoint();
-      }
-    };
-    window.addEventListener('keydown', onKeyDown);
-    return () => window.removeEventListener('keydown', onKeyDown);
-  }, [finishRoute, cancelRoute, undoLastWaypoint]);
 
   // Reload terrain after zoom settles
   useEffect(() => {
@@ -684,23 +502,7 @@ export default function MapPage() {
             <span className="w-px h-4 bg-zinc-800 mx-1" />
             <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
             <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
-            <OverlayToggleButtons
-              toggles={overlayRef.current}
-              onToggle={(key) => {
-                overlayRef.current = { ...overlayRef.current, [key]: !overlayRef.current[key] };
-                kick();
-              }}
-            />
           </div>
-          <span className="w-px h-4 bg-zinc-800 mx-1" />
-          <MapToolbar
-            mode={mapMode}
-            onModeChange={setMapMode}
-            routeWaypointCount={drawRouteRef.current.waypoints.length}
-            onUndoWaypoint={undoLastWaypoint}
-            onFinishRoute={finishRoute}
-            onCancelRoute={cancelRoute}
-          />
           {terrainStatus === 'loading' && (
             <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
               <span className="w-3 h-3 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
@@ -728,68 +530,36 @@ export default function MapPage() {
           <button
             onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-            title="Zoom in"
           >+</button>
           <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
           <button
             onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
-            title="Zoom out"
           >-</button>
         </div>
       </div>
 
       <div className="flex-1 flex min-h-0">
-        {/* Entity sidebar */}
-        <div className="w-52 border-r border-zinc-800/60 bg-zinc-950/50 overflow-y-auto shrink-0">
-          <div className="p-3">
-            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-              Entities ({allEntities.length})
-            </p>
-            <div className="space-y-0.5">
-              {allEntities.map((entity) => (
-                <button
-                  key={`${entity.type}-${entity.name}`}
-                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; if (entity.type === 'bot') toggleBotSelection(entity.name); kick(); }}
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
-                    selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                  } ${entity.type === 'bot' && selectedBotIds.has(entity.name.toLowerCase()) ? 'ring-1 ring-emerald-500/30' : ''}`}
-                >
-                  <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-medium text-zinc-300 truncate">{entity.name}</p>
-                    <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(entity.x)}, {Math.round(entity.z)}</p>
-                  </div>
-                  <span className="text-[9px] text-zinc-600 uppercase shrink-0">
-                    {entity.type === 'bot' ? entity.personality?.slice(0, 3) : 'PLR'}
-                  </span>
-                </button>
-              ))}
-              {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
-            </div>
-          </div>
-        </div>
+        {/* Entity sidebar with markers/zones/routes tabs */}
+        <MapEntitySidebar
+          entities={allEntities}
+          selectedEntity={selectedRef.current}
+          onSelectEntity={(name) => { selectedRef.current = name; kick(); }}
+          onCenterOn={centerOn}
+        />
 
         {/* Canvas */}
         <div
           ref={containerRef}
-          className={`flex-1 relative ${
-            mapModeRef.current === 'draw-route'
-              ? 'cursor-crosshair'
-              : draggingRef.current
-                ? 'cursor-grabbing'
-                : hoveredRef.current
-                  ? 'cursor-pointer'
-                  : 'cursor-grab'
-          }`}
+          className={`flex-1 relative ${draggingRef.current ? 'cursor-grabbing' : hoveredRef.current ? 'cursor-pointer' : 'cursor-grab'}`}
         >
           <canvas
             ref={canvasRef}
             onMouseDown={handleMouseDown}
-            onDoubleClick={handleDoubleClick}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; mouseWorldRef.current = null; }}
+            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
+            onContextMenu={handleContextMenu}
             className="w-full h-full"
           />
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
@@ -810,19 +580,33 @@ export default function MapPage() {
         </div>
       </div>
 
-      {/* Route name dialog */}
-      {showRouteDialog && (
-        <RouteNameDialog
-          waypointCount={drawRouteRef.current.waypoints.length}
-          onConfirm={(name, description) => saveRoute(name, description)}
-          onCancel={() => {
-            // Un-finalize so user can keep editing
-            drawRouteRef.current.finalized = false;
-            setShowRouteDialog(false);
-            kick();
-          }}
+      {/* Context menu */}
+      {contextMenu && (
+        <MapContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          worldX={contextMenu.worldX}
+          worldZ={contextMenu.worldZ}
+          actions={contextMenuActions}
+          onClose={() => setContextMenu(null)}
         />
       )}
+
+      {/* Marker editor dialog */}
+      <MarkerEditor
+        open={markerEditorOpen}
+        onClose={() => setMarkerEditorOpen(false)}
+        onCreated={() => { /* marker created, sidebar will refresh on tab switch */ }}
+        defaultPosition={markerEditorPos}
+      />
+
+      {/* Zone editor dialog */}
+      <ZoneEditorDialog
+        open={zoneEditorOpen}
+        onClose={() => setZoneEditorOpen(false)}
+        onCreated={() => { /* zone created, sidebar will refresh on tab switch */ }}
+        defaultCenter={zoneEditorCenter}
+      />
     </div>
   );
 }
@@ -831,7 +615,6 @@ function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick
   return (
     <button
       onClick={onClick}
-      title={`${active ? 'Hide' : 'Show'} ${label.toLowerCase()}`}
       className={`px-2 py-0.5 rounded transition-colors ${active ? 'bg-zinc-800 text-zinc-200' : 'text-zinc-600 hover:text-zinc-400'}`}
       style={active && color ? { color } : undefined}
     >{label}</button>

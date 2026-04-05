@@ -3,7 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Sidebar } from "@/components/Sidebar";
 import { SocketProvider } from "@/components/SocketProvider";
 import { ToastProvider } from "@/components/Toast";
-import { FleetSelectionBar } from "@/components/FleetSelectionBar";
+import { ErrorBoundary } from "@/components/ErrorBoundary";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -35,8 +35,7 @@ export default function RootLayout({
         <SocketProvider>
           <ToastProvider>
             <Sidebar />
-            <main className="flex-1 overflow-y-auto min-h-screen">{children}</main>
-            <FleetSelectionBar />
+            <main className="flex-1 overflow-y-auto min-h-screen"><ErrorBoundary>{children}</ErrorBoundary></main>
           </ToastProvider>
         </SocketProvider>
       </body>

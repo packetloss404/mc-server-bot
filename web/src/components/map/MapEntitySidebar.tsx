@@ -1,230 +1,218 @@
 'use client';
 
-import { useState } from 'react';
-import { api } from '@/lib/api';
-import type { Zone, Route, Marker, Mission } from '@/lib/api';
+import { useState, useEffect } from 'react';
+import { api, type Marker, type Zone, type Route } from '@/lib/api';
+import { useToast } from '@/components/Toast';
 
-// ── Zone detail panel ────────────────────────────────────
-interface ZoneDetailProps {
-  zone: Zone;
-  missions: Mission[];
-  botNames: string[];
-  selectedBotIds: string[];
-  onCreateMission: (type: string, botName: string, zoneId: string) => void;
+interface MapEntity {
+  name: string;
+  x: number;
+  z: number;
+  color: string;
+  type: 'bot' | 'player';
+  state?: string;
+  personality?: string;
 }
 
-export function ZoneDetailPanel({ zone, missions, botNames, selectedBotIds, onCreateMission }: ZoneDetailProps) {
-  const [missionType, setMissionType] = useState<'guard' | 'patrol' | 'farm' | 'mine'>('guard');
-  const [targetBot, setTargetBot] = useState<string>(selectedBotIds[0] || botNames[0] || '');
-  const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
+interface Props {
+  entities: MapEntity[];
+  selectedEntity: string | null;
+  onSelectEntity: (name: string) => void;
+  onCenterOn: (x: number, z: number) => void;
+}
 
-  const activeMissions = missions.filter(
-    (m) => m.zoneId === zone.id && ['pending', 'active'].includes(m.status),
-  );
+export function MapEntitySidebar({ entities, selectedEntity, onSelectEntity, onCenterOn }: Props) {
+  const { toast } = useToast();
+  const [tab, setTab] = useState<'entities' | 'markers' | 'zones' | 'routes'>('entities');
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const [zones, setZones] = useState<Zone[]>([]);
+  const [routes, setRoutes] = useState<Route[]>([]);
 
-  const handleCreate = () => {
-    if (!targetBot) return;
-    onCreateMission(missionType, targetBot, zone.id);
-    setFeedback({ msg: `Mission created for ${targetBot}`, ok: true });
-    setTimeout(() => setFeedback(null), 3000);
+  useEffect(() => {
+    if (tab === 'markers') {
+      api.getMarkers().then((r) => setMarkers(r.markers)).catch(() => {});
+    } else if (tab === 'zones') {
+      api.getZones().then((r) => setZones(r.zones)).catch(() => {});
+    } else if (tab === 'routes') {
+      api.getRoutes().then((r) => setRoutes(r.routes)).catch(() => {});
+    }
+  }, [tab]);
+
+  const handleDeleteMarker = async (id: string) => {
+    try {
+      await api.deleteMarker(id);
+      setMarkers((prev) => prev.filter((m) => m.id !== id));
+      toast('Marker deleted', 'success');
+    } catch { toast('Failed to delete marker', 'error'); }
   };
 
-  const typeColor = ZONE_TYPE_COLORS[zone.type] || '#6B7280';
+  const handleDeleteZone = async (id: string) => {
+    try {
+      await api.deleteZone(id);
+      setZones((prev) => prev.filter((z) => z.id !== id));
+      toast('Zone deleted', 'success');
+    } catch { toast('Failed to delete zone', 'error'); }
+  };
+
+  const handleDeleteRoute = async (id: string) => {
+    try {
+      await api.deleteRoute(id);
+      setRoutes((prev) => prev.filter((r) => r.id !== id));
+      toast('Route deleted', 'success');
+    } catch { toast('Failed to delete route', 'error'); }
+  };
 
   return (
-    <div className="border-t border-zinc-800/60 p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: typeColor }} />
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold text-zinc-200 truncate">{zone.name}</p>
-          <p className="text-[9px] text-zinc-500 capitalize">{zone.type} zone</p>
-        </div>
+    <div className="w-52 border-r border-zinc-800/60 bg-zinc-950/50 overflow-y-auto shrink-0 flex flex-col">
+      {/* Tabs */}
+      <div className="flex border-b border-zinc-800/60 shrink-0">
+        {(['entities', 'markers', 'zones', 'routes'] as const).map((t) => (
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`flex-1 py-2 text-[9px] font-semibold uppercase tracking-wider transition-colors ${
+              tab === t ? 'text-white border-b border-emerald-400' : 'text-zinc-600 hover:text-zinc-400'
+            }`}
+          >
+            {t === 'entities' ? 'Ent' : t.slice(0, 4)}
+          </button>
+        ))}
       </div>
 
-      {/* Active missions on this zone */}
-      {activeMissions.length > 0 && (
-        <div className="mb-2">
-          <p className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Active Missions</p>
-          {activeMissions.map((m) => (
-            <div key={m.id} className="flex items-center gap-1.5 text-[10px] text-zinc-400 py-0.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-              <span className="truncate">{m.botName}: {m.type}</span>
+      <div className="flex-1 overflow-y-auto p-3">
+        {tab === 'entities' && (
+          <>
+            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Entities ({entities.length})
+            </p>
+            <div className="space-y-0.5">
+              {entities.map((entity) => (
+                <button
+                  key={`${entity.type}-${entity.name}`}
+                  onClick={() => { onCenterOn(entity.x, entity.z); onSelectEntity(entity.name); }}
+                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
+                    selectedEntity === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+                  }`}
+                >
+                  <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[11px] font-medium text-zinc-300 truncate">{entity.name}</p>
+                    <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(entity.x)}, {Math.round(entity.z)}</p>
+                  </div>
+                  <span className="text-[9px] text-zinc-600 uppercase shrink-0">
+                    {entity.type === 'bot' ? entity.personality?.slice(0, 3) : 'PLR'}
+                  </span>
+                </button>
+              ))}
+              {entities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
             </div>
-          ))}
-        </div>
-      )}
+          </>
+        )}
 
-      {/* Assigned bots */}
-      {zone.assignedBots && zone.assignedBots.length > 0 && (
-        <div className="mb-2">
-          <p className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Assigned</p>
-          <div className="flex flex-wrap gap-1">
-            {zone.assignedBots.map((b) => (
-              <span key={b} className="text-[9px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">{b}</span>
-            ))}
-          </div>
-        </div>
-      )}
+        {tab === 'markers' && (
+          <>
+            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Markers ({markers.length})
+            </p>
+            <div className="space-y-0.5">
+              {markers.map((m) => (
+                <div
+                  key={m.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/50 group"
+                >
+                  <button
+                    onClick={() => onCenterOn(m.x, m.z)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                  >
+                    <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: m.color || '#F59E0B' }} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-zinc-300 truncate">{m.name}</p>
+                      <p className="text-[9px] text-zinc-600 font-mono">{Math.round(m.x)}, {Math.round(m.z)}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteMarker(m.id)}
+                    className="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all text-[10px]"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              {markers.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No markers</p>}
+            </div>
+          </>
+        )}
 
-      {/* Create Mission */}
-      <div className="bg-zinc-800/50 rounded-lg p-2 space-y-2">
-        <p className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider">Create Mission</p>
+        {tab === 'zones' && (
+          <>
+            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Zones ({zones.length})
+            </p>
+            <div className="space-y-0.5">
+              {zones.map((z) => (
+                <div
+                  key={z.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/50 group"
+                >
+                  <button
+                    onClick={() => onCenterOn(z.center.x, z.center.z)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                  >
+                    <span className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ backgroundColor: z.color || '#3B82F6' }} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-zinc-300 truncate">{z.name}</p>
+                      <p className="text-[9px] text-zinc-600">{z.type} ({z.shape})</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteZone(z.id)}
+                    className="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all text-[10px]"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              {zones.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No zones</p>}
+            </div>
+          </>
+        )}
 
-        <div className="flex gap-1">
-          {(['guard', 'patrol', 'farm', 'mine'] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setMissionType(t)}
-              className={`flex-1 text-[9px] py-1 rounded capitalize transition-colors ${
-                missionType === t
-                  ? 'bg-zinc-700 text-zinc-200'
-                  : 'text-zinc-500 hover:text-zinc-400'
-              }`}
-            >
-              {t}
-            </button>
-          ))}
-        </div>
-
-        <select
-          value={targetBot}
-          onChange={(e) => setTargetBot(e.target.value)}
-          className="w-full bg-zinc-900 border border-zinc-700/50 rounded px-2 py-1 text-[10px] text-zinc-300"
-        >
-          {botNames.map((name) => (
-            <option key={name} value={name}>{name}</option>
-          ))}
-          {botNames.length === 0 && <option value="" disabled>No bots available</option>}
-        </select>
-
-        <button
-          onClick={handleCreate}
-          disabled={!targetBot}
-          className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[10px] font-medium py-1.5 rounded transition-colors"
-        >
-          Assign Mission
-        </button>
-
-        {feedback && (
-          <p className={`text-[9px] ${feedback.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-            {feedback.msg}
-          </p>
+        {tab === 'routes' && (
+          <>
+            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
+              Routes ({routes.length})
+            </p>
+            <div className="space-y-0.5">
+              {routes.map((r) => (
+                <div
+                  key={r.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/50 group"
+                >
+                  <button
+                    onClick={() => r.waypoints[0] && onCenterOn(r.waypoints[0].x, r.waypoints[0].z)}
+                    className="flex items-center gap-2 flex-1 min-w-0 text-left"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#8B5CF6" strokeWidth="2" className="shrink-0">
+                      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+                    </svg>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] font-medium text-zinc-300 truncate">{r.name}</p>
+                      <p className="text-[9px] text-zinc-600">{r.waypoints.length} pts {r.loop ? '(loop)' : ''}</p>
+                    </div>
+                  </button>
+                  <button
+                    onClick={() => handleDeleteRoute(r.id)}
+                    className="text-zinc-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all text-[10px]"
+                  >
+                    x
+                  </button>
+                </div>
+              ))}
+              {routes.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No routes</p>}
+            </div>
+          </>
         )}
       </div>
     </div>
   );
 }
-
-// ── Route detail panel ────────────────────────────────────
-interface RouteDetailProps {
-  route: Route;
-  botNames: string[];
-  selectedBotIds: string[];
-  onAssignPatrol: (botName: string, routeId: string) => void;
-}
-
-export function RouteDetailPanel({ route, botNames, selectedBotIds, onAssignPatrol }: RouteDetailProps) {
-  const [targetBot, setTargetBot] = useState<string>(selectedBotIds[0] || botNames[0] || '');
-  const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
-
-  const handleAssign = () => {
-    if (!targetBot) return;
-    onAssignPatrol(targetBot, route.id);
-    setFeedback({ msg: `Patrol assigned to ${targetBot}`, ok: true });
-    setTimeout(() => setFeedback(null), 3000);
-  };
-
-  return (
-    <div className="border-t border-zinc-800/60 p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="#A78BFA" strokeWidth="1.5">
-          <polyline points="2,12 6,4 10,10 14,3" />
-        </svg>
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold text-zinc-200 truncate">{route.name}</p>
-          <p className="text-[9px] text-zinc-500">{route.waypoints.length} waypoints{route.loop ? ' (loop)' : ''}</p>
-        </div>
-      </div>
-
-      {route.assignedBots && route.assignedBots.length > 0 && (
-        <div className="mb-2">
-          <p className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider mb-1">Patrolling</p>
-          <div className="flex flex-wrap gap-1">
-            {route.assignedBots.map((b) => (
-              <span key={b} className="text-[9px] bg-zinc-800 text-zinc-400 px-1.5 py-0.5 rounded">{b}</span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      <div className="bg-zinc-800/50 rounded-lg p-2 space-y-2">
-        <p className="text-[9px] font-semibold text-zinc-500 uppercase tracking-wider">Assign Patrol</p>
-        <select
-          value={targetBot}
-          onChange={(e) => setTargetBot(e.target.value)}
-          className="w-full bg-zinc-900 border border-zinc-700/50 rounded px-2 py-1 text-[10px] text-zinc-300"
-        >
-          {botNames.map((name) => (
-            <option key={name} value={name}>{name}</option>
-          ))}
-        </select>
-        <button
-          onClick={handleAssign}
-          disabled={!targetBot}
-          className="w-full bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[10px] font-medium py-1.5 rounded transition-colors"
-        >
-          Start Patrol
-        </button>
-        {feedback && (
-          <p className={`text-[9px] ${feedback.ok ? 'text-emerald-400' : 'text-red-400'}`}>
-            {feedback.msg}
-          </p>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// ── Marker detail panel ────────────────────────────────────
-interface MarkerDetailProps {
-  marker: Marker;
-  selectedBotIds: string[];
-  botNames: string[];
-  onSendBots: (botNames: string[], x: number, z: number) => void;
-}
-
-export function MarkerDetailPanel({ marker, selectedBotIds, botNames, onSendBots }: MarkerDetailProps) {
-  const botsToSend = selectedBotIds.length > 0 ? selectedBotIds : botNames.slice(0, 1);
-
-  return (
-    <div className="border-t border-zinc-800/60 p-3">
-      <div className="flex items-center gap-2 mb-2">
-        <svg className="w-3 h-3 shrink-0" viewBox="0 0 16 16" fill="none" stroke="#F59E0B" strokeWidth="1.5">
-          <path d="M8 1C5.2 1 3 3.2 3 6c0 4 5 9 5 9s5-5 5-9c0-2.8-2.2-5-5-5z" />
-          <circle cx="8" cy="6" r="1.5" fill="#F59E0B" />
-        </svg>
-        <div className="min-w-0 flex-1">
-          <p className="text-[11px] font-semibold text-zinc-200 truncate">{marker.name}</p>
-          <p className="text-[9px] text-zinc-500 font-mono">{Math.round(marker.x)}, {Math.round(marker.z)}</p>
-        </div>
-      </div>
-
-      <button
-        onClick={() => onSendBots(botsToSend, marker.x, marker.z)}
-        disabled={botsToSend.length === 0}
-        className="w-full bg-amber-600 hover:bg-amber-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white text-[10px] font-medium py-1.5 rounded transition-colors"
-      >
-        Send {botsToSend.length > 0 ? botsToSend.join(', ') : 'bots'} here
-      </button>
-    </div>
-  );
-}
-
-// ── Colors ────────────────────────────────────
-export const ZONE_TYPE_COLORS: Record<string, string> = {
-  guard: '#4A90D9',
-  build: '#1ABC9C',
-  farm: '#F39C12',
-  mine: '#D97706',
-  custom: '#8B5CF6',
-};

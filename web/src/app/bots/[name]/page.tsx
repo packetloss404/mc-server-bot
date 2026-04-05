@@ -5,7 +5,6 @@ import { useParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { api, type BotDetailed, type ChatMessage } from '@/lib/api';
-import { useRoleStore } from '@/lib/store';
 import { getPersonalityColor, getAffinityTier, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 import { formatItemName, getItemCategoryColorByName } from '@/lib/items';
 import { EquipmentDisplay } from '@/components/EquipmentDisplay';
@@ -13,32 +12,7 @@ import { BotActivityPanel } from '@/components/BotActivityPanel';
 import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
-import { MissionQueuePanel } from '@/components/MissionQueuePanel';
-import { DiagnosticPanel } from '@/components/DiagnosticPanel';
-import { DiagnosticTimeline } from '@/components/DiagnosticTimeline';
-
-function formatTimeSince(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h ago`;
-}
-
-function formatCountdown(expiresAt: number): string {
-  const remaining = expiresAt - Date.now();
-  if (remaining <= 0) return 'expired';
-  const seconds = Math.floor(remaining / 1000);
-  if (seconds < 60) return `${seconds}s remaining`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ${seconds % 60}s remaining`;
-  const hours = Math.floor(minutes / 60);
-  return `${hours}h ${minutes % 60}m remaining`;
-}
+import { CommandHistoryPanel } from '@/components/CommandHistoryPanel';
 
 export default function BotProfilePage() {
   const params = useParams();
@@ -48,13 +22,12 @@ export default function BotProfilePage() {
   const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
   const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [taskInput, setTaskInput] = useState('');
+  const [sendingTask, setSendingTask] = useState(false);
   const [chatMsg, setChatMsg] = useState('');
   const [chatPlayer, setChatPlayer] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
-
-  const override = useRoleStore((s) => s.getOverrideForBot(name));
-  const blockedMission = useRoleStore((s) => s.getBlockedMissionForBot(name));
 
   useEffect(() => {
     const load = () => {
@@ -67,8 +40,11 @@ export default function BotProfilePage() {
     return () => clearInterval(interval);
   }, [name]);
 
-  const refreshBot = () => {
-    api.getBotDetailed(name).then((data) => { setBot(data.bot); setError(null); }).catch(() => {});
+  const handleQueueTask = async () => {
+    if (!taskInput.trim()) return;
+    setSendingTask(true);
+    try { await api.queueTask(name, taskInput.trim()); setTaskInput(''); } catch { /* ignore */ }
+    setSendingTask(false);
   };
 
   const handleSendChat = async () => {
@@ -136,27 +112,13 @@ export default function BotProfilePage() {
                 {bot.position && <InfoPill label="Pos" value={`${Math.round(bot.position.x)}, ${Math.round(bot.position.y)}, ${Math.round(bot.position.z)}`} mono />}
               </div>
             </div>
-            <div className="flex items-center gap-2">
-              {override && (
-                <span
-                  className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg uppercase"
-                  style={{ color: '#F59E0B', backgroundColor: '#F59E0B12' }}
-                  title={override.reason}
-                >
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-                    <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  Override
-                </span>
-              )}
-              <span
-                className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg uppercase"
-                style={{ color: stateColor, backgroundColor: `${stateColor}12` }}
-              >
-                <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: stateColor }} />
-                {STATE_LABELS[bot.state] ?? bot.state}
-              </span>
-            </div>
+            <span
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg uppercase"
+              style={{ color: stateColor, backgroundColor: `${stateColor}12` }}
+            >
+              <span className="w-2 h-2 rounded-full animate-pulse" style={{ backgroundColor: stateColor }} />
+              {STATE_LABELS[bot.state] ?? bot.state}
+            </span>
           </div>
 
           {/* Main hero: Equipment + Vitals */}
@@ -197,87 +159,6 @@ export default function BotProfilePage() {
         </div>
       </motion.div>
 
-      {/* ═══ OVERRIDE & BLOCKED STATUS ═══ */}
-      {(override || blockedMission) && (
-        <div className="space-y-4">
-          {/* Override Status Card */}
-          {override && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-zinc-900/80 border border-amber-800/40 rounded-xl p-4"
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F59E0B" strokeWidth="2">
-                  <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                </svg>
-                <h2 className="text-xs font-semibold text-amber-400 uppercase tracking-wider">Override Status</h2>
-              </div>
-              <div className="space-y-2">
-                <div className="flex items-start gap-3">
-                  <div className="flex-1 space-y-1.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Reason</span>
-                      <span className="text-xs text-zinc-200">{override.reason}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Command</span>
-                      <span className="text-xs text-zinc-400 font-mono">{override.commandId}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Set</span>
-                      <span className="text-xs text-zinc-400">{formatTimeSince(override.setAt)}</span>
-                    </div>
-                    {override.expiresAt && (
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Expires</span>
-                        <span className={`text-xs font-medium ${override.expiresAt <= Date.now() ? 'text-red-400' : 'text-amber-400'}`}>
-                          {formatCountdown(override.expiresAt)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-            </motion.div>
-          )}
-
-          {/* Blocked Mission Card */}
-          {blockedMission && (
-            <motion.div
-              initial={{ opacity: 0, y: 8 }}
-              animate={{ opacity: 1, y: 0 }}
-              className="bg-zinc-900/80 border border-red-800/40 rounded-xl p-4"
-            >
-              <div className="flex items-center gap-2 mb-3">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#EF4444" strokeWidth="2">
-                  <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4m0 4h.01" />
-                </svg>
-                <h2 className="text-xs font-semibold text-red-400 uppercase tracking-wider">Mission Blocked</h2>
-              </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Mission</span>
-                  <span className="text-xs text-zinc-200">{blockedMission.description}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Type</span>
-                  <span className="text-xs text-zinc-400 capitalize">{blockedMission.type}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">Reason</span>
-                  <span className="text-xs text-red-300 font-medium">{blockedMission.blockedReason}</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-zinc-500 uppercase tracking-wide w-16 shrink-0">ID</span>
-                  <span className="text-xs text-zinc-500 font-mono">{blockedMission.id}</span>
-                </div>
-              </div>
-            </motion.div>
-          )}
-        </div>
-      )}
-
       {/* ═══ BODY: 2-column layout ═══ */}
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-5">
         {/* LEFT COLUMN (3/5) */}
@@ -300,70 +181,77 @@ export default function BotProfilePage() {
             mode={bot.mode}
           />
 
-          {/* Diagnostics (agent 2-6) */}
-          <DiagnosticPanel botName={bot.name} />
+          {/* Command & Mission History */}
+          <CommandHistoryPanel botName={bot.name} />
 
-          {/* Diagnostic Timeline (agent 2-7) */}
-          <DiagnosticTimeline botName={bot.name} accentColor={accentColor} />
+          {/* Task Queue */}
+          <Section title="Task Queue">
+            <div className="flex gap-2 mb-3">
+              <input
+                value={taskInput}
+                onChange={(e) => setTaskInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleQueueTask()}
+                placeholder="Queue a task..."
+                className="flex-1 bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600"
+              />
+              <button
+                onClick={handleQueueTask}
+                disabled={sendingTask || !taskInput.trim()}
+                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
+              >
+                Queue
+              </button>
+            </div>
 
-          {/* Mission Queue */}
-          <MissionQueuePanel
-            botName={bot.name}
-            currentTask={bot.voyager?.currentTask ?? null}
-            queuedTasks={bot.voyager?.queuedTasks ?? []}
-            isRunning={bot.voyager?.isRunning ?? false}
-            onRefresh={refreshBot}
-          />
-
-          {/* Completed / Failed Tasks */}
-          {bot.voyager && (bot.voyager.completedTasks.length > 0 || bot.voyager.failedTasks.length > 0) && (
-            <Section title="Task History">
-              {bot.voyager.completedTasks.length > 0 && (
-                <div>
-                  <button
-                    onClick={() => setShowCompleted(!showCompleted)}
-                    className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showCompleted ? 'rotate-90' : ''}`}>
-                      <polyline points="9 18 15 12 9 6" />
-                    </svg>
-                    Completed ({bot.voyager.completedTasks.length})
-                  </button>
-                  {showCompleted && (
-                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
-                      {bot.voyager.completedTasks.slice(-10).reverse().map((task, i) => (
-                        <div key={i} className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
-                          <span className="text-emerald-500/60">&#10003;</span> {task}
-                        </div>
-                      ))}
-                    </motion.div>
-                  )}
-                </div>
-              )}
-              {bot.voyager.failedTasks.length > 0 && (
-                <div className="mt-2">
-                  <button
-                    onClick={() => setShowFailed(!showFailed)}
-                    className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showFailed ? 'rotate-90' : ''}`}>
-                      <polyline points="9 18 15 12 9 6" />
-                    </svg>
-                    Failed ({bot.voyager.failedTasks.length})
-                  </button>
-                  {showFailed && (
-                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
-                      {bot.voyager.failedTasks.slice(-8).reverse().map((task, i) => (
-                        <div key={i} className="text-xs text-red-400/60 truncate flex items-center gap-1.5">
-                          <span className="text-red-500/60">&#10007;</span> {task}
-                        </div>
-                      ))}
-                    </motion.div>
-                  )}
-                </div>
-              )}
-            </Section>
-          )}
+            {bot.voyager && (
+              <>
+                {bot.voyager.completedTasks.length > 0 && (
+                  <div>
+                    <button
+                      onClick={() => setShowCompleted(!showCompleted)}
+                      className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showCompleted ? 'rotate-90' : ''}`}>
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                      Completed ({bot.voyager.completedTasks.length})
+                    </button>
+                    {showCompleted && (
+                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
+                        {bot.voyager.completedTasks.slice(-10).reverse().map((task, i) => (
+                          <div key={i} className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
+                            <span className="text-emerald-500/60">&#10003;</span> {task}
+                          </div>
+                        ))}
+                      </motion.div>
+                    )}
+                  </div>
+                )}
+                {bot.voyager.failedTasks.length > 0 && (
+                  <div className="mt-2">
+                    <button
+                      onClick={() => setShowFailed(!showFailed)}
+                      className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showFailed ? 'rotate-90' : ''}`}>
+                        <polyline points="9 18 15 12 9 6" />
+                      </svg>
+                      Failed ({bot.voyager.failedTasks.length})
+                    </button>
+                    {showFailed && (
+                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
+                        {bot.voyager.failedTasks.slice(-8).reverse().map((task, i) => (
+                          <div key={i} className="text-xs text-red-400/60 truncate flex items-center gap-1.5">
+                            <span className="text-red-500/60">&#10007;</span> {task}
+                          </div>
+                        ))}
+                      </motion.div>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </Section>
 
           {/* Inventory */}
           <Section title={`Inventory (${bot.inventory.length})`}>

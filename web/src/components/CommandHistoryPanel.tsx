@@ -1,169 +1,209 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { api } from '@/lib/api';
-import { useControlStore } from '@/lib/store';
+import { useEffect, useState, useCallback } from 'react';
+import { api, type Command, type Mission } from '@/lib/api';
+import { useToast } from '@/components/Toast';
 
 const STATUS_COLORS: Record<string, string> = {
-  queued: '#F59E0B',
-  started: '#3B82F6',
-  succeeded: '#10B981',
+  pending: '#F59E0B',
+  dispatched: '#3B82F6',
+  running: '#8B5CF6',
+  active: '#8B5CF6',
+  completed: '#10B981',
   failed: '#EF4444',
   cancelled: '#6B7280',
+  paused: '#F59E0B',
 };
-
-const COMMAND_TYPE_COLORS: Record<string, string> = {
-  stop_movement: '#EF4444',
-  follow_player: '#8B5CF6',
-  walk_to_coords: '#3B82F6',
-  pause_voyager: '#F59E0B',
-  resume_voyager: '#10B981',
-  move_to_marker: '#0EA5E9',
-  return_to_base: '#14B8A6',
-  regroup: '#22C55E',
-  guard_zone: '#F97316',
-  patrol_route: '#A855F7',
-  equip_best: '#EC4899',
-  unstuck: '#EAB308',
-  default: '#6B7280',
-};
-
-function formatTimeAgo(timestamp: number): string {
-  const diff = Date.now() - timestamp;
-  const seconds = Math.floor(diff / 1000);
-  if (seconds < 60) return `${seconds}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function commandTypeLabel(type: string): string {
-  return type.replace(/_/g, ' ');
-}
 
 interface Props {
-  botName: string;
+  botName?: string;
 }
 
 export function CommandHistoryPanel({ botName }: Props) {
-  const commandHistory = useControlStore((s) => s.commandHistory);
-  const [loading, setLoading] = useState(commandHistory.length === 0);
-  const [expanded, setExpanded] = useState(true);
+  const { toast } = useToast();
+  const [commands, setCommands] = useState<Command[]>([]);
+  const [missions, setMissions] = useState<Mission[]>([]);
+  const [tab, setTab] = useState<'commands' | 'missions'>('commands');
+  const [loading, setLoading] = useState(true);
+
+  const load = useCallback(async () => {
+    try {
+      const [cmdRes, missRes] = await Promise.all([
+        api.getCommands().catch(() => ({ commands: [] })),
+        api.getMissions().catch(() => ({ missions: [] })),
+      ]);
+      let cmds = cmdRes.commands;
+      let miss = missRes.missions;
+      if (botName) {
+        cmds = cmds.filter((c) => c.botName === botName);
+        miss = miss.filter((m) => m.botName === botName);
+      }
+      setCommands(cmds.sort((a, b) => b.createdAt - a.createdAt));
+      setMissions(miss.sort((a, b) => b.createdAt - a.createdAt));
+    } catch {
+      // silent
+    }
+    setLoading(false);
+  }, [botName]);
 
   useEffect(() => {
-    if (commandHistory.length > 0) {
-      return;
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, [load]);
+
+  const handleCancelCommand = async (id: string) => {
+    try {
+      await api.cancelCommand(id);
+      toast('Command cancelled', 'success');
+      load();
+    } catch (e: unknown) {
+      toast((e as Error).message || 'Failed to cancel', 'error');
     }
+  };
 
-    api.getCommands({ bot: botName, limit: 30 })
-      .then((data) => {
-        useControlStore.getState().setCommands(data.commands);
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, [botName, commandHistory.length]);
+  const handleMissionAction = async (id: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry') => {
+    try {
+      await api.missionAction(id, action);
+      toast(`Mission ${action}ed`, 'success');
+      load();
+    } catch (e: unknown) {
+      toast((e as Error).message || `Failed to ${action}`, 'error');
+    }
+  };
 
-  const commands = useMemo(
-    () => commandHistory.filter((command) => command.targets.some((target) => target.toLowerCase() === botName.toLowerCase())).slice(0, 30),
-    [commandHistory, botName],
-  );
+  const formatTime = (ts: number) => {
+    const d = new Date(ts);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-4"
-    >
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center justify-between w-full mb-2"
-      >
-        <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">
-          Command History
-        </h2>
-        <svg
-          width="12"
-          height="12"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          className={`text-zinc-600 transition-transform ${expanded ? 'rotate-180' : ''}`}
+    <div className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl overflow-hidden">
+      {/* Tabs */}
+      <div className="flex border-b border-zinc-800/60">
+        <button
+          onClick={() => setTab('commands')}
+          className={`flex-1 px-4 py-2.5 text-xs font-medium transition-colors ${
+            tab === 'commands' ? 'text-white border-b-2 border-emerald-400' : 'text-zinc-500 hover:text-zinc-300'
+          }`}
         >
-          <path d="M6 9l6 6 6-6" />
-        </svg>
-      </button>
+          Commands ({commands.length})
+        </button>
+        <button
+          onClick={() => setTab('missions')}
+          className={`flex-1 px-4 py-2.5 text-xs font-medium transition-colors ${
+            tab === 'missions' ? 'text-white border-b-2 border-emerald-400' : 'text-zinc-500 hover:text-zinc-300'
+          }`}
+        >
+          Missions ({missions.length})
+        </button>
+      </div>
 
-      <AnimatePresence>
-        {expanded && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: 'auto', opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            className="overflow-hidden"
-          >
-            {loading ? (
-              <div className="flex items-center justify-center py-4">
-                <div className="w-4 h-4 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
-              </div>
-            ) : commands.length === 0 ? (
-              <p className="text-xs text-zinc-600 text-center py-3">No commands recorded</p>
-            ) : (
-              <div className="space-y-0.5 max-h-72 overflow-y-auto">
-                {commands.map((cmd, i) => {
-                  const statusColor = STATUS_COLORS[cmd.status] || '#6B7280';
-                  const typeColor = COMMAND_TYPE_COLORS[cmd.type] || COMMAND_TYPE_COLORS.default;
-                  const description = cmd.error?.message
-                    ? cmd.error.message
-                    : cmd.result?.message && typeof cmd.result.message === 'string'
-                      ? cmd.result.message
-                      : cmd.targets.join(', ');
-
-                  return (
-                    <motion.div
-                      key={`${cmd.id}-${i}`}
-                      initial={{ opacity: 0, x: -4 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.02 }}
-                      className="flex items-center gap-2 py-1.5 px-2 rounded-md hover:bg-zinc-800/30 transition-colors group"
-                    >
-                      {/* Status dot */}
+      <div className="p-4">
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin" />
+          </div>
+        ) : tab === 'commands' ? (
+          commands.length === 0 ? (
+            <p className="text-xs text-zinc-600 text-center py-6">No commands yet</p>
+          ) : (
+            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+              {commands.map((cmd) => (
+                <div key={cmd.id} className="border border-zinc-800/40 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-zinc-300">{cmd.type}</span>
+                      <span className="text-[10px] text-zinc-500">-&gt; {cmd.botName}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
                       <span
-                        className="w-1.5 h-1.5 rounded-full shrink-0"
-                        style={{ backgroundColor: statusColor }}
-                      />
-
-                      {/* Type badge */}
-                        <span
-                          className="text-[9px] font-medium px-1.5 py-0.5 rounded shrink-0"
-                          style={{
-                            color: typeColor,
-                            backgroundColor: `${typeColor}12`,
-                          }}
+                        className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+                        style={{ color: STATUS_COLORS[cmd.status] || '#6B7280', backgroundColor: `${STATUS_COLORS[cmd.status] || '#6B7280'}15` }}
+                      >
+                        {cmd.status}
+                      </span>
+                      {(cmd.status === 'pending' || cmd.status === 'running') && (
+                        <button
+                          onClick={() => handleCancelCommand(cmd.id)}
+                          className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors"
                         >
-                          {commandTypeLabel(cmd.type)}
-                        </span>
-
-                        {/* Description */}
-                        <span className="text-[11px] text-zinc-400 truncate flex-1">
-                          {description}
-                        </span>
-
-                        {/* Timestamp */}
-                        <span className="text-[9px] text-zinc-600 shrink-0 opacity-0 group-hover:opacity-100 transition-opacity">
-                          {formatTimeAgo(cmd.createdAt)}
-                        </span>
-                      </motion.div>
-                    );
-                })}
-              </div>
-            )}
-          </motion.div>
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-[10px] text-zinc-600 font-mono">{formatTime(cmd.createdAt)}</p>
+                  {cmd.error && <p className="text-[10px] text-red-400/70 mt-1">{cmd.error}</p>}
+                </div>
+              ))}
+            </div>
+          )
+        ) : (
+          missions.length === 0 ? (
+            <p className="text-xs text-zinc-600 text-center py-6">No missions yet</p>
+          ) : (
+            <div className="space-y-2 max-h-[400px] overflow-y-auto">
+              {missions.map((m) => (
+                <div key={m.id} className="border border-zinc-800/40 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono text-zinc-300">{m.type}</span>
+                      <span className="text-[10px] text-zinc-500">-&gt; {m.botName}</span>
+                    </div>
+                    <span
+                      className="text-[10px] font-medium px-1.5 py-0.5 rounded"
+                      style={{ color: STATUS_COLORS[m.status] || '#6B7280', backgroundColor: `${STATUS_COLORS[m.status] || '#6B7280'}15` }}
+                    >
+                      {m.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-zinc-400 mt-1 truncate">{m.description}</p>
+                  {m.progress !== undefined && (
+                    <div className="h-1.5 bg-zinc-800 rounded-full mt-2 overflow-hidden">
+                      <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${m.progress}%` }} />
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-[10px] text-zinc-600 font-mono">{formatTime(m.createdAt)}</p>
+                    <div className="flex gap-1.5">
+                      {m.status === 'pending' && (
+                        <ActionBtn label="Start" onClick={() => handleMissionAction(m.id, 'start')} />
+                      )}
+                      {m.status === 'active' && (
+                        <ActionBtn label="Pause" onClick={() => handleMissionAction(m.id, 'pause')} />
+                      )}
+                      {m.status === 'paused' && (
+                        <ActionBtn label="Resume" onClick={() => handleMissionAction(m.id, 'resume')} />
+                      )}
+                      {(m.status === 'active' || m.status === 'paused' || m.status === 'pending') && (
+                        <ActionBtn label="Cancel" onClick={() => handleMissionAction(m.id, 'cancel')} danger />
+                      )}
+                      {m.status === 'failed' && (
+                        <ActionBtn label="Retry" onClick={() => handleMissionAction(m.id, 'retry')} />
+                      )}
+                    </div>
+                  </div>
+                  {m.error && <p className="text-[10px] text-red-400/70 mt-1">{m.error}</p>}
+                </div>
+              ))}
+            </div>
+          )
         )}
-      </AnimatePresence>
-    </motion.div>
+      </div>
+    </div>
+  );
+}
+
+function ActionBtn({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+        danger ? 'text-red-400 hover:bg-red-400/10' : 'text-zinc-400 hover:bg-zinc-800'
+      }`}
+    >
+      {label}
+    </button>
   );
 }

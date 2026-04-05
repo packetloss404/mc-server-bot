@@ -14,6 +14,8 @@ import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
 import { MissionQueuePanel } from '@/components/MissionQueuePanel';
+import { DiagnosticPanel } from '@/components/DiagnosticPanel';
+import { DiagnosticTimeline } from '@/components/DiagnosticTimeline';
 
 function formatTimeSince(timestamp: number): string {
   const diff = Date.now() - timestamp;
@@ -297,6 +299,12 @@ export default function BotProfilePage() {
             voyagerRunning={bot.voyager?.isRunning}
             mode={bot.mode}
           />
+
+          {/* Diagnostics (agent 2-6) */}
+          <DiagnosticPanel botName={bot.name} />
+
+          {/* Diagnostic Timeline (agent 2-7) */}
+          <DiagnosticTimeline botName={bot.name} accentColor={accentColor} />
 
           {/* Mission Queue */}
           <MissionQueuePanel

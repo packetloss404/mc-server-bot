@@ -7,6 +7,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
 import { CommanderService } from '../control/CommanderService';
+import { RoutineManager } from '../control/RoutineManager';
+import { TemplateManager } from '../control/TemplateManager';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -64,6 +66,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   const commanderService = new CommanderService({
     llmClient: null, // LLM wired later if available
   });
+
+  // ── Routine manager (agent 2-1) ──
+  const routineManager = new RoutineManager();
+
+  // ── Template manager (agent 2-2) ──
+  const templateManager = new TemplateManager();
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -571,6 +579,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     handle.sendCommand('queueTask', { description, source: 'dashboard', prepend: !!prepend });
 
+    // Capture step if recording a routine
+    if (routineManager.isRecording()) {
+      routineManager.captureStep({
+        type: 'mission',
+        data: { description },
+      });
+    }
+
     const event = eventLog.push({
       type: 'bot:task',
       botName: req.params.name as string,
@@ -725,6 +741,382 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
     res.json({ success: true });
+  });
+
+  // Commander clarify (agent 2-9 — re-parse with answered clarification questions)
+  app.post('/api/commander/clarify', async (req: Request, res: Response) => {
+    const { originalInput, clarifications } = req.body;
+    if (!originalInput || typeof originalInput !== 'string') {
+      res.status(400).json({ error: 'originalInput string is required' });
+      return;
+    }
+    if (!clarifications || typeof clarifications !== 'object') {
+      res.status(400).json({ error: 'clarifications object is required' });
+      return;
+    }
+    try {
+      // If the CommanderService supports parseWithClarification, use it;
+      // otherwise fall back to a plain re-parse with the enriched input.
+      const plan = typeof (commanderService as any).parseWithClarification === 'function'
+        ? await (commanderService as any).parseWithClarification(originalInput.trim(), clarifications)
+        : await commanderService.parse(
+            originalInput.trim() + ' [clarifications: ' + JSON.stringify(clarifications) + ']',
+          );
+
+      const event = eventLog.push({
+        type: 'commander:clarify',
+        botName: 'system',
+        description: `Commander re-parsed with clarification: "${originalInput.trim().slice(0, 60)}"`,
+        metadata: { planId: plan.id, intent: plan.intent, confidence: plan.confidence },
+      });
+      io.emit('activity', event);
+
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err, originalInput }, 'Commander clarification failed');
+      res.status(500).json({ error: err.message || 'Clarification failed' });
+    }
+  });
+
+  // Commander suggestions (agent 2-9 / 2-10)
+  app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
+    if (typeof (commanderService as any).getSuggestedCommands === 'function') {
+      res.json({ suggestions: (commanderService as any).getSuggestedCommands() });
+    } else {
+      res.json({ suggestions: [] });
+    }
+  });
+
+  // ═══════════════════════════════════════
+  //  ROUTINE (MACRO) ENDPOINTS — agent 2-1
+  // ═══════════════════════════════════════
+
+  // List all routines
+  app.get('/api/routines', (_req: Request, res: Response) => {
+    res.json({ routines: routineManager.list() });
+  });
+
+  // Create routine
+  app.post('/api/routines', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    const routine = routineManager.create({ name, description, steps });
+    res.status(201).json({ routine });
+  });
+
+  // Recording routes (must come before :id routes to avoid param capture)
+  app.get('/api/routines/recording/status', (_req: Request, res: Response) => {
+    res.json({
+      recording: routineManager.isRecording(),
+      draft: routineManager.getRecordingDraft(),
+    });
+  });
+
+  app.post('/api/routines/recording/start', (req: Request, res: Response) => {
+    const { name } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    try {
+      const draft = routineManager.startRecording(name);
+      res.json({ draft });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/routines/recording/stop', (req: Request, res: Response) => {
+    const { save } = req.body;
+    const routine = routineManager.stopRecording(save !== false);
+    res.json({ routine, saved: save !== false });
+  });
+
+  // Get single routine
+  app.get('/api/routines/:id', (req: Request, res: Response) => {
+    const routine = routineManager.get(req.params.id as string);
+    if (!routine) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine });
+  });
+
+  // Update routine
+  app.put('/api/routines/:id', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    const updated = routineManager.update(req.params.id as string, { name, description, steps });
+    if (!updated) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine: updated });
+  });
+
+  // Delete routine
+  app.delete('/api/routines/:id', (req: Request, res: Response) => {
+    const deleted = routineManager.delete(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Execute routine
+  app.post('/api/routines/:id/execute', async (req: Request, res: Response) => {
+    const { botNames } = req.body;
+    if (!botNames || !Array.isArray(botNames) || botNames.length === 0) {
+      res.status(400).json({ error: 'botNames (string[]) is required' });
+      return;
+    }
+    try {
+      const execution = await routineManager.execute(req.params.id as string, botNames);
+
+      const event = eventLog.push({
+        type: 'routine:execute',
+        botName: botNames.join(', '),
+        description: `Routine "${execution.routineName}" executed on ${botNames.join(', ')}`,
+        metadata: { routineId: req.params.id, status: execution.status },
+      });
+      io.emit('activity', event);
+
+      res.json({ execution });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════
+  //  TEMPLATE ENDPOINTS — agent 2-2
+  // ═══════════════════════════════════════
+
+  // List all templates (optionally filter by category)
+  app.get('/api/templates', (req: Request, res: Response) => {
+    const category = req.query.category ? String(req.query.category) : undefined;
+    const templates = category
+      ? templateManager.getByCategory(category)
+      : templateManager.getAll();
+    res.json({ templates });
+  });
+
+  // Get single template
+  app.get('/api/templates/:id', (req: Request, res: Response) => {
+    const template = templateManager.getById(req.params.id as string);
+    if (!template) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    res.json({ template });
+  });
+
+  // Create custom template
+  app.post('/api/templates', (req: Request, res: Response) => {
+    const { id, name, description, category, missionType, defaultParams, requiredFields, optionalFields, suggestedBotCount, loadoutPolicy } = req.body;
+    if (!id || !name || !missionType) {
+      res.status(400).json({ error: 'id, name, and missionType are required' });
+      return;
+    }
+    if (templateManager.getById(id)) {
+      res.status(409).json({ error: 'Template with this id already exists' });
+      return;
+    }
+    const template = templateManager.create({
+      id,
+      name,
+      description: description || '',
+      category: category || 'gathering',
+      missionType,
+      defaultParams: defaultParams || {},
+      requiredFields: requiredFields || [],
+      optionalFields: optionalFields || [],
+      suggestedBotCount: suggestedBotCount ?? 1,
+      loadoutPolicy,
+    });
+    res.status(201).json({ template });
+  });
+
+  // Update custom template
+  app.patch('/api/templates/:id', (req: Request, res: Response) => {
+    const updated = templateManager.update(req.params.id as string, req.body);
+    if (!updated) {
+      res.status(404).json({ error: 'Template not found or is built-in' });
+      return;
+    }
+    res.json({ template: updated });
+  });
+
+  // Delete custom template
+  app.delete('/api/templates/:id', (req: Request, res: Response) => {
+    const deleted = templateManager.delete(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Template not found or is built-in' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Create mission from template — fills params, builds task, queues to bot(s)
+  app.post('/api/templates/:id/execute', (req: Request, res: Response) => {
+    const { params, assignees, priority } = req.body;
+    const templateId = req.params.id as string;
+    const template = templateManager.getById(templateId);
+    if (!template) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+
+    // Validate required fields
+    const missing = template.requiredFields
+      .filter((f: any) => f.required !== false)
+      .filter((f: any) => !params || params[f.name] === undefined || params[f.name] === '');
+    if (missing.length > 0) {
+      res.status(400).json({
+        error: 'Missing required fields',
+        fields: missing.map((f: any) => f.name),
+      });
+      return;
+    }
+
+    const botNames: string[] = Array.isArray(assignees) ? assignees : assignees ? [assignees] : [];
+    if (botNames.length === 0) {
+      res.status(400).json({ error: 'At least one assignee (bot name) is required' });
+      return;
+    }
+
+    const taskDesc = templateManager.buildTaskDescription(templateId, params || {});
+    if (!taskDesc) {
+      res.status(500).json({ error: 'Failed to build task description' });
+      return;
+    }
+
+    const results: { bot: string; queued: boolean; error?: string }[] = [];
+    for (const botName of botNames) {
+      const handle = botManager.getWorker(botName);
+      if (!handle) {
+        results.push({ bot: botName, queued: false, error: 'Bot not found' });
+        continue;
+      }
+      handle.sendCommand('queueTask', { description: taskDesc, source: 'template', priority: priority || 'normal' });
+
+      const event = eventLog.push({
+        type: 'bot:task',
+        botName,
+        description: `Template mission: ${template.name} — ${taskDesc}`,
+        metadata: { source: 'template', templateId, priority: priority || 'normal' },
+      });
+      io.emit('bot:task', { bot: botName, task: taskDesc, status: 'queued' });
+      io.emit('activity', event);
+
+      results.push({ bot: botName, queued: true });
+    }
+
+    res.json({
+      success: true,
+      template: template.name,
+      taskDescription: taskDesc,
+      loadoutPolicy: template.loadoutPolicy || null,
+      results,
+    });
+  });
+
+  // ═══════════════════════════════════════
+  //  COMMANDER — Templates, Suggestions, Routines (agent 2-10)
+  // ═══════════════════════════════════════
+
+  // Commander templates are served from the CommanderService if it supports them.
+  // These endpoints provide template browsing, fill, and routine CRUD.
+
+  app.get('/api/commander/templates', (req: Request, res: Response) => {
+    const { category, q } = req.query;
+    const svc = commanderService as any;
+    if (typeof svc.searchTemplates === 'function' && q) {
+      res.json({ templates: svc.searchTemplates(String(q)) });
+      return;
+    }
+    if (typeof svc.getTemplatesByCategory === 'function' && category) {
+      res.json({ templates: svc.getTemplatesByCategory(String(category)) });
+      return;
+    }
+    if (typeof svc.getTemplates === 'function') {
+      res.json({ templates: svc.getTemplates() });
+      return;
+    }
+    res.json({ templates: [] });
+  });
+
+  app.post('/api/commander/templates/fill', (req: Request, res: Response) => {
+    const { templateId, values } = req.body;
+    if (!templateId) {
+      res.status(400).json({ error: 'templateId is required' });
+      return;
+    }
+    const svc = commanderService as any;
+    if (typeof svc.fillTemplate === 'function') {
+      const text = svc.fillTemplate(templateId, values || {});
+      if (!text) {
+        res.status(404).json({ error: 'Template not found' });
+        return;
+      }
+      res.json({ text });
+      return;
+    }
+    res.status(501).json({ error: 'Template fill not implemented' });
+  });
+
+  app.get('/api/commander/routines', (_req: Request, res: Response) => {
+    const svc = commanderService as any;
+    if (typeof svc.getRoutines === 'function') {
+      res.json({ routines: svc.getRoutines() });
+      return;
+    }
+    res.json({ routines: [] });
+  });
+
+  app.post('/api/commander/routines', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    if (!name || !steps || !Array.isArray(steps)) {
+      res.status(400).json({ error: 'name and steps[] are required' });
+      return;
+    }
+    const svc = commanderService as any;
+    if (typeof svc.createRoutine === 'function') {
+      const routine = svc.createRoutine(name, description || '', steps);
+      res.status(201).json({ routine });
+      return;
+    }
+    res.status(501).json({ error: 'Commander routines not implemented' });
+  });
+
+  app.delete('/api/commander/routines/:id', (req: Request, res: Response) => {
+    const svc = commanderService as any;
+    if (typeof svc.deleteRoutine === 'function') {
+      const deleted = svc.deleteRoutine(req.params.id as string);
+      if (!deleted) {
+        res.status(404).json({ error: 'Routine not found' });
+        return;
+      }
+      res.json({ success: true });
+      return;
+    }
+    res.status(501).json({ error: 'Commander routines not implemented' });
+  });
+
+  app.get('/api/commander/routines/:id/expand', (req: Request, res: Response) => {
+    const svc = commanderService as any;
+    if (typeof svc.expandRoutine === 'function') {
+      const commands = svc.expandRoutine(req.params.id as string);
+      if (!commands) {
+        res.status(404).json({ error: 'Routine not found' });
+        return;
+      }
+      res.json({ commands });
+      return;
+    }
+    res.status(501).json({ error: 'Commander routines not implemented' });
   });
 
   return { app, httpServer, io, eventLog, commanderService };

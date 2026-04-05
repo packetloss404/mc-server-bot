@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { useBotStore, useControlStore } from '@/lib/store';
 import { getPersonalityColor, PERSONALITY_ICONS } from '@/lib/constants';
+import { CommandButtonGroup } from '@/components/CommandButtonGroup';
 
 export function FleetSelectionBar() {
   const selectedBotIds = useControlStore((s) => s.selectedBotIds);
@@ -56,6 +57,12 @@ export function FleetSelectionBar() {
           );
         })}
       </div>
+
+      {/* Command buttons (agent 2-8) */}
+      <CommandButtonGroup
+        targetBotNames={selectedBots.map((b) => b.name)}
+        variant="compact"
+      />
 
       {/* Actions */}
       <div className="flex items-center gap-2 shrink-0">

@@ -85,5 +85,8 @@ export interface CommanderPlan {
   requiresConfirmation: boolean;
   commands: CommanderPlanCommand[];
   missions: CommanderPlanMission[];
+  clarificationQuestions: { id: string; question: string; options: string[]; field: string }[];
+  needsClarification: boolean;
+  suggestedCommands: string[];
   createdAt: string;
 }

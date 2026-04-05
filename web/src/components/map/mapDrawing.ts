@@ -2,7 +2,7 @@
  * Map drawing utilities and mode types for the world map canvas.
  */
 
-export type MapMode = 'navigate' | 'draw-route';
+export type MapMode = 'navigate' | 'draw-zone' | 'draw-route';
 
 export interface RouteWaypoint {
   /** World X coordinate */
@@ -12,6 +12,57 @@ export interface RouteWaypoint {
   /** Index in the waypoint sequence */
   index: number;
 }
+
+// ── Zone drawing types (agent 2-3) ──
+
+export type ZoneShape = 'rectangular' | 'circular';
+
+/** Describes an in-progress zone drawing on the canvas. */
+export interface DrawingState {
+  /** Whether the user is currently dragging. */
+  active: boolean;
+  /** Shape being drawn (rectangle by default, circle when Alt is held). */
+  shape: ZoneShape;
+  /** Canvas pixel where the drag started. */
+  startX: number;
+  startY: number;
+  /** Canvas pixel of the current mouse position. */
+  currentX: number;
+  currentY: number;
+}
+
+/** The finalized zone geometry in Minecraft world coordinates. */
+export interface DrawnZone {
+  shape: ZoneShape;
+  /** For rectangular zones: opposing corners. */
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  /** For circular zones: center + radius. */
+  cx?: number;
+  cz?: number;
+  radius?: number;
+}
+
+/** Convert a canvas pixel position to Minecraft world coordinates. */
+export function canvasToWorld(
+  canvasX: number,
+  canvasY: number,
+  viewportWidth: number,
+  viewportHeight: number,
+  offset: { x: number; y: number },
+  scale: number,
+): { x: number; z: number } {
+  const cx = viewportWidth / 2;
+  const cy = viewportHeight / 2;
+  return {
+    x: (canvasX - cx - offset.x) / scale,
+    z: (canvasY - cy - offset.y) / scale,
+  };
+}
+
+// ── Route drawing types (agent 2-4) ──
 
 export interface DrawRouteState {
   waypoints: RouteWaypoint[];

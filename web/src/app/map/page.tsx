@@ -1,17 +1,22 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore, useControlStore } from '@/lib/store';
+import { useBotStore, useControlStore, useWorldStore } from '@/lib/store';
 import { api } from '@/lib/api';
+import type { ZoneRecord } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
 import {
   type MapMode,
   type DrawRouteState,
+  type DrawingState,
+  type DrawnZone,
   createDrawRouteState,
   screenToWorld,
+  worldToScreen,
   drawRouteOverlay,
   drawRouteStatusBar,
+  canvasToWorld,
 } from '@/components/map/mapDrawing';
 import { MapToolbar } from '@/components/map/MapToolbar';
 import { RouteNameDialog } from '@/components/map/RouteNameDialog';
@@ -38,6 +43,15 @@ export default function MapPage() {
   const players = useBotStore((s) => s.playerList);
   const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
   const selectedBotIds = useControlStore((s) => s.selectedBotIds);
+
+  // Zone drawing state (agent 2-3)
+  const zones = useWorldStore((s) => s.zones);
+  const setZones = useWorldStore((s) => s.setZones);
+  const pendingZone = useWorldStore((s) => s.pendingZone);
+  const setPendingZone = useWorldStore((s) => s.setPendingZone);
+  const zonesRef = useRef(zones);
+  zonesRef.current = zones;
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -143,6 +157,13 @@ export default function MapPage() {
       kick();
     }
   }, [bots, players, loadTerrain]);
+
+  // Load zones from backend (agent 2-3)
+  useEffect(() => {
+    api.getZones().then((res) => {
+      if (res.zones) setZones(res.zones as any);
+    }).catch(() => {});
+  }, [setZones]);
 
   // Single stable draw loop — never restarts
   useEffect(() => {

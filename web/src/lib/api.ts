@@ -181,6 +181,180 @@ export interface TerrainData {
 }
 
 // ===================================
+//  ROUTINE TYPES (agent 2-1)
+// ===================================
+
+export interface RoutineStep {
+  type: 'command' | 'mission';
+  data: Record<string, any>;
+}
+
+export interface Routine {
+  id: string;
+  name: string;
+  description: string;
+  steps: RoutineStep[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface RoutineExecution {
+  routineId: string;
+  routineName: string;
+  targetBots: string[];
+  startedAt: string;
+  stepsCompleted: number;
+  totalSteps: number;
+  status: 'running' | 'completed' | 'failed';
+  error?: string;
+}
+
+// ===================================
+//  TEMPLATE TYPES (agent 2-2)
+// ===================================
+
+export type FieldType = 'string' | 'number' | 'position' | 'string[]' | 'boolean';
+
+export interface TemplateField {
+  name: string;
+  label: string;
+  type: FieldType;
+  description?: string;
+  default?: unknown;
+  required?: boolean;
+  options?: string[];
+}
+
+export interface LoadoutPolicy {
+  requiredItems?: { name: string; count: number }[];
+  optionalItems?: { name: string; count: number }[];
+  equipBestArmor?: boolean;
+}
+
+export interface MissionTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: 'combat' | 'gathering' | 'crafting' | 'logistics' | 'building';
+  missionType: string;
+  defaultParams: Record<string, unknown>;
+  requiredFields: TemplateField[];
+  optionalFields?: TemplateField[];
+  suggestedBotCount: number;
+  loadoutPolicy?: LoadoutPolicy;
+  builtIn: boolean;
+}
+
+export interface TemplateExecuteResult {
+  success: boolean;
+  template: string;
+  taskDescription: string;
+  loadoutPolicy: LoadoutPolicy | null;
+  results: { bot: string; queued: boolean; error?: string }[];
+}
+
+// ===================================
+//  DIAGNOSTIC TYPES (agent 2-6)
+// ===================================
+
+export interface DiagnosticCheck {
+  id: string;
+  label: string;
+  status: 'ok' | 'warn' | 'error';
+  detail: string;
+}
+
+export interface DiagnosticAction {
+  id: string;
+  label: string;
+  description: string;
+  available: boolean;
+  endpoint: string;
+  method: string;
+}
+
+export interface DiagnosticReport {
+  botName: string;
+  timestamp: number;
+  overallStatus: 'ok' | 'warn' | 'error';
+  checks: DiagnosticCheck[];
+  actions: DiagnosticAction[];
+  raw: {
+    state: string;
+    connected: boolean;
+    health: number;
+    food: number;
+    instinctActive: boolean;
+    voyagerRunning: boolean;
+    voyagerPaused: boolean;
+    currentTask: string | null;
+    queuedTaskCount: number;
+    recentFailedTasks: string[];
+    lastExecution: {
+      attempt: number;
+      task: string;
+      success: boolean;
+      timestamp: number;
+    } | null;
+  };
+}
+
+// ===================================
+//  COMMANDER CLARIFICATION TYPES (agent 2-9)
+// ===================================
+
+export interface ClarificationQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  field: string;
+}
+
+// ===================================
+//  COMMANDER TEMPLATE TYPES (agent 2-10)
+// ===================================
+
+export type PlaceholderType = 'bot' | 'zone' | 'item' | 'number' | 'player' | 'position';
+
+export interface TemplatePlaceholder {
+  key: string;
+  type: PlaceholderType;
+  label: string;
+  default?: string;
+}
+
+export interface CommandTemplate {
+  id: string;
+  category: 'fleet' | 'combat' | 'gathering' | 'building' | 'exploration' | 'utility';
+  name: string;
+  description: string;
+  template: string;
+  placeholders: TemplatePlaceholder[];
+  tags: string[];
+  icon: string;
+}
+
+export interface ContextSuggestion {
+  template: CommandTemplate;
+  reason: string;
+  priority: number;
+}
+
+export interface SavedRoutine {
+  id: string;
+  name: string;
+  description: string;
+  steps: CommanderRoutineStep[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CommanderRoutineStep {
+  templateId: string;
+  values: Record<string, string>;
+}
+
+// ===================================
 //  CONTROL PLATFORM TYPES
 // ===================================
 
@@ -350,6 +524,62 @@ export interface CommanderHistoryEntry {
   botName?: string;
 }
 
+// Extended commander plan types (agent 2-9 clarification + agent 2-10 templates)
+export interface CommanderPlanCommand {
+  type: string;
+  targets: string[];
+  payload: Record<string, unknown>;
+}
+
+export interface CommanderPlanMission {
+  type: string;
+  title: string;
+  description?: string;
+  assigneeIds: string[];
+}
+
+export interface CommanderPlan {
+  id: string;
+  input: string;
+  intent: string;
+  parsedIntent?: string;
+  confidence: number;
+  warnings: string[];
+  requiresConfirmation: boolean;
+  commands: CommanderPlanCommand[];
+  missions: CommanderPlanMission[];
+  clarificationQuestions: ClarificationQuestion[];
+  needsClarification: boolean;
+  suggestedCommands: string[];
+  createdAt: string;
+}
+
+export interface CommanderResult {
+  commandResults: { command: CommanderPlanCommand; success: boolean; error?: string }[];
+  missionsCreated: CommanderPlanMission[];
+}
+
+export interface CommanderPlanHistoryEntry {
+  planId: string;
+  input: string;
+  plan: CommanderPlan;
+  result?: CommanderResult;
+  status: 'parsed' | 'executed' | 'partial_failure' | 'clarification_needed';
+  createdAt: string;
+  executedAt?: string;
+}
+
+export interface CommanderDraft {
+  id: string;
+  input: string;
+  plan?: CommanderPlan;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ZoneCreatePayload = Omit<ZoneRecord, 'id'>;
+
 // API functions
 export const api = {
   // Bots
@@ -358,6 +588,7 @@ export const api = {
   getBotRelationships: (name: string) => fetchJSON<{ relationships: Record<string, number> }>(`/api/bots/${name}/relationships`),
   getBotConversations: (name: string) => fetchJSON<{ conversations: Record<string, ChatMessage[]> }>(`/api/bots/${name}/conversations`),
   getBotTasks: (name: string) => fetchJSON<{ currentTask: string | null; completedTasks: string[]; failedTasks: string[] }>(`/api/bots/${name}/tasks`),
+  getBotDiagnostics: (name: string) => fetchJSON<DiagnosticReport>(`/api/bots/${name}/diagnostics`),
 
   // Create / delete
   createBot: (name: string, personality: string, mode?: string) =>
@@ -419,8 +650,10 @@ export const api = {
     return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? `?${qs}` : ''}`);
   },
   getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
-  getCommanderHistory: () =>
-    fetchJSON<{ entries: CommanderHistoryEntry[] }>('/api/commander/history'),
+  getCommanderHistory: (opts?: { limit?: number }) =>
+    fetchJSON<{ entries: CommanderHistoryEntry[] }>(
+      `/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`,
+    ),
 
   // Bot commands
   pauseBot: (botName: string) =>
@@ -439,6 +672,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+  returnToBase: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/return-to-base`, { method: 'POST' }),
+  unstuck: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/unstuck`, { method: 'POST' }),
+  equipBest: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/equip-best`, { method: 'POST' }),
 
   // Control platform — zones
   getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones').catch(() => ({ zones: [] })),
@@ -463,12 +702,125 @@ export const api = {
   deleteRoute: (id: string) =>
     fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
 
-  // Control platform — missions
-  getMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
+  // Control platform — missions (simple)
+  getSimpleMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
   createMission: (mission: Omit<Mission, 'id' | 'createdAt'>) =>
     fetchJSON<{ mission: Mission }>('/api/missions', { method: 'POST', body: JSON.stringify(mission) }),
 
-  // Control platform — commands
-  createCommand: (cmd: { type: string; botName: string; params?: Record<string, any> }) =>
+  // Control platform — commands (fleet-level)
+  createCommand: (cmd: { type: string; botName?: string; targets?: string[]; params?: Record<string, any> }) =>
     fetchJSON<{ success: boolean; id?: string }>('/api/commands', { method: 'POST', body: JSON.stringify(cmd) }),
+
+  // Routines (macros) — agent 2-1
+  getRoutines: () => fetchJSON<{ routines: Routine[] }>('/api/routines'),
+  getRoutine: (id: string) => fetchJSON<{ routine: Routine }>(`/api/routines/${id}`),
+  createRoutine: (data: { name: string; description?: string; steps?: RoutineStep[] }) =>
+    fetchJSON<{ routine: Routine }>('/api/routines', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRoutine: (id: string, data: { name?: string; description?: string; steps?: RoutineStep[] }) =>
+    fetchJSON<{ routine: Routine }>(`/api/routines/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    }),
+  deleteRoutine: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routines/${id}`, { method: 'DELETE' }),
+  executeRoutine: (id: string, botNames: string[]) =>
+    fetchJSON<{ execution: RoutineExecution }>(`/api/routines/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ botNames }),
+    }),
+  getRecordingStatus: () =>
+    fetchJSON<{ recording: boolean; draft: Routine | null }>('/api/routines/recording/status'),
+  startRecording: (name: string) =>
+    fetchJSON<{ draft: Routine }>('/api/routines/recording/start', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  stopRecording: (save: boolean) =>
+    fetchJSON<{ routine: Routine | null; saved: boolean }>('/api/routines/recording/stop', {
+      method: 'POST',
+      body: JSON.stringify({ save }),
+    }),
+
+  // Mission templates — agent 2-2
+  getTemplates: (category?: string) => {
+    const params = category ? `?category=${category}` : '';
+    return fetchJSON<{ templates: MissionTemplate[] }>(`/api/templates${params}`);
+  },
+  getTemplate: (id: string) =>
+    fetchJSON<{ template: MissionTemplate }>(`/api/templates/${id}`),
+  createTemplate: (template: Omit<MissionTemplate, 'builtIn'>) =>
+    fetchJSON<{ template: MissionTemplate }>('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify(template),
+    }),
+  updateTemplate: (id: string, patch: Partial<MissionTemplate>) =>
+    fetchJSON<{ template: MissionTemplate }>(`/api/templates/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTemplate: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/templates/${id}`, { method: 'DELETE' }),
+  executeTemplate: (id: string, params: Record<string, unknown>, assignees: string[], priority?: string) =>
+    fetchJSON<TemplateExecuteResult>(`/api/templates/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ params, assignees, priority }),
+    }),
+
+  // Commander — parse, clarify, execute (agent 2-9)
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }),
+  clarifyCommanderInput: (originalInput: string, clarifications: Record<string, string>) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/clarify', {
+      method: 'POST',
+      body: JSON.stringify({ originalInput, clarifications }),
+    }),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ result: CommanderResult }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+  getCommanderSuggestions: () =>
+    fetchJSON<{ suggestions: string[] | ContextSuggestion[] }>('/api/commander/suggestions'),
+  getCommanderDrafts: () =>
+    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts'),
+  saveCommanderDraft: (data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }) =>
+    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${id}`, {
+      method: 'DELETE',
+    }),
+
+  // Commander — templates, suggestions, routines (agent 2-10)
+  getCommanderTemplates: (params?: { category?: string; q?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.category) qs.set('category', params.category);
+    if (params?.q) qs.set('q', params.q);
+    const query = qs.toString();
+    return fetchJSON<{ templates: CommandTemplate[] }>(`/api/commander/templates${query ? `?${query}` : ''}`);
+  },
+  fillTemplate: (templateId: string, values: Record<string, string>) =>
+    fetchJSON<{ text: string }>('/api/commander/templates/fill', {
+      method: 'POST',
+      body: JSON.stringify({ templateId, values }),
+    }),
+  getCommanderRoutines: () =>
+    fetchJSON<{ routines: SavedRoutine[] }>('/api/commander/routines'),
+  createCommanderRoutine: (name: string, description: string, steps: CommanderRoutineStep[]) =>
+    fetchJSON<{ routine: SavedRoutine }>('/api/commander/routines', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, steps }),
+    }),
+  deleteCommanderRoutine: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/routines/${id}`, { method: 'DELETE' }),
+  expandCommanderRoutine: (id: string) =>
+    fetchJSON<{ commands: string[] }>(`/api/commander/routines/${id}/expand`),
 };

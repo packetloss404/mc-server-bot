@@ -6,7 +6,9 @@ import type {
   MarkerRecord, ZoneRecord, RouteRecord,
   SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
   BuildJob, SupplyChain, CommandRecord, MissionRecord,
+  Routine,
 } from './api';
+import type { DrawnZone } from '@/components/map/mapDrawing';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -314,6 +316,7 @@ interface WorldPlanningStore {
   routes: RouteRecord[];
   selectedMapObject: { type: 'marker' | 'zone' | 'route'; id: string } | null;
   drawingMode: 'marker' | 'zone' | 'route' | 'add-marker' | null;
+  pendingZone: DrawnZone | null;
 
   setMarkers: (markers: MarkerRecord[]) => void;
   upsertMarker: (marker: MarkerRecord) => void;
@@ -326,6 +329,7 @@ interface WorldPlanningStore {
   removeRoute: (id: string) => void;
   setSelectedMapObject: (obj: WorldPlanningStore['selectedMapObject']) => void;
   setDrawingMode: (mode: 'marker' | 'zone' | 'route' | 'add-marker' | 'none' | null) => void;
+  setPendingZone: (zone: DrawnZone | null) => void;
 }
 
 export const useWorldStore = create<WorldPlanningStore>((set) => ({
@@ -334,6 +338,7 @@ export const useWorldStore = create<WorldPlanningStore>((set) => ({
   routes: [],
   selectedMapObject: null,
   drawingMode: null,
+  pendingZone: null,
 
   setMarkers: (markers) => set({ markers }),
   upsertMarker: (marker) => set((s) => ({ markers: upsertById(s.markers, marker) })),
@@ -349,6 +354,44 @@ export const useWorldStore = create<WorldPlanningStore>((set) => ({
 
   setSelectedMapObject: (obj) => set({ selectedMapObject: obj }),
   setDrawingMode: (mode) => set({ drawingMode: mode === 'none' ? null : mode }),
+  setPendingZone: (zone) => set({ pendingZone: zone }),
+}));
+
+// ─── Routine Store (agent 2-1) ───
+
+interface RoutineStore {
+  routines: Routine[];
+  recording: boolean;
+  draft: Routine | null;
+
+  setRoutines: (routines: Routine[]) => void;
+  addRoutine: (routine: Routine) => void;
+  updateRoutine: (routine: Routine) => void;
+  removeRoutine: (id: string) => void;
+  setRecording: (recording: boolean, draft: Routine | null) => void;
+}
+
+export const useRoutineStore = create<RoutineStore>((set) => ({
+  routines: [],
+  recording: false,
+  draft: null,
+
+  setRoutines: (routines) => set({ routines }),
+
+  addRoutine: (routine) =>
+    set((state) => ({ routines: [...state.routines, routine] })),
+
+  updateRoutine: (routine) =>
+    set((state) => ({
+      routines: state.routines.map((r) => (r.id === routine.id ? routine : r)),
+    })),
+
+  removeRoutine: (id) =>
+    set((state) => ({
+      routines: state.routines.filter((r) => r.id !== id),
+    })),
+
+  setRecording: (recording, draft) => set({ recording, draft }),
 }));
 
 // ─── Role Store (role assignments, overrides, approvals) ───

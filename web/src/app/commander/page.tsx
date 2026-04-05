@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useCallback, useEffect, type KeyboardEvent } from 'react';
-import { api, type CommanderPlan, type CommanderResult, type CommanderDraft } from '@/lib/api';
+import { api, type CommanderPlan, type CommanderResult, type CommanderDraft, type ClarificationQuestion } from '@/lib/api';
 
 const EXAMPLE_PROMPTS = [
   'Send all guards to the village',
@@ -27,6 +27,8 @@ export default function CommanderPage() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [drafts, setDrafts] = useState<CommanderDraft[]>([]);
   const [expandedHistory, setExpandedHistory] = useState<number | null>(null);
+  const [clarificationAnswers, setClarificationAnswers] = useState<Record<string, string>>({});
+  const [suggestions, setSuggestions] = useState<string[]>([]);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Load history and drafts from API on mount
@@ -44,6 +46,14 @@ export default function CommanderPage() {
     void api.getCommanderDrafts().then((data) => {
       if (cancelled) return;
       setDrafts(data.drafts);
+    }).catch(() => {});
+    void api.getCommanderSuggestions().then((data) => {
+      if (cancelled) return;
+      // Suggestions may be string[] or ContextSuggestion[]
+      const raw = data.suggestions;
+      if (raw.length > 0 && typeof raw[0] === 'string') {
+        setSuggestions(raw as string[]);
+      }
     }).catch(() => {});
     return () => {
       cancelled = true;
@@ -117,10 +127,25 @@ export default function CommanderPage() {
     setExecuting(false);
   }, [plan, executing]);
 
+  const handleClarify = useCallback(async () => {
+    if (!plan || !input.trim()) return;
+    setParsing(true);
+    setError(null);
+    try {
+      const data = await api.clarifyCommanderInput(input.trim(), clarificationAnswers);
+      setPlan(data.plan);
+      setClarificationAnswers({});
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Clarification failed');
+    }
+    setParsing(false);
+  }, [plan, input, clarificationAnswers]);
+
   const handleCancel = useCallback(() => {
     setPlan(null);
     setResult(null);
     setError(null);
+    setClarificationAnswers({});
   }, []);
 
   const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -236,10 +261,62 @@ export default function CommanderPage() {
               ))}
             </div>
           )}
+          {/* Clarification questions */}
+          {plan.needsClarification && plan.clarificationQuestions && plan.clarificationQuestions.length > 0 && (
+            <div className="space-y-3 border-t border-zinc-800/50 pt-3 mt-2">
+              <p className="text-[11px] font-semibold text-amber-500 uppercase tracking-wider">Clarification Needed</p>
+              {plan.clarificationQuestions.map((q: ClarificationQuestion) => (
+                <div key={q.id} className="space-y-1.5">
+                  <p className="text-xs text-zinc-300">{q.question}</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {q.options.map((opt) => (
+                      <button
+                        key={opt}
+                        onClick={() => setClarificationAnswers((prev) => ({ ...prev, [q.field]: opt }))}
+                        className={`text-xs px-2.5 py-1 rounded-lg border transition-colors ${
+                          clarificationAnswers[q.field] === opt
+                            ? 'bg-emerald-600/20 border-emerald-500/50 text-emerald-300'
+                            : 'bg-zinc-800/40 border-zinc-700/40 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                        }`}
+                      >
+                        {opt}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              <button
+                onClick={handleClarify}
+                disabled={parsing || Object.keys(clarificationAnswers).length === 0}
+                className="px-4 py-2 rounded-lg text-sm font-semibold bg-amber-600 hover:bg-amber-500 text-white transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {parsing ? 'Re-parsing...' : 'Submit Clarification'}
+              </button>
+            </div>
+          )}
+
+          {/* Suggested commands when confidence is low */}
+          {plan.suggestedCommands && plan.suggestedCommands.length > 0 && (
+            <div className="space-y-2 border-t border-zinc-800/50 pt-3 mt-2">
+              <p className="text-[11px] text-zinc-500">Or try one of these:</p>
+              <div className="flex flex-wrap gap-2">
+                {plan.suggestedCommands.map((cmd) => (
+                  <button
+                    key={cmd}
+                    onClick={() => handleExampleClick(cmd)}
+                    className="text-xs px-3 py-1.5 rounded-lg bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600 transition-colors"
+                  >
+                    {cmd}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="flex items-center gap-2 pt-2">
             <button
               onClick={handleExecute}
-              disabled={executing}
+              disabled={executing || (plan.needsClarification && plan.clarificationQuestions.length > 0)}
               className="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-40"
             >
               {executing ? 'Executing...' : 'Execute'}

@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
 import { useBotStore } from '@/lib/store';
+import { useToast } from '@/components/Toast';
+import { CommandButtonGroup } from '@/components/CommandButtonGroup';
 
 interface Props {
   botName: string;
@@ -19,20 +21,18 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   const [walkCoords, setWalkCoords] = useState('');
   const [showWalkInput, setShowWalkInput] = useState(false);
   const [showFollowInput, setShowFollowInput] = useState(false);
-  const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
+  const { toast } = useToast();
 
   const exec = async (label: string, fn: () => Promise<any>) => {
     setLoading(label);
-    setFeedback(null);
     try {
       await fn();
-      setFeedback({ msg: `${label} sent`, ok: true });
+      toast(`${label} sent`, 'success');
     } catch (e: any) {
-      setFeedback({ msg: e.message || 'Failed', ok: false });
+      toast(e.message || 'Failed', 'error');
     }
     setLoading(null);
-    setTimeout(() => setFeedback(null), 3000);
   };
 
   const handleWalkTo = () => {
@@ -52,7 +52,6 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   };
 
   const isDisconnected = state === 'DISCONNECTED';
-  const isCodegen = mode === 'codegen';
 
   return (
     <motion.div
@@ -62,43 +61,20 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
     >
       <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Commands</h2>
 
-      {/* Feedback */}
-      {feedback && (
-        <motion.div
-          initial={{ opacity: 0, y: -4 }}
-          animate={{ opacity: 1, y: 0 }}
-          className={`text-xs px-3 py-1.5 rounded-lg mb-3 ${feedback.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}
-        >
-          {feedback.msg}
-        </motion.div>
-      )}
-
-      {/* Main action buttons */}
-      <div className="flex flex-wrap gap-2 mb-3">
-        {isCodegen && voyagerRunning && (
-          <CmdButton
-            label={voyagerPaused ? 'Resume' : 'Pause'}
-            icon={voyagerPaused ? '▶' : '⏸'}
-            color={voyagerPaused ? '#10B981' : '#F59E0B'}
-            loading={loading === (voyagerPaused ? 'Resume' : 'Pause')}
-            disabled={isDisconnected}
-            onClick={() => exec(
-              voyagerPaused ? 'Resume' : 'Pause',
-              () => voyagerPaused ? api.resumeBot(botName) : api.pauseBot(botName),
-            )}
-          />
-        )}
-        <CmdButton
-          label="Stop"
-          icon="■"
-          color="#EF4444"
-          loading={loading === 'Stop'}
-          disabled={isDisconnected || state === 'IDLE'}
-          onClick={() => exec('Stop', () => api.stopBot(botName))}
+      {/* Standard command buttons */}
+      <div className="mb-3">
+        <CommandButtonGroup
+          targetBotNames={[botName]}
+          variant="full"
+          disabled={isDisconnected}
         />
+      </div>
+
+      {/* Interactive action buttons (Follow, Go To) */}
+      <div className="flex flex-wrap gap-2 mb-3">
         <CmdButton
           label="Follow"
-          icon="👤"
+          icon="\uD83D\uDC64"
           color="#8B5CF6"
           loading={loading === 'Follow'}
           disabled={isDisconnected}
@@ -107,7 +83,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
         />
         <CmdButton
           label="Go To"
-          icon="📍"
+          icon="\uD83D\uDCCD"
           color="#3B82F6"
           loading={loading === 'Walk to'}
           disabled={isDisconnected}

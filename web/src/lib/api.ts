@@ -204,4 +204,17 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+  returnToBase: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/return-to-base`, { method: 'POST' }),
+  unstuck: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/unstuck`, { method: 'POST' }),
+  equipBest: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/equip-best`, { method: 'POST' }),
+
+  // Commands (fleet-level)
+  createCommand: (type: string, targets: string[], params?: Record<string, any>) =>
+    fetchJSON<{ success: boolean; id?: string }>('/api/commands', {
+      method: 'POST',
+      body: JSON.stringify({ type, targets, params }),
+    }),
 };

@@ -1,10 +1,9 @@
 'use client';
 
-import { useState, useCallback, useMemo } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import Image from 'next/image';
-import { api, type CommandType, type CommandRecord } from '@/lib/api';
-import { useBotStore, useControlStore, useWorldStore } from '@/lib/store';
+import { api } from '@/lib/api';
+import { useBotStore } from '@/lib/store';
 
 interface Props {
   botName: string;
@@ -14,163 +13,54 @@ interface Props {
   mode: string;
 }
 
-/** Status label for the last command */
-function commandStatusLabel(status: CommandRecord['status']): string {
-  switch (status) {
-    case 'queued': return 'Command queued...';
-    case 'started': return 'Command running...';
-    case 'succeeded': return 'Command succeeded';
-    case 'failed': return 'Command failed';
-    case 'cancelled': return 'Command cancelled';
-    default: return '';
-  }
-}
-
-/** Dot color class for command status */
-function statusDotColor(status: CommandRecord['status']): string {
-  switch (status) {
-    case 'queued': return 'bg-yellow-400';
-    case 'started': return 'bg-blue-400';
-    case 'succeeded': return 'bg-emerald-400';
-    case 'failed': return 'bg-red-400';
-    case 'cancelled': return 'bg-zinc-400';
-    default: return 'bg-zinc-500';
-  }
-}
-
-/** Human-friendly command type label */
-function commandTypeLabel(type: CommandType): string {
-  return type.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
-}
-
 export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning, mode }: Props) {
   const [loading, setLoading] = useState<string | null>(null);
   const [followTarget, setFollowTarget] = useState('');
   const [walkCoords, setWalkCoords] = useState('');
   const [showWalkInput, setShowWalkInput] = useState(false);
   const [showFollowInput, setShowFollowInput] = useState(false);
-  const [showMarkerInput, setShowMarkerInput] = useState(false);
-  const [showZoneInput, setShowZoneInput] = useState(false);
-  const [showTaskInput, setShowTaskInput] = useState(false);
-  const [taskDesc, setTaskDesc] = useState('');
   const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
-  const [lastCommandId, setLastCommandId] = useState<string | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
-  const markers = useWorldStore((s) => s.markers);
-  const zones = useWorldStore((s) => s.zones);
 
-  const pushCommand = useControlStore((s) => s.upsertCommand);
-  const commandHistory = useControlStore((s) => s.commandHistory);
-  const recentCommands = useMemo(
-    () => commandHistory.filter((c) => c.targets.includes(botName)).slice(0, 5),
-    [commandHistory, botName]
-  );
+  useEffect(() => {
+    return () => {
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    };
+  }, []);
 
-  // Find the last command to show live status updates
-  const lastCommand = lastCommandId
-    ? recentCommands.find((c) => c.id === lastCommandId)
-    : null;
-
-  /** Send a command via the new command API, falling back to legacy endpoints */
-  const execCommand = useCallback(async (
-    label: string,
-    cmdType: CommandType,
-    payload?: Record<string, unknown>,
-    legacyFallback?: () => Promise<unknown>,
-  ) => {
+  const exec = async (label: string, fn: () => Promise<any>) => {
     setLoading(label);
     setFeedback(null);
     try {
-      const { command } = await api.createCommand({
-        type: cmdType,
-        scope: 'bot',
-        targets: [botName],
-        payload,
-        source: 'dashboard',
-      });
-      pushCommand(command);
-      setLastCommandId(command.id);
-      setFeedback({ msg: commandStatusLabel(command.status), ok: true });
-    } catch (err: unknown) {
-      // Fall back to legacy API if command endpoint is unavailable (404)
-      const isNotFound = err instanceof Error && err.message.includes('404');
-      if (isNotFound && legacyFallback) {
-        try {
-          await legacyFallback();
-          setFeedback({ msg: `${label} sent`, ok: true });
-        } catch (fallbackErr: unknown) {
-          const msg = fallbackErr instanceof Error ? fallbackErr.message : 'Failed';
-          setFeedback({ msg, ok: false });
-        }
-      } else {
-        const msg = err instanceof Error ? err.message : 'Failed';
-        setFeedback({ msg, ok: false });
-      }
+      await fn();
+      setFeedback({ msg: `${label} sent`, ok: true });
+    } catch (e: any) {
+      setFeedback({ msg: e.message || 'Failed', ok: false });
     }
     setLoading(null);
-    setTimeout(() => setFeedback(null), 4000);
-  }, [botName, pushCommand]);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 3000);
+  };
 
   const handleWalkTo = () => {
     const parts = walkCoords.split(/[,\s]+/).map(Number);
     if (parts.length < 2 || parts.some(isNaN)) return;
     const [x, zOrY, maybeZ] = parts;
     const hasY = parts.length >= 3;
-    const payload = hasY
-      ? { x, y: zOrY, z: maybeZ }
-      : { x, y: null, z: zOrY };
-    execCommand(
-      'Walk to',
-      'walk_to_coords',
-      payload as Record<string, unknown>,
-      () => api.walkTo(botName, x, hasY ? zOrY : null, hasY ? maybeZ : zOrY),
-    );
+    exec('Walk to', () => api.walkTo(botName, x, hasY ? zOrY : null, hasY ? maybeZ : zOrY));
     setWalkCoords('');
     setShowWalkInput(false);
   };
 
   const handleFollow = (playerName: string) => {
-    execCommand(
-      'Follow',
-      'follow_player',
-      { playerName },
-      () => api.followPlayer(botName, playerName),
-    );
+    exec('Follow', () => api.followPlayer(botName, playerName));
     setFollowTarget('');
     setShowFollowInput(false);
   };
 
-  const handleQueueTask = async () => {
-    if (!taskDesc.trim()) return;
-    setLoading('Queue Task');
-    setFeedback(null);
-    try {
-      await api.queueTask(botName, taskDesc.trim());
-      setFeedback({ msg: 'Task queued', ok: true });
-      setTaskDesc('');
-      setShowTaskInput(false);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed';
-      setFeedback({ msg, ok: false });
-    }
-    setLoading(null);
-    setTimeout(() => setFeedback(null), 4000);
-  };
-
   const isDisconnected = state === 'DISCONNECTED';
   const isCodegen = mode === 'codegen';
-
-  // Derive feedback from last command's live status when available
-  const liveFeedback = lastCommand && lastCommand.status !== 'queued'
-    ? {
-        msg: lastCommand.error
-          ? `${commandStatusLabel(lastCommand.status)}: ${lastCommand.error.message}`
-          : commandStatusLabel(lastCommand.status),
-        ok: lastCommand.status === 'succeeded' || lastCommand.status === 'started',
-      }
-    : null;
-
-  const displayFeedback = liveFeedback || feedback;
 
   return (
     <motion.div
@@ -181,13 +71,13 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
       <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">Commands</h2>
 
       {/* Feedback */}
-      {displayFeedback && (
+      {feedback && (
         <motion.div
           initial={{ opacity: 0, y: -4 }}
           animate={{ opacity: 1, y: 0 }}
-          className={`text-xs px-3 py-1.5 rounded-lg mb-3 ${displayFeedback.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}
+          className={`text-xs px-3 py-1.5 rounded-lg mb-3 ${feedback.ok ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-400 border border-red-500/20'}`}
         >
-          {displayFeedback.msg}
+          {feedback.msg}
         </motion.div>
       )}
 
@@ -196,34 +86,27 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
         {isCodegen && voyagerRunning && (
           <CmdButton
             label={voyagerPaused ? 'Resume' : 'Pause'}
-            icon={voyagerPaused ? '\u25B6' : '\u23F8'}
+            icon={voyagerPaused ? '▶' : '⏸'}
             color={voyagerPaused ? '#10B981' : '#F59E0B'}
             loading={loading === (voyagerPaused ? 'Resume' : 'Pause')}
             disabled={isDisconnected}
-            onClick={() => execCommand(
+            onClick={() => exec(
               voyagerPaused ? 'Resume' : 'Pause',
-              voyagerPaused ? 'resume_voyager' : 'pause_voyager',
-              undefined,
               () => voyagerPaused ? api.resumeBot(botName) : api.pauseBot(botName),
             )}
           />
         )}
         <CmdButton
           label="Stop"
-          icon="\u25A0"
+          icon="■"
           color="#EF4444"
           loading={loading === 'Stop'}
           disabled={isDisconnected || state === 'IDLE'}
-          onClick={() => execCommand(
-            'Stop',
-            'stop_movement',
-            undefined,
-            () => api.stopBot(botName),
-          )}
+          onClick={() => exec('Stop', () => api.stopBot(botName))}
         />
         <CmdButton
           label="Follow"
-          icon="\uD83D\uDC64"
+          icon="👤"
           color="#8B5CF6"
           loading={loading === 'Follow'}
           disabled={isDisconnected}
@@ -232,76 +115,12 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
         />
         <CmdButton
           label="Go To"
-          icon="\uD83D\uDCCD"
+          icon="📍"
           color="#3B82F6"
           loading={loading === 'Walk to'}
           disabled={isDisconnected}
-          onClick={() => {
-            setShowWalkInput(!showWalkInput);
-            setShowFollowInput(false);
-            setShowMarkerInput(false);
-            setShowZoneInput(false);
-          }}
+          onClick={() => { setShowWalkInput(!showWalkInput); setShowFollowInput(false); }}
           active={showWalkInput}
-        />
-        <CmdButton
-          label="To Marker"
-          icon="M"
-          color="#0EA5E9"
-          loading={loading === 'Move to marker'}
-          disabled={isDisconnected || markers.length === 0}
-          onClick={() => {
-            setShowMarkerInput(!showMarkerInput);
-            setShowWalkInput(false);
-            setShowFollowInput(false);
-            setShowZoneInput(false);
-          }}
-          active={showMarkerInput}
-        />
-        <CmdButton
-          label="Guard Zone"
-          icon="G"
-          color="#F97316"
-          loading={loading === 'Guard zone'}
-          disabled={isDisconnected || zones.length === 0}
-          onClick={() => {
-            setShowZoneInput(!showZoneInput);
-            setShowWalkInput(false);
-            setShowFollowInput(false);
-            setShowMarkerInput(false);
-          }}
-          active={showZoneInput}
-        />
-        <CmdButton
-          label="Return"
-          icon="R"
-          color="#14B8A6"
-          loading={loading === 'Return to base'}
-          disabled={isDisconnected}
-          onClick={() => execCommand('Return to base', 'return_to_base')}
-        />
-        <CmdButton
-          label="Unstuck"
-          icon="U"
-          color="#EAB308"
-          loading={loading === 'Unstuck'}
-          disabled={isDisconnected}
-          onClick={() => execCommand('Unstuck', 'unstuck')}
-        />
-        <CmdButton
-          label="Queue Task"
-          icon="T"
-          color="#A78BFA"
-          loading={loading === 'Queue Task'}
-          disabled={isDisconnected || !isCodegen}
-          onClick={() => {
-            setShowTaskInput(!showTaskInput);
-            setShowWalkInput(false);
-            setShowFollowInput(false);
-            setShowMarkerInput(false);
-            setShowZoneInput(false);
-          }}
-          active={showTaskInput}
         />
       </div>
 
@@ -321,7 +140,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
                   onClick={() => handleFollow(p.name)}
                   className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
                 >
-                  <Image src={`https://mc-heads.net/avatar/${p.name}/16`} alt="" unoptimized width={16} height={16} className="w-4 h-4 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
+                  <img src={`https://mc-heads.net/avatar/${p.name}/16`} alt="" className="w-4 h-4 rounded pixelated" style={{ imageRendering: 'pixelated' }} />
                   {p.name}
                 </button>
               ))}
@@ -345,56 +164,6 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
               </button>
             </div>
           )}
-        </motion.div>
-      )}
-
-      {showMarkerInput && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="overflow-hidden mb-2"
-        >
-          <div className="space-y-1">
-            <p className="text-[10px] text-zinc-500 mb-1">Select marker:</p>
-            {markers.map((marker) => (
-              <button
-                key={marker.id}
-                onClick={() => {
-                  execCommand('Move to marker', 'move_to_marker', { markerId: marker.id });
-                  setShowMarkerInput(false);
-                }}
-                className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-left text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-              >
-                <span>{marker.name}</span>
-                <span className="text-zinc-600">{marker.kind}</span>
-              </button>
-            ))}
-          </div>
-        </motion.div>
-      )}
-
-      {showZoneInput && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="overflow-hidden mb-2"
-        >
-          <div className="space-y-1">
-            <p className="text-[10px] text-zinc-500 mb-1">Select zone:</p>
-            {zones.map((zone) => (
-              <button
-                key={zone.id}
-                onClick={() => {
-                  execCommand('Guard zone', 'guard_zone', { zoneId: zone.id });
-                  setShowZoneInput(false);
-                }}
-                className="w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-left text-xs text-zinc-300 hover:bg-zinc-800 transition-colors"
-              >
-                <span>{zone.name}</span>
-                <span className="text-zinc-600">{zone.shape}</span>
-              </button>
-            ))}
-          </div>
         </motion.div>
       )}
 
@@ -423,52 +192,6 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
           </div>
           <p className="text-[9px] text-zinc-600 mt-1">Enter coordinates separated by commas or spaces</p>
         </motion.div>
-      )}
-
-      {/* Queue task input */}
-      {showTaskInput && (
-        <motion.div
-          initial={{ height: 0, opacity: 0 }}
-          animate={{ height: 'auto', opacity: 1 }}
-          className="overflow-hidden mb-2"
-        >
-          <div className="flex gap-2">
-            <input
-              value={taskDesc}
-              onChange={(e) => setTaskDesc(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && taskDesc.trim() && handleQueueTask()}
-              placeholder="Describe a task to queue..."
-              className="flex-1 bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600"
-              autoFocus
-            />
-            <button
-              onClick={handleQueueTask}
-              disabled={!taskDesc.trim()}
-              className="bg-violet-600 hover:bg-violet-500 disabled:bg-zinc-700 text-white px-3 py-1.5 rounded-lg text-xs transition-colors"
-            >
-              Queue
-            </button>
-          </div>
-          <p className="text-[9px] text-zinc-600 mt-1">Task will be added to the voyager queue</p>
-        </motion.div>
-      )}
-
-      {/* Recent Commands */}
-      {recentCommands.length > 0 && (
-        <div className="mt-3 pt-3 border-t border-zinc-800/60">
-          <h3 className="text-[10px] font-semibold text-zinc-600 uppercase tracking-wider mb-2">Recent Commands</h3>
-          <div className="space-y-1">
-            {recentCommands.map((cmd) => (
-              <div key={cmd.id} className="flex items-center gap-2 text-[11px] text-zinc-400">
-                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${statusDotColor(cmd.status)}`} />
-                <span className="truncate flex-1">{commandTypeLabel(cmd.type)}</span>
-                <span className="text-zinc-600 text-[10px] flex-shrink-0">
-                  {new Date(cmd.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
       )}
     </motion.div>
   );

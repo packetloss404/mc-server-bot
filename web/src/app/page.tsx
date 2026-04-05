@@ -19,6 +19,7 @@ export default function DashboardPage() {
   const selectionCount = selectedBotIds.size;
 
   useEffect(() => {
+    if (useBotStore.getState().activityFeed.length > 0) return;
     api.getActivity(20).then((data) => {
       for (const event of data.events.reverse()) {
         useBotStore.getState().pushEvent(event);

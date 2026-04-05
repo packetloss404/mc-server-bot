@@ -153,7 +153,13 @@ export class AffinityManager {
     if (counts['chat']) parts.push(`chatted ${counts['chat']} time${counts['chat'] > 1 ? 's' : ''}`);
     if (counts['hit']) parts.push(`been hit ${counts['hit']} time${counts['hit'] > 1 ? 's' : ''}`);
     if (counts['gift']) parts.push(`received ${counts['gift']} gift${counts['gift'] > 1 ? 's' : ''}`);
+    // TODO: 'cooperation' events are displayed here but never emitted. Add
+    // onCooperation() handler to record these when bots complete shared tasks
+    // (joint builds, supply chain deliveries) and emit an EventLog entry.
     if (counts['cooperation']) parts.push(`cooperated ${counts['cooperation']} time${counts['cooperation'] > 1 ? 's' : ''}`);
+    // TODO: 'help_request' events are displayed here but never emitted. Add
+    // onHelpRequest() handler to record these when a player asks a bot for
+    // assistance and emit an EventLog entry.
     if (counts['help_request']) parts.push(`${counts['help_request']} help request${counts['help_request'] > 1 ? 's' : ''}`);
 
     let tier: string;

@@ -93,6 +93,10 @@ export class SquadManager {
       botNames: data.botNames ?? [],
       defaultRole: data.defaultRole,
       homeMarkerId: data.homeMarkerId,
+      // TODO: activeMissionId is defined on SquadRecord but never automatically
+      // set. MissionManager should call updateSquad() to set activeMissionId when
+      // a mission targeting a squad starts, and clear it when the mission completes.
+      // The fleet page now displays it via SquadCard when present.
       createdAt: now,
       updatedAt: now,
     };

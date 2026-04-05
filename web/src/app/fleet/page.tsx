@@ -1,22 +1,56 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { useBotStore, useControlStore, type BotLiveData } from '@/lib/store';
+import { useBotStore, useControlStore, useFleetStore, type BotLiveData, type Squad } from '@/lib/store';
 import { BotCard } from '@/components/BotCard';
 import { FleetSelectionBar } from '@/components/FleetSelectionBar';
-import { getPersonalityColor, STATE_COLORS, STATE_LABELS } from '@/lib/constants';
+// getPersonalityColor, STATE_COLORS, STATE_LABELS are used by BotCard internally
+import { api } from '@/lib/api';
 
 export default function FleetPage() {
   const bots = useBotStore((s) => s.botList);
   const selectedBotIds = useControlStore((s) => s.selectedBotIds);
-  const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
   const clearSelection = useControlStore((s) => s.clearSelection);
   const setSelection = useControlStore((s) => s.setSelection);
+
+  const squads = useFleetStore((s) => s.squads);
+  const [missionTitles, setMissionTitles] = useState<Record<string, string>>({});
 
   const selectedBots = bots.filter((b) => selectedBotIds.has(b.name.toLowerCase()));
   const unselectedBots = bots.filter((b) => !selectedBotIds.has(b.name.toLowerCase()));
   const selectionCount = selectedBots.length;
+
+  // Resolve activeMissionId to titles
+  useEffect(() => {
+    const idsToResolve = squads
+      .map((s) => s.activeMissionId)
+      .filter((id): id is string => !!id && !missionTitles[id]);
+
+    if (idsToResolve.length === 0) return;
+
+    Promise.allSettled(
+      idsToResolve.map(async (id) => {
+        try {
+          const { mission } = await api.getMission(id);
+          return { id, title: mission.title };
+        } catch {
+          return { id, title: null };
+        }
+      })
+    ).then((results) => {
+      const newTitles: Record<string, string> = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value.title) {
+          newTitles[r.value.id] = r.value.title;
+        }
+      }
+      if (Object.keys(newTitles).length > 0) {
+        setMissionTitles((prev) => ({ ...prev, ...newTitles }));
+      }
+    });
+  }, [squads]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1400px]">
@@ -71,6 +105,26 @@ export default function FleetPage() {
         />
       </div>
 
+      {/* Squads */}
+      {squads.length > 0 && (
+        <section>
+          <h2 className="text-sm font-semibold text-purple-400 uppercase tracking-wider mb-4">
+            Squads ({squads.length})
+          </h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {squads.map((squad, i) => (
+              <SquadCard
+                key={squad.id}
+                squad={squad}
+                index={i}
+                missionTitle={squad.activeMissionId ? missionTitles[squad.activeMissionId] : undefined}
+                bots={bots}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Selected Bots */}
       {selectionCount > 0 && (
         <section>
@@ -122,5 +176,95 @@ function FleetStat({ label, value, color }: { label: string; value: number; colo
       <p className="text-[11px] text-zinc-500 font-medium uppercase tracking-wider">{label}</p>
       <p className="text-2xl font-bold mt-1" style={{ color }}>{value}</p>
     </div>
+  );
+}
+
+function SquadCard({
+  squad,
+  index,
+  missionTitle,
+  bots,
+}: {
+  squad: Squad;
+  index: number;
+  missionTitle?: string;
+  bots: BotLiveData[];
+}) {
+  const memberBots = bots.filter((b) =>
+    squad.botNames.some((n) => n.toLowerCase() === b.name.toLowerCase())
+  );
+  const activeCount = memberBots.filter(
+    (b) => !['IDLE', 'DISCONNECTED'].includes(b.state)
+  ).length;
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.3, delay: index * 0.05 }}
+      className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl overflow-hidden"
+    >
+      {/* Purple accent bar */}
+      <div className="h-0.5 bg-gradient-to-r from-purple-500 to-purple-500/50" />
+
+      <div className="p-4 space-y-3">
+        {/* Header */}
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <h3 className="text-sm font-semibold text-white truncate">{squad.name}</h3>
+            <p className="text-[11px] text-zinc-500">
+              {squad.botNames.length} member{squad.botNames.length !== 1 ? 's' : ''}
+              {activeCount > 0 && (
+                <span className="text-emerald-400 ml-1">({activeCount} active)</span>
+              )}
+            </p>
+          </div>
+          {squad.defaultRole && (
+            <span className="text-[10px] font-medium px-2 py-1 rounded-md bg-zinc-800/80 text-zinc-400 uppercase tracking-wide shrink-0">
+              {squad.defaultRole}
+            </span>
+          )}
+        </div>
+
+        {/* Active Mission */}
+        {squad.activeMissionId && (
+          <div className="flex items-center gap-2 bg-purple-500/10 border border-purple-500/20 rounded-lg px-3 py-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-purple-400 animate-pulse shrink-0" />
+            <div className="min-w-0">
+              <p className="text-[10px] text-purple-300/70 uppercase tracking-wider font-medium">Active Mission</p>
+              <p className="text-xs text-purple-200 truncate">
+                {missionTitle || squad.activeMissionId}
+              </p>
+            </div>
+          </div>
+        )}
+
+        {/* Member list */}
+        {squad.botNames.length > 0 && (
+          <div className="flex gap-1 flex-wrap">
+            {squad.botNames.map((name) => {
+              const bot = bots.find((b) => b.name.toLowerCase() === name.toLowerCase());
+              const isOnline = bot && bot.state !== 'DISCONNECTED';
+              return (
+                <span
+                  key={name}
+                  className="text-[10px] px-1.5 py-0.5 rounded border"
+                  style={{
+                    color: isOnline ? '#d4d4d8' : '#71717a',
+                    backgroundColor: isOnline ? '#27272a' : '#18181b',
+                    borderColor: isOnline ? '#3f3f46' : '#27272a',
+                  }}
+                >
+                  {isOnline && (
+                    <span className="inline-block w-1 h-1 rounded-full bg-emerald-400 mr-1 align-middle" />
+                  )}
+                  {name}
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    </motion.div>
   );
 }

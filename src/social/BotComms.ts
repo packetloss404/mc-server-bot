@@ -48,6 +48,18 @@ export class BotComms {
     return msg;
   }
 
+  /**
+   * Retrieve and mark-as-read all unread messages for a bot.
+   *
+   * Intended for poll-based bot-to-bot coordination: a bot's decision loop
+   * can call getUnread() each tick to consume pending requests, inform
+   * messages, and greetings from other bots. The VoyagerLoop or a future
+   * coordination agent should call this before planning each action so
+   * incoming messages influence task selection.
+   *
+   * TODO: Wire into VoyagerLoop tick so bots actually process incoming
+   * bot-to-bot messages when deciding their next action.
+   */
   getUnread(botName: string): BotMessage[] {
     const key = botName.toLowerCase();
     const queue = this.queues.get(key) ?? [];

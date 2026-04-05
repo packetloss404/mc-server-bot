@@ -12,6 +12,53 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+// Control platform types
+export interface Zone {
+  id: string;
+  name: string;
+  type: 'guard' | 'build' | 'farm' | 'mine' | 'custom';
+  shape: 'rect' | 'circle';
+  center: { x: number; z: number };
+  // rect: half-widths; circle: radius
+  rx?: number;
+  rz?: number;
+  radius?: number;
+  color?: string;
+  assignedBots?: string[];
+  activeMission?: string | null;
+}
+
+export interface Marker {
+  id: string;
+  name: string;
+  x: number;
+  y?: number;
+  z: number;
+  icon?: string;
+  color?: string;
+}
+
+export interface Route {
+  id: string;
+  name: string;
+  waypoints: { x: number; y?: number; z: number }[];
+  loop?: boolean;
+  color?: string;
+  assignedBots?: string[];
+}
+
+export interface Mission {
+  id: string;
+  type: string;
+  status: 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  botName: string;
+  description: string;
+  zoneId?: string;
+  routeId?: string;
+  targetCoords?: { x: number; y?: number; z: number };
+  createdAt: number;
+}
+
 // Types matching the backend
 export interface BotStatus {
   name: string;
@@ -204,4 +251,36 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Control platform — zones
+  getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones').catch(() => ({ zones: [] })),
+  createZone: (zone: Omit<Zone, 'id'>) =>
+    fetchJSON<{ zone: Zone }>('/api/zones', { method: 'POST', body: JSON.stringify(zone) }),
+  updateZone: (id: string, patch: Partial<Zone>) =>
+    fetchJSON<{ zone: Zone }>(`/api/zones/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteZone: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
+
+  // Control platform — markers
+  getMarkers: () => fetchJSON<{ markers: Marker[] }>('/api/markers').catch(() => ({ markers: [] })),
+  createMarker: (marker: Omit<Marker, 'id'>) =>
+    fetchJSON<{ marker: Marker }>('/api/markers', { method: 'POST', body: JSON.stringify(marker) }),
+  deleteMarker: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/markers/${id}`, { method: 'DELETE' }),
+
+  // Control platform — routes
+  getRoutes: () => fetchJSON<{ routes: Route[] }>('/api/routes').catch(() => ({ routes: [] })),
+  createRoute: (route: Omit<Route, 'id'>) =>
+    fetchJSON<{ route: Route }>('/api/routes', { method: 'POST', body: JSON.stringify(route) }),
+  deleteRoute: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
+
+  // Control platform — missions
+  getMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
+  createMission: (mission: Omit<Mission, 'id' | 'createdAt'>) =>
+    fetchJSON<{ mission: Mission }>('/api/missions', { method: 'POST', body: JSON.stringify(mission) }),
+
+  // Control platform — commands
+  createCommand: (cmd: { type: string; botName: string; params?: Record<string, any> }) =>
+    fetchJSON<{ success: boolean; id?: string }>('/api/commands', { method: 'POST', body: JSON.stringify(cmd) }),
 };

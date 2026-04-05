@@ -1,0 +1,1362 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>THE DYOBOT DOSSIER - Engineering Audit Report</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Source+Serif+4:ital,wght@0,300;0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&family=Bebas+Neue&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Source Serif 4', Georgia, serif;
+    background: #f4f0e8;
+    color: #1a1a1a;
+    line-height: 1.7;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* === BLUEPRINT MASTHEAD === */
+  .blueprint {
+    background: #0b2545;
+    color: #a8c7e8;
+    position: relative;
+    overflow: hidden;
+    padding: 0;
+  }
+  .blueprint::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image:
+      linear-gradient(rgba(100,160,220,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(100,160,220,0.06) 1px, transparent 1px),
+      linear-gradient(rgba(100,160,220,0.03) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(100,160,220,0.03) 1px, transparent 1px);
+    background-size: 80px 80px, 80px 80px, 16px 16px, 16px 16px;
+    pointer-events: none;
+  }
+  .blueprint-inner {
+    position: relative;
+    z-index: 1;
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 36px 40px 32px;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 40px;
+    align-items: center;
+  }
+  .bp-left {}
+  .bp-ref {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: rgba(168,199,232,0.4);
+    margin-bottom: 10px;
+  }
+  .bp-title {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3.8rem;
+    letter-spacing: 6px;
+    line-height: 1;
+    color: #ffffff;
+    margin-bottom: 6px;
+    text-shadow: 0 0 30px rgba(100,160,220,0.2);
+  }
+  .bp-subtitle {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82rem;
+    color: rgba(168,199,232,0.6);
+    letter-spacing: 0.5px;
+    margin-bottom: 18px;
+  }
+  .bp-specs {
+    display: flex;
+    gap: 0;
+    flex-wrap: wrap;
+  }
+  .bp-spec {
+    padding: 6px 16px;
+    border: 1px solid rgba(168,199,232,0.15);
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: rgba(168,199,232,0.5);
+    margin-right: -1px;
+    margin-bottom: -1px;
+  }
+  .bp-spec strong {
+    color: #a8c7e8;
+    font-weight: 600;
+  }
+  /* Right side — schematic score dial */
+  .bp-dial {
+    width: 180px;
+    height: 180px;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .bp-dial svg { width: 100%; height: 100%; }
+  .bp-dial-score {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+  }
+  .bp-dial-score .dial-num {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 3rem;
+    color: #ffffff;
+    line-height: 1;
+  }
+  .bp-dial-score .dial-of {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 2px;
+    color: rgba(168,199,232,0.4);
+    text-transform: uppercase;
+  }
+  /* Corner marks */
+  .bp-corner {
+    position: absolute;
+    width: 20px;
+    height: 20px;
+    border-color: rgba(168,199,232,0.2);
+    border-style: solid;
+    border-width: 0;
+  }
+  .bp-corner.tl { top: 12px; left: 12px; border-top-width: 1px; border-left-width: 1px; }
+  .bp-corner.tr { top: 12px; right: 12px; border-top-width: 1px; border-right-width: 1px; }
+  .bp-corner.bl { bottom: 12px; left: 12px; border-bottom-width: 1px; border-left-width: 1px; }
+  .bp-corner.br { bottom: 12px; right: 12px; border-bottom-width: 1px; border-right-width: 1px; }
+  /* Crosshair accent */
+  .bp-crosshair {
+    position: absolute;
+    top: 20px;
+    right: 220px;
+    width: 30px;
+    height: 30px;
+    opacity: 0.15;
+  }
+  .bp-crosshair::before, .bp-crosshair::after {
+    content: '';
+    position: absolute;
+    background: #a8c7e8;
+  }
+  .bp-crosshair::before { width: 1px; height: 100%; left: 50%; top: 0; }
+  .bp-crosshair::after { height: 1px; width: 100%; top: 50%; left: 0; }
+
+
+  /* === NEWSPAPER LAYOUT === */
+  .broadsheet {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 0 20px;
+  }
+
+  /* Top banner story */
+  .headline-banner {
+    border-bottom: 3px solid #1a1a1a;
+    padding: 40px 0 30px;
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 40px;
+    align-items: start;
+  }
+  .headline-banner h2 {
+    font-family: 'Playfair Display', serif;
+    font-size: 3.2rem;
+    font-weight: 900;
+    line-height: 1.08;
+    letter-spacing: -1px;
+    margin-bottom: 16px;
+  }
+  .headline-banner .deck {
+    font-size: 1.2rem;
+    font-weight: 300;
+    line-height: 1.5;
+    color: #444;
+    border-left: 3px solid #c41a1a;
+    padding-left: 16px;
+    margin-bottom: 16px;
+  }
+  .byline {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    color: #888;
+  }
+
+  /* Sidebar verdict box */
+  .verdict-box {
+    background: #1a1a1a;
+    color: #f4f0e8;
+    padding: 28px 24px;
+    position: relative;
+  }
+  .verdict-box::before {
+    content: 'CLASSIFIED';
+    position: absolute;
+    top: -12px;
+    left: 20px;
+    background: #c41a1a;
+    color: white;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 0.8rem;
+    letter-spacing: 3px;
+    padding: 2px 14px;
+  }
+  .verdict-box .big-score {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 5rem;
+    line-height: 1;
+    text-align: center;
+    margin: 10px 0;
+  }
+  .verdict-box .big-score span { font-size: 2.5rem; opacity: 0.4; }
+  .verdict-box .verdict-label {
+    text-align: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    opacity: 0.6;
+    margin-bottom: 16px;
+  }
+  .verdict-line {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(244,240,232,0.1);
+    font-size: 0.85rem;
+  }
+  .verdict-line:last-child { border: none; }
+  .verdict-line .vl-val { font-weight: 700; }
+  .vl-bad { color: #ff6b6b; }
+  .vl-mid { color: #ffa94d; }
+  .vl-ok { color: #69db7c; }
+
+  /* === COLUMN LAYOUT === */
+  .columns-3 {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr;
+    gap: 0;
+    border-top: 1px solid #ccc;
+    border-bottom: 1px solid #ccc;
+    padding: 30px 0;
+  }
+  .col {
+    padding: 0 24px;
+    border-right: 1px solid #ddd;
+  }
+  .col:first-child { padding-left: 0; }
+  .col:last-child { border-right: none; padding-right: 0; }
+  .col p { font-size: 0.92rem; margin-bottom: 12px; text-align: justify; hyphens: auto; }
+
+  .columns-2 {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    padding: 30px 0;
+  }
+  .columns-2 .col:first-child { padding-left: 0; }
+
+  /* Column headlines */
+  .col-head {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.5rem;
+    font-weight: 700;
+    line-height: 1.15;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid #1a1a1a;
+  }
+  .col-subhead {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1rem;
+    letter-spacing: 2px;
+    color: #c41a1a;
+    margin: 18px 0 8px;
+  }
+
+  /* === PULLQUOTES === */
+  .pullquote {
+    font-family: 'Playfair Display', serif;
+    font-size: 1.6rem;
+    font-style: italic;
+    font-weight: 400;
+    line-height: 1.35;
+    text-align: center;
+    padding: 30px 40px;
+    margin: 24px 0;
+    border-top: 3px solid #1a1a1a;
+    border-bottom: 3px solid #1a1a1a;
+    color: #1a1a1a;
+    position: relative;
+  }
+  .pullquote .pq-attr {
+    display: block;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    font-style: normal;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    color: #888;
+    margin-top: 12px;
+  }
+
+  /* === RED INK ANNOTATIONS === */
+  .redink {
+    color: #c41a1a;
+    font-family: 'Source Serif 4', serif;
+    font-style: italic;
+    font-weight: 600;
+  }
+  .stamp {
+    display: inline-block;
+    border: 3px solid #c41a1a;
+    color: #c41a1a;
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 1.1rem;
+    letter-spacing: 3px;
+    padding: 4px 16px;
+    transform: rotate(-3deg);
+    margin: 8px 4px;
+  }
+  .stamp.black { border-color: #1a1a1a; color: #1a1a1a; }
+  .stamp.green { border-color: #2b8a3e; color: #2b8a3e; }
+
+  /* === SECTION BREAKS === */
+  .section-break {
+    text-align: center;
+    padding: 24px 0;
+    border-bottom: 1px solid #ccc;
+  }
+  .section-break h2 {
+    font-family: 'Bebas Neue', sans-serif;
+    font-size: 2.2rem;
+    letter-spacing: 6px;
+    margin-bottom: 4px;
+  }
+  .section-break .sb-rule {
+    width: 60px;
+    height: 3px;
+    background: #c41a1a;
+    margin: 0 auto;
+  }
+
+  /* === DOSSIER FILE CARDS === */
+  .file-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+    padding: 24px 0;
+  }
+  .file-card {
+    background: white;
+    border: 1px solid #d4cfc4;
+    padding: 0;
+    position: relative;
+    box-shadow: 2px 2px 0 rgba(0,0,0,0.04);
+  }
+  .file-card .fc-header {
+    background: #2c2c2c;
+    color: #f4f0e8;
+    padding: 10px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .fc-sev {
+    padding: 1px 8px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+  }
+  .fc-sev.crit { background: #c41a1a; }
+  .fc-sev.high { background: #e67700; }
+  .fc-sev.med { background: #5c5c00; }
+  .file-card .fc-body {
+    padding: 16px;
+    font-size: 0.88rem;
+    line-height: 1.6;
+  }
+  .file-card .fc-body p { margin-bottom: 8px; }
+  .file-card .fc-file {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #888;
+    margin-top: 8px;
+  }
+
+  /* === EVIDENCE TABLE === */
+  .evidence-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.88rem;
+    margin: 20px 0;
+  }
+  .evidence-table th {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    text-align: left;
+    padding: 10px 14px;
+    border-bottom: 2px solid #1a1a1a;
+    background: transparent;
+  }
+  .evidence-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid #e0dcd4;
+    vertical-align: top;
+  }
+  .evidence-table tr:hover { background: rgba(196,26,26,0.03); }
+  .evidence-table code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.8rem;
+    background: #eae6de;
+    padding: 1px 5px;
+  }
+
+  /* === INLINE CODE === */
+  code {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.82em;
+    background: #eae6de;
+    padding: 1px 5px;
+    border-radius: 2px;
+  }
+  pre {
+    background: #2c2c2c;
+    color: #d4d0c8;
+    padding: 16px 20px;
+    margin: 14px 0;
+    overflow-x: auto;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.78rem;
+    line-height: 1.55;
+    border-left: 4px solid #c41a1a;
+  }
+  pre code { background: none; padding: 0; color: inherit; }
+
+  /* === DEBATE TRANSCRIPT === */
+  .transcript {
+    background: white;
+    border: 1px solid #d4cfc4;
+    padding: 0;
+    margin: 24px 0;
+  }
+  .transcript-header {
+    background: #2c2c2c;
+    color: #f4f0e8;
+    padding: 12px 20px;
+    font-family: 'Bebas Neue', sans-serif;
+    letter-spacing: 3px;
+    font-size: 1rem;
+  }
+  .transcript-body { padding: 0; }
+  .tx-line {
+    padding: 14px 20px;
+    border-bottom: 1px solid #eee;
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 16px;
+    font-size: 0.88rem;
+  }
+  .tx-line:last-child { border: none; }
+  .tx-line:nth-child(even) { background: #faf8f4; }
+  .tx-speaker {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #888;
+    padding-top: 3px;
+  }
+  .tx-speaker.mc { color: #2b8a3e; }
+  .tx-speaker.eng { color: #1864ab; }
+  .tx-speaker.fs { color: #c41a1a; }
+  .tx-speaker.all { color: #1a1a1a; font-weight: 700; }
+  .tx-text { line-height: 1.6; }
+
+  /* === ROADMAP GANTT === */
+  .gantt {
+    margin: 24px 0;
+    overflow-x: auto;
+  }
+  .gantt-row {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    gap: 0;
+    border-bottom: 1px solid #e0dcd4;
+    min-height: 48px;
+    align-items: center;
+  }
+  .gantt-row:first-child { border-top: 2px solid #1a1a1a; }
+  .gantt-label {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    letter-spacing: 0.5px;
+    padding: 8px 12px 8px 0;
+    text-transform: uppercase;
+    color: #666;
+  }
+  .gantt-track {
+    position: relative;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    padding: 4px 0;
+  }
+  .gantt-bar {
+    height: 28px;
+    display: flex;
+    align-items: center;
+    padding: 0 12px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.68rem;
+    color: white;
+    letter-spacing: 0.5px;
+    position: absolute;
+  }
+  .gb-emergency { background: #c41a1a; left: 0; width: 10%; }
+  .gb-foundation { background: #e67700; left: 10%; width: 20%; }
+  .gb-gameplay { background: #5c940d; left: 30%; width: 18%; }
+  .gb-refactor { background: #1864ab; left: 48%; width: 18%; }
+  .gb-intelligence { background: #7048e8; left: 66%; width: 20%; }
+  .gb-advanced { background: #495057; left: 86%; width: 14%; }
+
+  /* Week markers */
+  .gantt-weeks {
+    display: grid;
+    grid-template-columns: 180px 1fr;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    color: #aaa;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    padding: 6px 0;
+  }
+  .gantt-week-track {
+    display: flex;
+    justify-content: space-between;
+    padding: 0 2px;
+  }
+
+  /* === INVENTORY GRID (MC style for feature status) === */
+  .inv-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 2px;
+    background: #8b8b8b;
+    border: 3px solid #555;
+    padding: 2px;
+    margin: 20px 0;
+  }
+  .inv-slot {
+    background: #c6c6c6;
+    border: 2px inset #e8e8e8;
+    padding: 10px 8px;
+    text-align: center;
+    font-size: 0.78rem;
+    min-height: 60px;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    position: relative;
+  }
+  .inv-slot .inv-name {
+    font-weight: 700;
+    font-size: 0.8rem;
+    color: #333;
+  }
+  .inv-slot .inv-status {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.6rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+  }
+  .inv-slot.has { background: #a3d9a5; border-color: #7bc67e; }
+  .inv-slot.has .inv-status { color: #1a5c1d; }
+  .inv-slot.partial { background: #f0dca0; border-color: #d4c078; }
+  .inv-slot.partial .inv-status { color: #8a6d00; }
+  .inv-slot.missing { background: #e8a0a0; border-color: #d47878; }
+  .inv-slot.missing .inv-status { color: #8a1a1a; }
+  .inv-slot.stub { background: #c4b0e0; border-color: #a890c8; }
+  .inv-slot.stub .inv-status { color: #4a2878; }
+
+  /* === BOTTOM ACTION REGISTER === */
+  .register {
+    margin: 24px 0;
+  }
+  .register-item {
+    display: grid;
+    grid-template-columns: 40px 1fr 90px 70px 200px;
+    gap: 0;
+    border-bottom: 1px solid #e0dcd4;
+    padding: 10px 0;
+    font-size: 0.86rem;
+    align-items: baseline;
+  }
+  .register-item.reg-head {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    color: #888;
+    border-bottom: 2px solid #1a1a1a;
+    padding-bottom: 8px;
+  }
+  .register-item .ri-num {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #888;
+  }
+  .ri-sev {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.65rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    font-weight: 700;
+  }
+  .ri-sev.crit { color: #c41a1a; }
+  .ri-sev.high { color: #e67700; }
+  .ri-sev.med { color: #866600; }
+  .ri-sev.low { color: #1864ab; }
+  .ri-effort {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.75rem;
+    color: #888;
+  }
+  .ri-files {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.72rem;
+    color: #888;
+  }
+
+  /* === FOOTER === */
+  .paper-footer {
+    text-align: center;
+    padding: 40px 20px 50px;
+    border-top: 3px double #1a1a1a;
+    margin-top: 40px;
+  }
+  .paper-footer p {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #aaa;
+    margin: 4px 0;
+  }
+
+  /* === RESPONSIVE === */
+  @media (max-width: 900px) {
+    .blueprint-inner { grid-template-columns: 1fr; padding: 28px 24px; gap: 20px; }
+    .bp-title { font-size: 2.6rem; letter-spacing: 3px; }
+    .bp-dial { width: 130px; height: 130px; justify-self: center; }
+    .bp-specs { flex-wrap: wrap; }
+    .bp-crosshair { display: none; }
+    .headline-banner { grid-template-columns: 1fr; }
+    .headline-banner h2 { font-size: 2.2rem; }
+    .columns-3 { grid-template-columns: 1fr; }
+    .columns-2 { grid-template-columns: 1fr; }
+    .col { border-right: none; border-bottom: 1px solid #ddd; padding: 20px 0; }
+    .col:last-child { border-bottom: none; }
+    .tx-line { grid-template-columns: 1fr; }
+    .tx-speaker { margin-bottom: 4px; }
+    .register-item { grid-template-columns: 30px 1fr; gap: 4px; }
+    .register-item .ri-sev, .register-item .ri-effort, .register-item .ri-files { display: none; }
+    .gantt-bar { font-size: 0.55rem; padding: 0 4px; }
+    .inv-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  }
+</style>
+</head>
+<body>
+
+<!-- ============================================================ -->
+<!--  BLUEPRINT HEADER                                             -->
+<!-- ============================================================ -->
+<header class="blueprint">
+  <div class="bp-corner tl"></div>
+  <div class="bp-corner tr"></div>
+  <div class="bp-corner bl"></div>
+  <div class="bp-corner br"></div>
+  <div class="bp-crosshair"></div>
+
+  <div class="blueprint-inner">
+    <div class="bp-left">
+      <div class="bp-ref">Dwg. No. PL-404-2026-0405 &nbsp;&bull;&nbsp; Rev. A &nbsp;&bull;&nbsp; Sheet 1 of 1</div>
+      <div class="bp-title">THE DYOBOT DOSSIER</div>
+      <div class="bp-subtitle">40-Engineer Structural Audit &amp; Roundtable Proceedings</div>
+      <div class="bp-specs">
+        <div class="bp-spec"><strong>Branch</strong> main</div>
+        <div class="bp-spec"><strong>Commit</strong> a33bcdd</div>
+        <div class="bp-spec"><strong>Date</strong> 2026-04-05</div>
+        <div class="bp-spec"><strong>Auditors</strong> 30 + 10 Web</div>
+        <div class="bp-spec"><strong>Modules</strong> 14 scanned</div>
+        <div class="bp-spec"><strong>Findings</strong> 25 filed</div>
+      </div>
+    </div>
+
+    <div class="bp-dial">
+      <svg viewBox="0 0 180 180">
+        <!-- outer ring -->
+        <circle cx="90" cy="90" r="82" fill="none" stroke="rgba(168,199,232,0.1)" stroke-width="1"/>
+        <!-- track -->
+        <circle cx="90" cy="90" r="70" fill="none" stroke="rgba(168,199,232,0.08)" stroke-width="8" stroke-linecap="round"/>
+        <!-- score arc: 5.8/10 = 58% of 360 = ~209deg. Circumference = 2*pi*70 = 439.8. 58% = 255 -->
+        <circle cx="90" cy="90" r="70" fill="none" stroke="rgba(168,199,232,0.35)" stroke-width="8" stroke-linecap="round"
+          stroke-dasharray="255 440" stroke-dashoffset="110"
+          style="transition: stroke-dasharray 1s ease;"/>
+        <!-- tick marks at compass points -->
+        <line x1="90" y1="12" x2="90" y2="20" stroke="rgba(168,199,232,0.2)" stroke-width="1"/>
+        <line x1="90" y1="160" x2="90" y2="168" stroke="rgba(168,199,232,0.2)" stroke-width="1"/>
+        <line x1="12" y1="90" x2="20" y2="90" stroke="rgba(168,199,232,0.2)" stroke-width="1"/>
+        <line x1="160" y1="90" x2="168" y2="90" stroke="rgba(168,199,232,0.2)" stroke-width="1"/>
+        <!-- inner hash ring -->
+        <circle cx="90" cy="90" r="55" fill="none" stroke="rgba(168,199,232,0.05)" stroke-width="1" stroke-dasharray="3 8"/>
+      </svg>
+      <div class="bp-dial-score">
+        <div class="dial-num">5.8</div>
+        <div class="dial-of">of 10 &bull; health</div>
+      </div>
+    </div>
+  </div>
+</header>
+
+
+<div class="broadsheet">
+
+<!-- ============================================================ -->
+<!--  HEADLINE BANNER                                              -->
+<!-- ============================================================ -->
+<div class="headline-banner">
+  <div>
+    <h2>Ambitious Architecture,<br>Prototype-Quality Execution</h2>
+    <div class="deck">
+      Thirty engineers spent a day ripping apart every module, skill file, and endpoint in the DyoBot codebase. They found a framework with genuine architectural ambition &mdash; worker thread isolation, a Voyager-style learning pipeline, fleet command structures &mdash; wrapped around gameplay code that would lose to the Minecraft tutorial.
+    </div>
+    <div class="byline">
+      Panel: 10 Minecraft Players &bull; 10 Software Engineers &bull; 10 Full-Stack Developers<br>
+      Synthesized by: 10 Sr. HTML5 Web Developers &bull; Report filed April 5, 2026
+    </div>
+  </div>
+  <div class="verdict-box">
+    <div class="verdict-label">Overall Health Score</div>
+    <div class="big-score">5.8<span>/10</span></div>
+    <div class="verdict-label" style="margin-top:16px">Breakdown</div>
+    <div class="verdict-line"><span>Architecture</span><span class="vl-val vl-ok">7/10</span></div>
+    <div class="verdict-line"><span>Gameplay Realism</span><span class="vl-val vl-bad">4/10</span></div>
+    <div class="verdict-line"><span>Skill Quality</span><span class="vl-val vl-bad">3/10</span></div>
+    <div class="verdict-line"><span>Type Safety</span><span class="vl-val vl-bad">4/10</span></div>
+    <div class="verdict-line"><span>Error Handling</span><span class="vl-val vl-mid">5/10</span></div>
+    <div class="verdict-line"><span>Security</span><span class="vl-val vl-mid">5/10</span></div>
+    <div class="verdict-line"><span>Testing</span><span class="vl-val vl-bad">3/10</span></div>
+    <div class="verdict-line"><span>AI/LLM Integration</span><span class="vl-val vl-mid">6/10</span></div>
+    <div class="verdict-line"><span>API &amp; Web</span><span class="vl-val vl-mid">6.5/10</span></div>
+    <div class="verdict-line"><span>DevOps</span><span class="vl-val vl-bad">4/10</span></div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  THE GOOD - 3 columns                                        -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>WHAT'S ACTUALLY WORKING</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-3">
+  <div class="col">
+    <div class="col-head">Worker Thread Isolation Gets It Right</div>
+    <p>Each bot runs in its own worker thread with IPC message passing and 60-second timeouts. One bot crashing doesn't cascade to the fleet. The <code>WorkerHandle</code> implements crash recovery with up to 5 retries.</p>
+    <p>The <code>IPCChannel</code> uses an RPC-style pattern with pending request tracking that prevents deadlocks. This is genuinely well-engineered and the right architectural choice for multi-bot orchestration.</p>
+    <p><span class="stamp green">APPROVED</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">Voyager Learning Pipeline Has Real Bones</div>
+    <p>The CurriculumAgent &rarr; ActionAgent &rarr; CriticAgent &rarr; SkillLibrary pipeline mirrors the original Voyager research paper's architecture. Tasks are proposed, code is generated, execution is evaluated, and successful skills are stored for reuse.</p>
+    <p>The pipeline supports task decomposition, quality scoring, and automatic difficulty progression. The <em>concept</em> is sound even though the generated skills are currently broken.</p>
+    <p><span class="stamp green">APPROVED</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">Fleet Control Is Impressively Scoped</div>
+    <p>CommandCenter, MissionManager, SquadManager, RoleManager, MarkerStore &mdash; this is a serious command-and-control framework. Missions have lifecycle management (create, start, pause, cancel, retry). Squads have membership CRUD. Roles enforce one-per-bot with autonomy levels.</p>
+    <p>The social memory system with decay, emotional states, and reflection is creative and well-designed, even if underutilized by current behavior code.</p>
+    <p><span class="stamp green">APPROVED</span></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  SECURITY - Critical Findings                                 -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>SECURITY &mdash; STOP EVERYTHING AND FIX THESE</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="file-grid">
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-001</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-body">
+      <p><strong>Hardcoded Google API Key</strong></p>
+      <p>A live <code>GOOGLE_API_KEY</code> sits in <code>.env</code> checked into the repo. Revoke it today. Scrub from git history with BFG. This is a 15-minute fix with existential consequences if ignored.</p>
+      <div class="fc-file">.env:1</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-002</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-body">
+      <p><strong>Path Traversal</strong></p>
+      <p>The skill-reading endpoint joins user input directly into a file path. <code>../../../etc/passwd</code> reads arbitrary files off the server. Use <code>path.resolve()</code> and validate containment.</p>
+      <div class="fc-file">src/server/api.ts:331</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-003</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-body">
+      <p><strong>Zero Authentication</strong></p>
+      <p>All 30+ REST endpoints and WebSocket connections are completely open. No API key, no JWT, no sessions. Anyone on the network can spawn bots, delete bots, and read all data.</p>
+      <div class="fc-file">src/server/api.ts (all)</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-004</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-body">
+      <p><strong>No Rate Limiting</strong></p>
+      <p>An attacker can spawn unlimited bots, queue thousands of tasks, or burn through LLM API quota. Add <code>express-rate-limit</code> immediately.</p>
+      <div class="fc-file">src/server/api.ts</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-005</span><span class="fc-sev high">HIGH</span></div>
+    <div class="fc-body">
+      <p><strong>API Key in URL Params</strong></p>
+      <p>Gemini client passes <code>key=</code> in the URL query string. Shows in logs, memory dumps, and heap snapshots saved to <code>diagnostics/</code>. Use <code>Authorization</code> header.</p>
+      <div class="fc-file">src/ai/GeminiClient.ts:23</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-006</span><span class="fc-sev high">HIGH</span></div>
+    <div class="fc-body">
+      <p><strong>No Input Validation</strong></p>
+      <p>Bot names, chat messages, task descriptions, and coordinates pass through without sanitization, length limits, or bounds checking. XSS via dashboard, coordinate DoS, name injection all possible.</p>
+      <div class="fc-file">src/server/api.ts:142,203,423,610</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-007</span><span class="fc-sev med">MEDIUM</span></div>
+    <div class="fc-body">
+      <p><strong>Prompt Injection</strong></p>
+      <p>Player chat messages concatenated directly into LLM prompts at <code>BotInstance.ts:864</code>. A crafted message can manipulate bot behavior through prompt injection.</p>
+      <div class="fc-file">src/bot/BotInstance.ts:864</div>
+    </div>
+  </div>
+  <div class="file-card">
+    <div class="fc-header"><span>SEC-008</span><span class="fc-sev med">MEDIUM</span></div>
+    <div class="fc-body">
+      <p><strong>Hardcoded Admin Player</strong></p>
+      <p><code>static OWNER_PLAYER = 'Nerdfuryz'</code> baked into the source. Should be configurable via <code>config.yml</code> or environment variable.</p>
+      <div class="fc-file">src/bot/BotInstance.ts:42</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  GAMEPLAY REALISM                                             -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>MINECRAFT MECHANICS &mdash; THE INVENTORY CHECK</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<p style="text-align:center;color:#666;font-size:0.88rem;padding:12px 0;">Feature implementation rendered as a Minecraft inventory. Green = working. Yellow = partial. Red = missing. Purple = stubbed.</p>
+
+<div class="inv-grid">
+  <div class="inv-slot has">
+    <span class="inv-name">Mining</span>
+    <span class="inv-status">Implemented</span>
+  </div>
+  <div class="inv-slot has">
+    <span class="inv-name">Crafting</span>
+    <span class="inv-status">Implemented</span>
+  </div>
+  <div class="inv-slot has">
+    <span class="inv-name">Pathfinding</span>
+    <span class="inv-status">Basic</span>
+  </div>
+  <div class="inv-slot has">
+    <span class="inv-name">Containers</span>
+    <span class="inv-status">Chests Only</span>
+  </div>
+  <div class="inv-slot has">
+    <span class="inv-name">Basic Combat</span>
+    <span class="inv-status">Hit Loop</span>
+  </div>
+  <div class="inv-slot partial">
+    <span class="inv-name">Smelting</span>
+    <span class="inv-status">No Variants</span>
+  </div>
+  <div class="inv-slot partial">
+    <span class="inv-name">Building</span>
+    <span class="inv-status">/setblock cheat</span>
+  </div>
+  <div class="inv-slot partial">
+    <span class="inv-name">Drowning</span>
+    <span class="inv-status">Detect Only</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Food / Hunger</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Tool Selection</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Armor</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Enchanting</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Brewing</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Fishing</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Trading</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Redstone</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Nether / End</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Swimming</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Fall Damage</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Shields</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Beds / Sleep</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Boats</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Ladders</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Block Rotation</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Double Chests</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Animal Breeding</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Mob Farming</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+  <div class="inv-slot missing">
+    <span class="inv-name">Sprinting</span>
+    <span class="inv-status">Not Implemented</span>
+  </div>
+</div>
+
+<div class="pullquote">
+  &ldquo;This bot plays Minecraft like someone who read the wiki summary and guessed the rest. It knows blocks exist but doesn't know you need an iron pickaxe to mine diamonds.&rdquo;
+  <span class="pq-attr">&mdash; Minecraft Player Panel, Speedrunner Division</span>
+</div>
+
+<!-- ============================================================ -->
+<!--  CODE QUALITY                                                 -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>CODE QUALITY &mdash; THE ENGINEERING AUDIT</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">The <code>any</code> Epidemic: 157+ Violations</div>
+    <p>The single biggest engineering debt in the codebase. Mineflayer's bot object is cast to <code>any</code> 20+ times in BotInstance alone. Worker IPC proxies use <code>as any</code> to bridge type mismatches. LLM responses are parsed into <code>any</code> with zero schema validation.</p>
+    <p>The effect is a TypeScript codebase that provides almost no compile-time safety on its most critical paths. Typos in property names, async/sync mismatches in proxies, and structural changes in API responses will all surface as runtime errors &mdash; in production, with no test safety net.</p>
+
+    <div class="col-subhead">Worst Offenders</div>
+    <table class="evidence-table">
+      <tr><th>Location</th><th>Count</th></tr>
+      <tr><td><code>BotInstance.ts</code> &mdash; Mineflayer plugin casts</td><td>20+</td></tr>
+      <tr><td><code>botWorker.ts:45-47</code> &mdash; IPC proxy casts</td><td>3</td></tr>
+      <tr><td><code>AnthropicClient.ts:47</code> &mdash; Response parsing</td><td>5+</td></tr>
+      <tr><td><code>GeminiClient.ts:47</code> &mdash; Response parsing</td><td>5+</td></tr>
+      <tr><td><code>CommandTypes.ts:47</code> &mdash; Param records</td><td>All cmds</td></tr>
+      <tr><td><code>ConversationManager.ts:29</code> &mdash; Contents array</td><td>All calls</td></tr>
+    </table>
+
+    <div class="col-subhead">Six Silent Catch Blocks</div>
+    <p>Six locations in the codebase catch errors and do <em>absolutely nothing</em> &mdash; no logging, no metrics, no re-throw. Builds fail silently. Skills save without embeddings. World state goes incomplete. Debugging becomes guesswork.</p>
+    <pre><code>// BuildCoordinator.ts:553
+} catch {}  // Build step vanishes
+
+// BuildCoordinator.ts:604
+} catch {}  // Placement error eaten
+
+// SkillLibrary.ts:78
+} catch {}  // Embedding silently skipped
+
+// WorldMemory.ts:66
+inspectContainer().catch(() => undefined)</code></pre>
+  </div>
+
+  <div class="col">
+    <div class="col-head">The Testing Crater</div>
+    <p>Seven test files exist, all inside <code>test/control/</code>. The control platform &mdash; CommandCenter, MissionManager, SquadManager, RoleManager, MarkerStore &mdash; has basic coverage. Everything else has none.</p>
+
+    <table class="evidence-table">
+      <tr><th>Module</th><th>Lines</th><th>Tests</th></tr>
+      <tr><td><code>BotInstance.ts</code></td><td>1,561</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>api.ts</code></td><td>1,336</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>VoyagerLoop.ts</code></td><td>879</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>CodeExecutor.ts</code></td><td>540</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>BuildCoordinator.ts</code></td><td>~500</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>ActionAgent.ts</code></td><td>~300</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>All LLM clients</code></td><td>~400</td><td><span class="redink">0%</span></td></tr>
+      <tr><td><code>All action primitives</code></td><td>~600</td><td><span class="redink">0%</span></td></tr>
+    </table>
+
+    <p>The three most complex files &mdash; BotInstance, VoyagerLoop, CodeExecutor &mdash; total <strong>2,980 lines with zero tests</strong>. Every refactor is a blind bet.</p>
+
+    <div class="col-subhead">Code Duplication</div>
+    <p><strong>Pause/resume logic</strong> duplicated identically across BotInstance and VoyagerLoop. <strong>Container error handling</strong> copy-pasted 3 times in container.ts. <strong>Mission status updates</strong> repeated 5 times instead of extracted. <strong>Position formatting</strong> (<code>.toFixed(1)</code>) scattered across 5+ files.</p>
+
+    <div class="col-subhead">Magic Numbers</div>
+    <p>Hardcoded constants throughout: <code>3000</code> chat cooldown, <code>600000</code> reflection interval, <code>12 * 20</code> smelting ticks, <code>32</code> block mining radius, <code>[512, 1024, 2048, 3072]</code> heap thresholds, <code>5</code> max crash retries. None in config.</p>
+
+    <div class="col-subhead">The 1,300-Line API File</div>
+    <p><code>api.ts</code> defines 40+ route handlers inline at module level. Each one repeats the same bot-exists check, the same error handling, the same response formatting. Should be route groups with shared middleware.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  SKILLS & PERSONALITIES                                       -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THE SKILLS LIBRARY &mdash; A GRAVEYARD OF HALLUCINATIONS</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">Generated Skills Call Functions That Don't Exist</div>
+    <p>The Voyager pipeline generates skill code via LLM, then stores it in <code>skills/*.js</code>. The problem: the LLM hallucinates function names. Multiple skills reference <code>mineBlock()</code>, <code>craftItem()</code>, and <code>placeItem()</code> &mdash; functions that <strong>do not exist</strong> in the action library.</p>
+    <pre><code>// skills/craft_a_stone_pickaxe.js
+async function craftAStonePickaxe(bot) {
+  await mineBlock("cobblestone", 3);  // DOESN'T EXIST
+  await craftItem("stone_pickaxe");   // DOESN'T EXIST
+  await placeItem("crafting_table");  // DOESN'T EXIST
+}</code></pre>
+    <p>Every skill in <code>skills/index.json</code> shows <code>successCount: 0</code> and <code>failureCount: 1</code> with optimistic "quality" scores of 0.6-0.7. The critic agent isn't catching these failures.</p>
+    <p>Additionally, there are dozens of near-duplicates: <code>craft_a_stone_pickaxe.js</code>, <code>craft_1_stone_pickaxe.js</code>, <code>craft_1_stone_pickaxe_using.js</code> &mdash; no de-duplication.</p>
+    <p><span class="stamp">CONDEMNED</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">Personalities Are a Beautiful Lie</div>
+    <p>Six personality types &mdash; merchant, guard, explorer, farmer, blacksmith, elder &mdash; each with evocative descriptions. The merchant "loves trading, haggling, and rare goods." The guard is "protective, suspicious of strangers." The farmer is a "cheerful crop tender."</p>
+    <p>In reality, every personality uses <strong>identical action libraries, identical task selection, identical inventory management</strong>. The only difference is a <code>systemPromptFragment</code> that changes the chat style.</p>
+    <table class="evidence-table">
+      <tr><th>Personality</th><th>Promise vs. Reality</th></tr>
+      <tr><td>Merchant</td><td class="redink">No trading action exists</td></tr>
+      <tr><td>Guard</td><td class="redink">No patrol logic, same combat as everyone</td></tr>
+      <tr><td>Farmer</td><td class="redink">No crop rotation, no animal breeding</td></tr>
+      <tr><td>Blacksmith</td><td class="redink">No enchanting, no repair, no advanced crafting</td></tr>
+      <tr><td>Explorer</td><td class="redink">No mapping, no landmarks, same wander</td></tr>
+      <tr><td>Elder</td><td class="redink">Different chat tone only</td></tr>
+    </table>
+    <p style="margin-top:12px"><strong>Root cause:</strong> <code>PersonalityType.ts</code> only modifies the chat system prompt. Personality should drive <em>task selection priority</em>, <em>behavioral triggers</em>, and <em>specialized action sets</em>.</p>
+    <p><span class="stamp">COSMETIC ONLY</span></p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  LLM / AI                                                     -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THE AI BRAIN &mdash; FUNCTIONAL BUT FRAGILE</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-3">
+  <div class="col">
+    <div class="col-head">What Works</div>
+    <p>Clean <code>LLMClient</code> interface abstracts Anthropic and Gemini. Adding a provider means implementing one interface. System prompts are well-structured with context, inventory, and blocker state. The dual-provider architecture is genuinely good.</p>
+    <p><span class="stamp green">SOLID</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">No Retry, No Backoff</div>
+    <p>A transient 429 or 503 from the LLM API becomes a permanent task failure. Hard 60-second timeout with zero retry. No exponential backoff. No circuit breaker for cascading failures. Multiple bots can flood the API simultaneously with no queue or coordination.</p>
+    <p><span class="stamp">FRAGILE</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">No Output Validation</div>
+    <p>LLM-generated code is executed without AST validation against the known action API. If the LLM hallucinates function names (it does &mdash; see skills), broken code enters the skill library permanently. Thinking responses from Gemini are silently discarded at <code>GeminiClient.ts:151</code>.</p>
+    <p><span class="stamp">DANGEROUS</span></p>
+  </div>
+</div>
+
+<table class="evidence-table" style="margin-top:20px;">
+  <thead>
+    <tr><th>Error Scenario</th><th>Current Behavior</th><th>Should Be</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>API timeout (60s)</td><td>Throw, task fails permanently</td><td>Retry 3x with exponential backoff</td></tr>
+    <tr><td>Rate limit (429)</td><td>Treated as any other error</td><td>Wait for rate limit reset, then retry</td></tr>
+    <tr><td>Server error (503)</td><td>Task fails permanently</td><td>Retry with backoff, circuit breaker after 5</td></tr>
+    <tr><td>Malformed response</td><td>Runtime parse error</td><td>Schema validation, retry with simpler prompt</td></tr>
+    <tr><td>Hallucinated functions</td><td>Saved to skill library with quality score</td><td>AST check against action API, reject</td></tr>
+    <tr><td>Cost overrun</td><td>No tracking whatsoever</td><td>Token counter + budget alerts per bot</td></tr>
+  </tbody>
+</table>
+
+<!-- ============================================================ -->
+<!--  DEVOPS                                                       -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>DEPLOYMENT &amp; OPERATIONS</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-3">
+  <div class="col">
+    <div class="col-head">No Container, No CI</div>
+    <p>No Dockerfile. No docker-compose. No CI/CD pipeline. Deployment is <code>node dist/index.js > /tmp/dyobot.log &amp; disown</code>. The watchdog is nice but this isn't production infrastructure.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Flat-File Everything</div>
+    <p>All persistence is JSON files in <code>data/</code>. Atomic writes via temp file + rename (good). But no transaction safety across files, no read-before-write locking, unbounded growth with no TTL cleanup. Fine for &lt;20 bots. Will break at scale.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Socket.IO Flooding</div>
+    <p>Every 10 seconds, all bots emit position/health/state to all connected clients individually. With 50 bots and 20 clients: 50,000 messages/minute. Should batch into single <code>bots:batch-update</code> event.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  THE DEBATE TRANSCRIPT                                        -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>ROUNDTABLE TRANSCRIPT &mdash; SELECTED EXCHANGES</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="transcript">
+  <div class="transcript-header">PROCEEDINGS OF THE 30-ENGINEER ROUNDTABLE &mdash; APRIL 5, 2026</div>
+  <div class="transcript-body">
+    <div class="tx-line">
+      <div class="tx-speaker mc">MC Players<br>(Speedrunner)</div>
+      <div class="tx-text">This bot would die collecting wood. It doesn't eat, doesn't select tools, walks off cliffs. The personality system is cute but useless when the bot drowns in a 2-block pond. <strong>Fix survival basics before adding squad formations.</strong></div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker eng">SWE Panel<br>(Architecture)</div>
+      <div class="tx-text">Respectfully disagree on priority. The 157 <code>any</code> types and zero tests on core modules are a bigger risk. Every refactor to add gameplay features will introduce regressions you can't catch. <strong>Type safety and tests first, then gameplay.</strong></div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker fs">Full-Stack<br>(Security)</div>
+      <div class="tx-text">Both of you are wrong about priority. There's a live API key in the repo. There's zero auth on the API. There's a path traversal vulnerability. <strong>None of your features matter if someone reads arbitrary files off the server.</strong> Security first. Period.</div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker eng">SWE Panel<br>(Testing Lead)</div>
+      <div class="tx-text">The security lead is right about the API key &mdash; that's a 15-minute fix. But the bigger pattern is that BotInstance is 1,561 lines with zero tests. VoyagerLoop is 879 lines with zero tests. <strong>You can't safely add anything to code you can't verify.</strong></div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker mc">MC Players<br>(Builder)</div>
+      <div class="tx-text">The building system uses <code>/setblock</code> commands. That's cheating. On any server without operator privileges, the entire build system is non-functional. How did this pass review?</div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker fs">Full-Stack<br>(DevOps)</div>
+      <div class="tx-text">No Dockerfile, no CI/CD, deployment is a bash one-liner with <code>&amp; disown</code>. Before we scale to 50 bots or add features, we need containerization and actual process management.</div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker mc">MC Players<br>(Farmer)</div>
+      <div class="tx-text">The personalities are false advertising. The "farmer" has no crop rotation, no animal breeding, no farm layout optimization. The "merchant" can't trade. Either remove the personality promises or implement the behaviors behind them.</div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker eng">SWE Panel<br>(LLM Lead)</div>
+      <div class="tx-text">The skill library is generating broken code. Skills reference <code>mineBlock()</code> and <code>craftItem()</code> which don't exist. The LLM is hallucinating and the critic isn't catching it. <strong>We need pre-execution AST validation against the known action API.</strong></div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker fs">Full-Stack<br>(API Design)</div>
+      <div class="tx-text"><code>api.ts</code> is 1,336 lines of copy-pasted route handlers, each repeating the same bot-exists check and error handling. This file needs a complete refactor into route groups with middleware. It's the most-touched file and the hardest to review.</div>
+    </div>
+    <div class="tx-line">
+      <div class="tx-speaker all">ALL PANELS<br>(Consensus)</div>
+      <div class="tx-text"><strong>AGREED:</strong> (1) Fix security holes immediately. (2) Add type safety and basic test coverage. (3) Fix gameplay survival basics. (4) Refactor the API layer. (5) Make personalities affect behavior. Do not add new features until the foundation is solid.</div>
+    </div>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  ROADMAP GANTT                                                -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>EXECUTION ROADMAP</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="gantt-weeks">
+  <div></div>
+  <div class="gantt-week-track">
+    <span>Wk 1</span><span>Wk 2</span><span>Wk 3</span><span>Wk 4</span><span>Wk 5</span><span>Wk 6</span><span>Wk 7</span><span>Wk 8</span><span>Wk 9</span><span>Wk 10+</span>
+  </div>
+</div>
+
+<div class="gantt">
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 0: Emergency</div>
+    <div class="gantt-track"><div class="gantt-bar gb-emergency">~6 hrs</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 1: Foundation</div>
+    <div class="gantt-track"><div class="gantt-bar gb-foundation">Types + Tests + Error Handling</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 2: Gameplay</div>
+    <div class="gantt-track"><div class="gantt-bar gb-gameplay">Survival Basics</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 3: Refactor</div>
+    <div class="gantt-track"><div class="gantt-bar gb-refactor">API + Architecture</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 4: Intelligence</div>
+    <div class="gantt-track"><div class="gantt-bar gb-intelligence">Skills + Personalities</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 5: Advanced</div>
+    <div class="gantt-track"><div class="gantt-bar gb-advanced">Ongoing</div></div>
+  </div>
+</div>
+
+<div class="columns-3" style="border-top:none;padding-top:10px;">
+  <div class="col">
+    <div class="col-subhead">Phase 0 &mdash; This Week</div>
+    <p>Revoke API key. Scrub git history. Fix path traversal. Add rate limiting. Input validation. Move Gemini key to auth header. Make OWNER_PLAYER configurable.</p>
+  </div>
+  <div class="col">
+    <div class="col-subhead">Phase 1 &mdash; Weeks 2-3</div>
+    <p>Create mineflayer type definitions. Replace silent catches with logging. Unit tests for BotInstance, VoyagerLoop, CodeExecutor. Zod config validation. LLM retry with backoff. Unhandled rejection handler. Extract magic numbers.</p>
+  </div>
+  <div class="col">
+    <div class="col-subhead">Phase 2 &mdash; Weeks 4-5</div>
+    <p>Implement eating/hunger. Tool selection before mining. Replace /setblock with placeBlock. Hazard avoidance in pathfinder. Armor equipping. Weapon selection. Bed/sleep. Inventory management.</p>
+  </div>
+</div>
+<div class="columns-3" style="border-top:none;padding-top:0;">
+  <div class="col">
+    <div class="col-subhead">Phase 3 &mdash; Weeks 6-7</div>
+    <p>Split api.ts into route groups with middleware. Decompose handleChat into focused methods. Command handler registry pattern. Shared PauseController. Break BotInstance/VoyagerLoop coupling. Dockerfile. Batch Socket.IO. Graceful shutdown timeout.</p>
+  </div>
+  <div class="col">
+    <div class="col-subhead">Phase 4 &mdash; Weeks 8-10</div>
+    <p>AST validation for skills. De-duplicate skills library. Personality-driven task selection. Guard patrol logic. Farmer crop optimization. LLM response schemas. Token counting. Circuit breaker.</p>
+  </div>
+  <div class="col">
+    <div class="col-subhead">Phase 5 &mdash; Week 11+</div>
+    <p>Enchanting workflow. Villager trading. Brewing/potions. Fishing. Furnace variants. Dimension awareness. Mob-specific combat. JWT auth. Database migration from flat files.</p>
+  </div>
+</div>
+
+<!-- ============================================================ -->
+<!--  ACTION REGISTER                                              -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>COMPLETE ACTION REGISTER</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="register">
+  <div class="register-item reg-head">
+    <span>#</span><span>Action</span><span>Severity</span><span>Effort</span><span>File(s)</span>
+  </div>
+  <div class="register-item"><span class="ri-num">01</span><span>Revoke exposed Google API key, scrub git history</span><span class="ri-sev crit">Critical</span><span class="ri-effort">15 min</span><span class="ri-files"><code>.env</code></span></div>
+  <div class="register-item"><span class="ri-num">02</span><span>Fix path traversal in skill reading endpoint</span><span class="ri-sev crit">Critical</span><span class="ri-effort">30 min</span><span class="ri-files"><code>api.ts:331</code></span></div>
+  <div class="register-item"><span class="ri-num">03</span><span>Add rate limiting middleware</span><span class="ri-sev crit">Critical</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>api.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">04</span><span>Add input validation/sanitization on all endpoints</span><span class="ri-sev crit">Critical</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>api.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">05</span><span>Replace all 6 silent catch blocks with error logging</span><span class="ri-sev crit">Critical</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>BuildCoord, SkillLib, WorldMem</code></span></div>
+  <div class="register-item"><span class="ri-num">06</span><span>Move Gemini API key from URL to Authorization header</span><span class="ri-sev high">High</span><span class="ri-effort">30 min</span><span class="ri-files"><code>GeminiClient.ts:23</code></span></div>
+  <div class="register-item"><span class="ri-num">07</span><span>Create <code>types/mineflayer-extensions.d.ts</code></span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>types/ + BotInstance</code></span></div>
+  <div class="register-item"><span class="ri-num">08</span><span>Unit tests for BotInstance, VoyagerLoop, CodeExecutor</span><span class="ri-sev high">High</span><span class="ri-effort">2 days</span><span class="ri-files"><code>test/</code></span></div>
+  <div class="register-item"><span class="ri-num">09</span><span>Implement LLM retry with exponential backoff</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>Anthropic/GeminiClient</code></span></div>
+  <div class="register-item"><span class="ri-num">10</span><span>Make OWNER_PLAYER configurable</span><span class="ri-sev high">High</span><span class="ri-effort">30 min</span><span class="ri-files"><code>BotInstance.ts:42</code></span></div>
+  <div class="register-item"><span class="ri-num">11</span><span>Add zod config validation at startup</span><span class="ri-sev high">High</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>config.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">12</span><span>Implement food consumption and hunger management</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>BotInstance, actions/</code></span></div>
+  <div class="register-item"><span class="ri-num">13</span><span>Add tool selection before mining</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>mineBlock.ts, attack.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">14</span><span>Replace <code>/setblock</code> with proper block placement</span><span class="ri-sev high">High</span><span class="ri-effort">1 day</span><span class="ri-files"><code>buildSchematic.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">15</span><span>Add skill validation (AST check against action API)</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>SkillLibrary, CodeExecutor</code></span></div>
+  <div class="register-item"><span class="ri-num">16</span><span>Split api.ts into route groups with middleware</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>api.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">17</span><span>Batch Socket.IO events into single update</span><span class="ri-sev med">Medium</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>socketEvents.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">18</span><span>Add Dockerfile + docker-compose.yml</span><span class="ri-sev med">Medium</span><span class="ri-effort">3 hrs</span><span class="ri-files">New files</span></div>
+  <div class="register-item"><span class="ri-num">19</span><span>Move all magic numbers to config or named constants</span><span class="ri-sev med">Medium</span><span class="ri-effort">3 hrs</span><span class="ri-files">Multiple</span></div>
+  <div class="register-item"><span class="ri-num">20</span><span>De-duplicate skills library</span><span class="ri-sev med">Medium</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>skills/</code></span></div>
+  <div class="register-item"><span class="ri-num">21</span><span>Add graceful shutdown with 10s timeout</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>index.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">22</span><span>Make personalities affect task selection behavior</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>PersonalityType, Curriculum</code></span></div>
+  <div class="register-item"><span class="ri-num">23</span><span>Add hazard avoidance to pathfinder</span><span class="ri-sev med">Medium</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>walkTo.ts, wander.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">24</span><span>Implement data file TTL cleanup</span><span class="ri-sev low">Low</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>SocialMemory, qa_cache</code></span></div>
+  <div class="register-item"><span class="ri-num">25</span><span>Add JWT authentication to API</span><span class="ri-sev low">Low</span><span class="ri-effort">1 day</span><span class="ri-files"><code>api.ts</code></span></div>
+</div>
+
+<!-- ============================================================ -->
+<!--  CLOSING                                                      -->
+<!-- ============================================================ -->
+<div class="pullquote" style="margin-top:40px;">
+  &ldquo;The bones are excellent. The architecture proves this team can build complex systems. Worker threads, Voyager loops, fleet control, social memory &mdash; these are not trivial. But the bot can't eat, can't pick the right tool, builds with cheat commands, and its learned skills call functions that don't exist. Patch the foundation and this becomes a 9/10 project.&rdquo;
+  <span class="pq-attr">&mdash; Joint Statement, All 40 Engineers</span>
+</div>
+
+</div><!-- /broadsheet -->
+
+<footer class="paper-footer">
+  <p>The DyoBot Dossier &mdash; Engineering Audit Report</p>
+  <p>Filed April 5, 2026 &mdash; 30 Auditors + 10 Sr. Web Developers</p>
+  <p>Commit a33bcdd on main &mdash; packetloss404/mc-server-bot</p>
+  <p style="margin-top:12px;opacity:0.5;">This document is classified for internal use only.</p>
+</footer>
+
+</body>
+</html>

@@ -133,6 +133,26 @@ export interface TerrainData {
   blocks: string[];
 }
 
+export interface MarkerRecord {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  dimension?: string;
+  tags?: string[];
+  createdAt: string;
+}
+
+export interface RouteRecord {
+  id: string;
+  name: string;
+  description?: string;
+  waypointIds: string[];
+  loop?: boolean;
+  createdAt: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -203,5 +223,21 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
+    }),
+
+  // Markers
+  getMarkers: () => fetchJSON<{ markers: MarkerRecord[] }>('/api/markers'),
+  createMarker: (marker: { name: string; x: number; y: number; z: number; dimension?: string; tags?: string[] }) =>
+    fetchJSON<{ marker: MarkerRecord }>('/api/markers', {
+      method: 'POST',
+      body: JSON.stringify(marker),
+    }),
+
+  // Routes
+  getRoutes: () => fetchJSON<{ routes: RouteRecord[] }>('/api/routes'),
+  createRoute: (route: { name: string; description?: string; waypointIds: string[]; loop?: boolean }) =>
+    fetchJSON<{ route: RouteRecord }>('/api/routes', {
+      method: 'POST',
+      body: JSON.stringify(route),
     }),
 };

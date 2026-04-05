@@ -68,7 +68,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // ── Routine manager (agent 2-1) ──
-  const routineManager = new RoutineManager();
+  const routineManager = new RoutineManager(botManager);
 
   // ── Template manager (agent 2-2) ──
   const templateManager = new TemplateManager();
@@ -757,8 +757,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     try {
       // If the CommanderService supports parseWithClarification, use it;
       // otherwise fall back to a plain re-parse with the enriched input.
-      const plan = typeof (commanderService as any).parseWithClarification === 'function'
-        ? await (commanderService as any).parseWithClarification(originalInput.trim(), clarifications)
+      const plan = commanderService.parseWithClarification
+        ? await commanderService.parseWithClarification(originalInput.trim(), clarifications)
         : await commanderService.parse(
             originalInput.trim() + ' [clarifications: ' + JSON.stringify(clarifications) + ']',
           );
@@ -780,8 +780,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Commander suggestions (agent 2-9 / 2-10)
   app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
-    if (typeof (commanderService as any).getSuggestedCommands === 'function') {
-      res.json({ suggestions: (commanderService as any).getSuggestedCommands() });
+    if (commanderService.getSuggestedCommands) {
+      res.json({ suggestions: commanderService.getSuggestedCommands() });
     } else {
       res.json({ suggestions: [] });
     }
@@ -941,7 +941,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Update custom template
   app.patch('/api/templates/:id', (req: Request, res: Response) => {
-    const updated = templateManager.update(req.params.id as string, req.body);
+    const { id: _id, builtIn: _bi, ...patch } = req.body;
+    const updated = templateManager.update(req.params.id as string, patch);
     if (!updated) {
       res.status(404).json({ error: 'Template not found or is built-in' });
       return;

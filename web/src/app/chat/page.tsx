@@ -22,6 +22,7 @@ export default function ChatPage() {
   const [adminPlayer, setAdminPlayer] = useState('');
   const [sending, setSending] = useState(false);
   const [search, setSearch] = useState('');
+  const [loading, setLoading] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -31,24 +32,31 @@ export default function ChatPage() {
 
   useEffect(() => {
     const loadAll = async () => {
-      const allThreads: Thread[] = [];
-      for (const bot of bots) {
-        try {
-          const data = await api.getBotConversations(bot.name);
-          for (const [player, messages] of Object.entries(data.conversations)) {
-            const lastMsg = messages[messages.length - 1];
-            allThreads.push({
-              botName: bot.name,
-              playerName: player,
-              messages,
-              lastActivity: lastMsg?.timestamp ?? 0,
-            });
+      const results = await Promise.all(
+        bots.map(async (bot) => {
+          try {
+            const data = await api.getBotConversations(bot.name);
+            const botThreads: Thread[] = [];
+            for (const [player, messages] of Object.entries(data.conversations)) {
+              const lastMsg = messages[messages.length - 1];
+              botThreads.push({
+                botName: bot.name,
+                playerName: player,
+                messages,
+                lastActivity: lastMsg?.timestamp ?? 0,
+              });
+            }
+            return botThreads;
+          } catch {
+            return [];
           }
-        } catch { /* ignore */ }
-      }
+        }),
+      );
+      const allThreads = results.flat();
       // Sort by most recent activity
       allThreads.sort((a, b) => b.lastActivity - a.lastActivity);
       setThreads(allThreads);
+      setLoading(false);
     };
     loadAll();
     const interval = setInterval(loadAll, 5000);
@@ -107,7 +115,12 @@ export default function ChatPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto">
-          {filteredThreads.length === 0 ? (
+          {loading ? (
+            <div className="px-4 py-8 text-center">
+              <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-2" />
+              <p className="text-xs text-zinc-600">Loading conversations...</p>
+            </div>
+          ) : filteredThreads.length === 0 ? (
             <p className="px-4 py-8 text-xs text-zinc-600 text-center">
               {search ? 'No matching conversations' : 'No conversations yet'}
             </p>

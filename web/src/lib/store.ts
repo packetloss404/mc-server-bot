@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, OverrideRecord, Mission } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +138,39 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// ─── Role & Override Store ───
+
+interface RoleStore {
+  overrides: Record<string, OverrideRecord>;
+  missions: Mission[];
+  setOverrides: (overrides: Record<string, OverrideRecord>) => void;
+  setMissions: (missions: Mission[]) => void;
+  getOverrideForBot: (botName: string) => OverrideRecord | undefined;
+  getBlockedMissionForBot: (botName: string) => Mission | undefined;
+}
+
+export const useRoleStore = create<RoleStore>((set, get) => ({
+  overrides: {},
+  missions: [],
+
+  setOverrides: (overrides) => set({ overrides }),
+
+  setMissions: (missions) => set({ missions }),
+
+  getOverrideForBot: (botName: string) => {
+    const key = botName.toLowerCase();
+    const overrides = get().overrides;
+    // Try exact key match and case-insensitive match
+    return overrides[botName] ?? overrides[key] ??
+      Object.values(overrides).find((o) => o.botName.toLowerCase() === key);
+  },
+
+  getBlockedMissionForBot: (botName: string) => {
+    const key = botName.toLowerCase();
+    return get().missions.find(
+      (m) => m.botName.toLowerCase() === key && m.status === 'running' && m.blockedReason
+    );
+  },
 }));

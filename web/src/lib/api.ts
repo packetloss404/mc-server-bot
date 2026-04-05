@@ -133,6 +133,35 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Role / Override types
+export interface RoleAssignment {
+  id: string;
+  botName: string;
+  role: string;
+  autonomyLevel: string;
+  assignedAt: string;
+}
+
+export interface OverrideRecord {
+  botName: string;
+  reason: string;
+  commandId: string;
+  setAt: number;
+  expiresAt?: number;
+}
+
+// Mission types
+export interface Mission {
+  id: string;
+  botName: string;
+  type: string;
+  status: string;
+  description: string;
+  blockedReason?: string;
+  createdAt: number;
+  startedAt?: number;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +233,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Role overrides
+  getRoleAssignments: () =>
+    fetchJSON<{ assignments: RoleAssignment[] }>('/api/roles/assignments').catch(() => ({ assignments: [] })),
+  getBotOverride: (botName: string) =>
+    fetchJSON<{ override: OverrideRecord | null }>(`/api/bots/${botName}/override`).catch(() => ({ override: null })),
+  getAllOverrides: () =>
+    fetchJSON<{ overrides: Record<string, OverrideRecord> }>('/api/roles/overrides').catch(() => ({ overrides: {} })),
+
+  // Missions
+  getMissions: () =>
+    fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
 };

@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useRoleStore } from '@/lib/store';
 import { api } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
@@ -13,11 +13,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     incrementUnreadChats,
   } = useBotStore();
 
+  const { setOverrides, setMissions } = useRoleStore();
+
   useEffect(() => {
     // Initial fetch
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    api.getAllOverrides().then((data) => setOverrides(data.overrides)).catch(() => {});
+    api.getMissions().then((data) => setMissions(data.missions)).catch(() => {});
 
     // Poll bots every 5s as a fallback
     const pollInterval = setInterval(() => {
@@ -32,6 +36,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // Poll players every 10s
     const playerInterval = setInterval(() => {
       api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    }, 10000);
+
+    // Poll overrides and missions every 10s
+    const roleInterval = setInterval(() => {
+      api.getAllOverrides().then((data) => setOverrides(data.overrides)).catch(() => {});
+      api.getMissions().then((data) => setMissions(data.missions)).catch(() => {});
     }, 10000);
 
     // Socket.IO
@@ -90,6 +100,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
       clearInterval(playerInterval);
+      clearInterval(roleInterval);
       socket.off('connect');
       socket.off('disconnect');
       socket.off('bot:position');
@@ -108,7 +119,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
-    incrementUnreadChats,
+    incrementUnreadChats, setOverrides, setMissions,
   ]);
 
   return <>{children}</>;

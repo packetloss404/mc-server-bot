@@ -3,6 +3,7 @@
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import type { BotLiveData } from '@/lib/store';
+import { useRoleStore } from '@/lib/store';
 import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 
 function HealthBar({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
@@ -30,6 +31,9 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
   const stateLabel = STATE_LABELS[bot.state] ?? bot.state;
   const isActive = !['IDLE', 'DISCONNECTED', 'SPAWNING'].includes(bot.state);
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
+
+  const override = useRoleStore((s) => s.getOverrideForBot(bot.name));
+  const blockedMission = useRoleStore((s) => s.getBlockedMissionForBot(bot.name));
 
   return (
     <motion.div
@@ -62,18 +66,45 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
                 <p className="text-[11px] text-zinc-500 capitalize">{bot.personality}</p>
               </div>
             </div>
-            <span
-              className="inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-md uppercase tracking-wide shrink-0"
-              style={{ color: stateColor, backgroundColor: `${stateColor}12` }}
-            >
-              {isActive && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              {/* Override badge */}
+              {override && (
                 <span
-                  className="w-1.5 h-1.5 rounded-full animate-pulse"
-                  style={{ backgroundColor: stateColor }}
-                />
+                  className="inline-flex items-center gap-1 text-[10px] font-medium px-2 py-1 rounded-md uppercase tracking-wide"
+                  style={{ color: '#F59E0B', backgroundColor: '#F59E0B12' }}
+                  title={override.reason}
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                  Override
+                </span>
               )}
-              {stateLabel}
-            </span>
+              {/* Blocked mission warning */}
+              {blockedMission && (
+                <span
+                  className="inline-flex items-center text-[10px] font-medium px-1.5 py-1 rounded-md"
+                  style={{ color: '#EF4444', backgroundColor: '#EF444412' }}
+                  title={`Blocked: ${blockedMission.blockedReason}`}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0zM12 9v4m0 4h.01" />
+                  </svg>
+                </span>
+              )}
+              <span
+                className="inline-flex items-center gap-1.5 text-[10px] font-medium px-2 py-1 rounded-md uppercase tracking-wide"
+                style={{ color: stateColor, backgroundColor: `${stateColor}12` }}
+              >
+                {isActive && (
+                  <span
+                    className="w-1.5 h-1.5 rounded-full animate-pulse"
+                    style={{ backgroundColor: stateColor }}
+                  />
+                )}
+                {stateLabel}
+              </span>
+            </div>
           </div>
 
           {/* Health / Hunger */}

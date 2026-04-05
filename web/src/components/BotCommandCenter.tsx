@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
 import { useBotStore } from '@/lib/store';
@@ -20,7 +20,14 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   const [showWalkInput, setShowWalkInput] = useState(false);
   const [showFollowInput, setShowFollowInput] = useState(false);
   const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
+  const feedbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
+
+  useEffect(() => {
+    return () => {
+      if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    };
+  }, []);
 
   const exec = async (label: string, fn: () => Promise<any>) => {
     setLoading(label);
@@ -32,7 +39,8 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
       setFeedback({ msg: e.message || 'Failed', ok: false });
     }
     setLoading(null);
-    setTimeout(() => setFeedback(null), 3000);
+    if (feedbackTimer.current) clearTimeout(feedbackTimer.current);
+    feedbackTimer.current = setTimeout(() => setFeedback(null), 3000);
   };
 
   const handleWalkTo = () => {

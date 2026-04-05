@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useBotStore } from '@/lib/store';
@@ -20,6 +20,13 @@ export default function ManagePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [taskBot, setTaskBot] = useState<string | null>(null);
   const [taskDesc, setTaskDesc] = useState('');
+  const successTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (successTimer.current) clearTimeout(successTimer.current);
+    };
+  }, []);
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -30,7 +37,8 @@ export default function ManagePage() {
       await api.createBot(newName.trim(), newPersonality, newMode);
       setSuccess(`Bot "${newName.trim()}" created successfully`);
       setNewName('');
-      setTimeout(() => setSuccess(null), 3000);
+      if (successTimer.current) clearTimeout(successTimer.current);
+      successTimer.current = setTimeout(() => setSuccess(null), 3000);
     } catch (e: any) {
       setError(e.message);
     }

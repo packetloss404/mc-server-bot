@@ -6,6 +6,8 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { RoleManager } from '../control/RoleManager';
+import { SquadManager } from '../control/SquadManager';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -379,6 +381,40 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
     io.emit('activity', event);
     res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  FLEET METRICS
+  // ═══════════════════════════════════════
+
+  // Lazily instantiated fleet managers — created on first metrics request
+  let roleManager: RoleManager | null = null;
+  let squadManager: SquadManager | null = null;
+
+  function getRoleManager(): RoleManager {
+    if (!roleManager) {
+      roleManager = new RoleManager(io);
+    }
+    return roleManager;
+  }
+
+  function getSquadManager(): SquadManager {
+    if (!squadManager) {
+      squadManager = new SquadManager(io);
+    }
+    return squadManager;
+  }
+
+  app.get('/api/metrics', (_req: Request, res: Response) => {
+    const roleMetrics = getRoleManager().getMetrics();
+    const squadMetrics = getSquadManager().getMetrics();
+
+    res.json({
+      fleet: {
+        roles: roleMetrics,
+        squads: squadMetrics,
+      },
+    });
   });
 
   return { app, httpServer, io, eventLog };

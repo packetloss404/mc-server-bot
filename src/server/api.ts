@@ -7,19 +7,37 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
 import { logger } from '../util/logger';
+import { LLMClient } from '../ai/LLMClient';
+import { CommandCenter } from '../control/CommandCenter';
+import { MissionManager } from '../control/MissionManager';
+import { MarkerStore } from '../control/MarkerStore';
+import { SquadManager } from '../control/SquadManager';
+import { RoleManager } from '../control/RoleManager';
+import { RoutineManager } from '../control/RoutineManager';
+import { TemplateManager } from '../control/TemplateManager';
+import { CommanderService } from '../control/CommanderService';
 
 export interface APIServerResult {
   app: express.Application;
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  // Expose managers for shutdown wiring
+  commandCenter: CommandCenter;
+  missionManager: MissionManager;
+  markerStore: MarkerStore;
+  squadManager: SquadManager;
+  roleManager: RoleManager;
+  routineManager: RoutineManager;
+  templateManager: TemplateManager;
+  commanderService: CommanderService;
 }
 
-export function createAPIServer(botManager: BotManager): APIServerResult {
+export function createAPIServer(botManager: BotManager, llmClient?: LLMClient | null): APIServerResult {
   const app = express();
   const httpServer = http.createServer(app);
 
-  // CORS — allow the Next.js dev server and common local ports
+  // CORS -- allow the Next.js dev server and common local ports
   app.use(cors({
     origin: [
       'http://localhost:3000',
@@ -58,9 +76,33 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
   });
 
-  // ═══════════════════════════════════════
-  //  ENDPOINTS — all use cached worker state
-  // ═══════════════════════════════════════
+  // ======================================================
+  //  INSTANTIATE CONTROL PLATFORM MANAGERS
+  // ======================================================
+
+  const markerStore = new MarkerStore(io);
+  const squadManager = new SquadManager(io);
+  const roleManager = new RoleManager(io);
+  const commandCenter = new CommandCenter(botManager, io, markerStore);
+  const missionManager = new MissionManager(botManager, io);
+  const routineManager = new RoutineManager(botManager);
+  const templateManager = new TemplateManager();
+  const commanderService = new CommanderService({ llmClient: llmClient ?? null });
+
+  // Wire cross-references
+  commandCenter.setRoleManager(roleManager);
+  missionManager.setCommandCenter(commandCenter);
+  missionManager.setSquadManager(squadManager);
+  roleManager.setMissionManager(missionManager);
+
+  // Periodic mission progress check
+  const missionCheckInterval = setInterval(() => {
+    missionManager.checkMissionProgress();
+  }, 30_000);
+
+  // ======================================================
+  //  ENDPOINTS -- existing bot CRUD and status
+  // ======================================================
 
   // Health check
   app.get('/api/status', (_req: Request, res: Response) => {
@@ -173,11 +215,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ handled: true });
   });
 
-  // ═══════════════════════════════════════
+  // ======================================================
   //  DASHBOARD ENDPOINTS
-  // ═══════════════════════════════════════
+  // ======================================================
 
-  // Detailed bot status (enriched) — uses cached state from worker
+  // Detailed bot status (enriched) -- uses cached state from worker
   app.get('/api/bots/:name/detailed', (req: Request, res: Response) => {
     const handle = botManager.getWorker(req.params.name as string);
     if (!handle) {
@@ -192,7 +234,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ bot: detailed });
   });
 
-  // Bot inventory — from cached detailed status
+  // Bot inventory -- from cached detailed status
   app.get('/api/bots/:name/inventory', (req: Request, res: Response) => {
     const handle = botManager.getWorker(req.params.name as string);
     if (!handle) {
@@ -203,7 +245,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ inventory: detailed?.inventory || [] });
   });
 
-  // Bot relationships (affinities) — read directly from main thread manager
+  // Bot relationships (affinities)
   app.get('/api/bots/:name/relationships', (req: Request, res: Response) => {
     const name = req.params.name as string;
     const handle = botManager.getWorker(name);
@@ -215,7 +257,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ relationships: affinities });
   });
 
-  // Bot conversations — read directly from main thread manager
+  // Bot conversations
   app.get('/api/bots/:name/conversations', (req: Request, res: Response) => {
     const name = req.params.name as string;
     const handle = botManager.getWorker(name);
@@ -227,7 +269,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ conversations });
   });
 
-  // Bot tasks — from cached detailed status
+  // Bot tasks -- from cached detailed status
   app.get('/api/bots/:name/tasks', (req: Request, res: Response) => {
     const handle = botManager.getWorker(req.params.name as string);
     if (!handle) {
@@ -248,13 +290,13 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
   });
 
-  // Full social graph (all bots, all players) — direct from main thread
+  // Full social graph
   app.get('/api/relationships', (_req: Request, res: Response) => {
     const allAffinities = botManager.getAffinityManager().getAll();
     res.json({ relationships: allAffinities });
   });
 
-  // Global skill library — read from disk
+  // Global skill library -- read from disk
   app.get('/api/skills', (_req: Request, res: Response) => {
     try {
       const indexPath = path.join(process.cwd(), 'skills', 'index.json');
@@ -274,7 +316,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
   });
 
-  // Single skill with code — read from disk
+  // Single skill with code
   app.get('/api/skills/:name', (req: Request, res: Response) => {
     const skillName = req.params.name as string;
     const skillPath = path.join(process.cwd(), 'skills', `${skillName}.js`);
@@ -286,7 +328,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ name: skillName, code });
   });
 
-  // Aggregate world state — from first bot's cached detailed status
+  // Aggregate world state
   app.get('/api/world', (_req: Request, res: Response) => {
     const workers = botManager.getAllWorkers();
     for (const w of workers) {
@@ -306,7 +348,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ timeOfDay: null, day: null, isRaining: null, onlineBots: 0 });
   });
 
-  // Shared blackboard state — direct from main thread
+  // Shared blackboard state
   app.get('/api/blackboard', (_req: Request, res: Response) => {
     res.json({ blackboard: botManager.getBlackboardManager().getState() });
   });
@@ -320,7 +362,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ events });
   });
 
-  // Send chat message to a bot (from dashboard) — forward to worker
+  // Send chat message to a bot (from dashboard)
   app.post('/api/bots/:name/chat', (req: Request, res: Response) => {
     const { playerName, message } = req.body;
     if (!playerName || !message) {
@@ -336,7 +378,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  // Queue a task for a bot (from dashboard) — forward to worker
+  // Queue a task for a bot (from dashboard)
   app.post('/api/bots/:name/task', (req: Request, res: Response) => {
     const { description } = req.body;
     if (!description) {
@@ -381,5 +423,437 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ======================================================
+  //  BOT ACTION ROUTES (sendCommand to worker)
+  // ======================================================
+
+  app.post('/api/bots/:name/pause', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('setMode', { pause: true });
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/resume', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('setMode', { pause: false });
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/stop', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('disconnect', {});
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/follow', (req: Request, res: Response) => {
+    const { playerName } = req.body;
+    if (!playerName) { res.status(400).json({ error: 'playerName is required' }); return; }
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('follow', { playerName });
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/walkto', (req: Request, res: Response) => {
+    const { x, y, z } = req.body;
+    if (x == null || y == null || z == null) { res.status(400).json({ error: 'x, y, z are required' }); return; }
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('walkTo', { x, y, z });
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/return-to-base', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('returnToBase', {});
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/unstuck', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('unstuck', {});
+    res.json({ success: true });
+  });
+
+  app.post('/api/bots/:name/equip-best', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) { res.status(404).json({ error: 'Bot not found' }); return; }
+    handle.sendCommand('equipBest', {});
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  PLAYERS & TERRAIN
+  // ======================================================
+
+  app.get('/api/players', (_req: Request, res: Response) => {
+    const workers = botManager.getAllWorkers();
+    const playerSet = new Set<string>();
+    for (const w of workers) {
+      const detailed = w.getCachedDetailedStatus();
+      if (detailed?.world?.players) {
+        for (const p of detailed.world.players) {
+          playerSet.add(typeof p === 'string' ? p : (p as any).name ?? String(p));
+        }
+      }
+    }
+    res.json({ players: Array.from(playerSet) });
+  });
+
+  app.get('/api/terrain', (_req: Request, res: Response) => {
+    // Terrain data is not currently tracked -- return empty
+    res.json({ terrain: null });
+  });
+
+  // ======================================================
+  //  COMMAND CENTER ENDPOINTS
+  // ======================================================
+
+  app.post('/api/commands', async (req: Request, res: Response) => {
+    try {
+      const command = commandCenter.createCommand(req.body);
+      const dispatched = await commandCenter.dispatchCommand(command, req.body.force);
+      res.status(201).json({ command: dispatched });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message ?? 'Failed to create command' });
+    }
+  });
+
+  app.get('/api/commands', (req: Request, res: Response) => {
+    try {
+      const filters: any = {};
+      if (req.query.bot) filters.bot = String(req.query.bot);
+      if (req.query.status) filters.status = String(req.query.status);
+      if (req.query.limit) filters.limit = parseInt(String(req.query.limit));
+      const commands = commandCenter.getCommands(filters);
+      res.json({ commands });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/commands/:id', (req: Request, res: Response) => {
+    const command = commandCenter.getCommand(req.params.id as string);
+    if (!command) { res.status(404).json({ error: 'Command not found' }); return; }
+    res.json({ command });
+  });
+
+  app.post('/api/commands/:id/cancel', (req: Request, res: Response) => {
+    const command = commandCenter.cancelCommand(req.params.id as string, req.body?.reason);
+    if (!command) { res.status(404).json({ error: 'Command not found' }); return; }
+    res.json({ command });
+  });
+
+  // ======================================================
+  //  MISSION ENDPOINTS
+  // ======================================================
+
+  app.post('/api/missions', (req: Request, res: Response) => {
+    try {
+      const mission = missionManager.createMission(req.body);
+      res.status(201).json({ mission });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create mission' });
+    }
+  });
+
+  app.get('/api/missions', (req: Request, res: Response) => {
+    try {
+      const filters: any = {};
+      if (req.query.bot) filters.bot = String(req.query.bot);
+      if (req.query.squad) filters.squad = String(req.query.squad);
+      if (req.query.status) filters.status = String(req.query.status);
+      if (req.query.limit) filters.limit = parseInt(String(req.query.limit));
+      const missions = missionManager.getMissions(filters);
+      res.json({ missions });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.get('/api/missions/:id', (req: Request, res: Response) => {
+    const mission = missionManager.getMission(req.params.id as string);
+    if (!mission) { res.status(404).json({ error: 'Mission not found' }); return; }
+    res.json({ mission });
+  });
+
+  app.post('/api/missions/:id/start', async (req: Request, res: Response) => {
+    try {
+      const mission = await missionManager.startMission(req.params.id as string);
+      if (!mission) { res.status(404).json({ error: 'Mission not found or cannot be started' }); return; }
+      res.json({ mission });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/missions/:id/pause', (req: Request, res: Response) => {
+    const mission = missionManager.pauseMission(req.params.id as string);
+    if (!mission) { res.status(404).json({ error: 'Mission not found or cannot be paused' }); return; }
+    res.json({ mission });
+  });
+
+  app.post('/api/missions/:id/resume', (req: Request, res: Response) => {
+    const mission = missionManager.resumeMission(req.params.id as string);
+    if (!mission) { res.status(404).json({ error: 'Mission not found or cannot be resumed' }); return; }
+    res.json({ mission });
+  });
+
+  app.post('/api/missions/:id/cancel', (req: Request, res: Response) => {
+    const mission = missionManager.cancelMission(req.params.id as string);
+    if (!mission) { res.status(404).json({ error: 'Mission not found or cannot be cancelled' }); return; }
+    res.json({ mission });
+  });
+
+  app.post('/api/missions/:id/retry', (req: Request, res: Response) => {
+    const mission = missionManager.retryMission(req.params.id as string);
+    if (!mission) { res.status(404).json({ error: 'Mission not found or cannot be retried' }); return; }
+    res.json({ mission });
+  });
+
+  // Per-bot mission queue
+  app.get('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const queue = missionManager.getBotMissionQueue(req.params.name as string);
+    res.json({ queue });
+  });
+
+  app.patch('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const { action, missionId, position } = req.body;
+    const success = missionManager.updateBotMissionQueue(req.params.name as string, action, missionId, position);
+    if (!success) { res.status(400).json({ error: 'Failed to update mission queue' }); return; }
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  MARKER ENDPOINTS
+  // ======================================================
+
+  app.get('/api/markers', (_req: Request, res: Response) => {
+    res.json({ markers: markerStore.getMarkers() });
+  });
+
+  app.post('/api/markers', (req: Request, res: Response) => {
+    try {
+      const marker = markerStore.createMarker(req.body);
+      res.status(201).json({ marker });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create marker' });
+    }
+  });
+
+  app.patch('/api/markers/:id', (req: Request, res: Response) => {
+    const marker = markerStore.updateMarker(req.params.id as string, req.body);
+    if (!marker) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ marker });
+  });
+
+  app.delete('/api/markers/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteMarker(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Marker not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  ZONE ENDPOINTS
+  // ======================================================
+
+  app.get('/api/zones', (_req: Request, res: Response) => {
+    res.json({ zones: markerStore.getZones() });
+  });
+
+  app.post('/api/zones', (req: Request, res: Response) => {
+    try {
+      const zone = markerStore.createZone(req.body);
+      res.status(201).json({ zone });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create zone' });
+    }
+  });
+
+  app.patch('/api/zones/:id', (req: Request, res: Response) => {
+    const zone = markerStore.updateZone(req.params.id as string, req.body);
+    if (!zone) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ zone });
+  });
+
+  app.delete('/api/zones/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteZone(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Zone not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  ROUTE ENDPOINTS
+  // ======================================================
+
+  app.get('/api/routes', (_req: Request, res: Response) => {
+    res.json({ routes: markerStore.getRoutes() });
+  });
+
+  app.post('/api/routes', (req: Request, res: Response) => {
+    try {
+      const route = markerStore.createRoute(req.body);
+      res.status(201).json({ route });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create route' });
+    }
+  });
+
+  app.patch('/api/routes/:id', (req: Request, res: Response) => {
+    const route = markerStore.updateRoute(req.params.id as string, req.body);
+    if (!route) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ route });
+  });
+
+  app.delete('/api/routes/:id', (req: Request, res: Response) => {
+    const deleted = markerStore.deleteRoute(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Route not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  SQUAD ENDPOINTS
+  // ======================================================
+
+  app.get('/api/squads', (_req: Request, res: Response) => {
+    res.json({ squads: squadManager.getSquads() });
+  });
+
+  app.post('/api/squads', (req: Request, res: Response) => {
+    try {
+      const squad = squadManager.createSquad(req.body);
+      res.status(201).json({ squad });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create squad' });
+    }
+  });
+
+  app.get('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.getSquad(req.params.id as string);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ squad });
+  });
+
+  app.patch('/api/squads/:id', (req: Request, res: Response) => {
+    const squad = squadManager.updateSquad(req.params.id as string, req.body);
+    if (!squad) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ squad });
+  });
+
+  app.delete('/api/squads/:id', (req: Request, res: Response) => {
+    const deleted = squadManager.deleteSquad(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.post('/api/squads/:id/members', (req: Request, res: Response) => {
+    const { botName } = req.body;
+    if (!botName) { res.status(400).json({ error: 'botName is required' }); return; }
+    const success = squadManager.addBotToSquad(req.params.id as string, botName);
+    if (!success) { res.status(404).json({ error: 'Squad not found' }); return; }
+    res.json({ success: true });
+  });
+
+  app.delete('/api/squads/:id/members/:botName', (req: Request, res: Response) => {
+    const success = squadManager.removeBotFromSquad(req.params.id as string, req.params.botName as string);
+    if (!success) { res.status(404).json({ error: 'Squad or member not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  ROLE ASSIGNMENT ENDPOINTS
+  // ======================================================
+
+  app.get('/api/roles/assignments', (_req: Request, res: Response) => {
+    res.json({ assignments: roleManager.getAssignments() });
+  });
+
+  app.post('/api/roles/assignments', (req: Request, res: Response) => {
+    try {
+      const assignment = roleManager.createAssignment(req.body);
+      res.status(201).json({ assignment });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message ?? 'Failed to create assignment' });
+    }
+  });
+
+  app.get('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const assignment = roleManager.getAssignment(req.params.id as string);
+    if (!assignment) { res.status(404).json({ error: 'Assignment not found' }); return; }
+    res.json({ assignment });
+  });
+
+  app.patch('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    try {
+      const assignment = roleManager.updateAssignment(req.params.id as string, req.body);
+      if (!assignment) { res.status(404).json({ error: 'Assignment not found' }); return; }
+      res.json({ assignment });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/roles/assignments/:id', (req: Request, res: Response) => {
+    const deleted = roleManager.deleteAssignment(req.params.id as string);
+    if (!deleted) { res.status(404).json({ error: 'Assignment not found' }); return; }
+    res.json({ success: true });
+  });
+
+  // Bot override endpoints
+  app.get('/api/bots/:name/override', (req: Request, res: Response) => {
+    const override = roleManager.getOverride(req.params.name as string);
+    res.json({ override });
+  });
+
+  app.delete('/api/bots/:name/override', (req: Request, res: Response) => {
+    roleManager.clearOverride(req.params.name as string);
+    res.json({ success: true });
+  });
+
+  // ======================================================
+  //  COMMANDER ENDPOINTS
+  // ======================================================
+
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    try {
+      const { input } = req.body;
+      if (!input) { res.status(400).json({ error: 'input is required' }); return; }
+      const plan = await commanderService.parse(input);
+      res.json({ plan });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message ?? 'Failed to parse command' });
+    }
+  });
+
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    try {
+      const { planId } = req.body;
+      if (!planId) { res.status(400).json({ error: 'planId is required' }); return; }
+      const result = await commanderService.execute(planId);
+      if (!result) { res.status(404).json({ error: 'Plan not found or requires clarification' }); return; }
+      res.json({ result });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message ?? 'Failed to execute plan' });
+    }
+  });
+
+  return {
+    app,
+    httpServer,
+    io,
+    eventLog,
+    commandCenter,
+    missionManager,
+    markerStore,
+    squadManager,
+    roleManager,
+    routineManager,
+    templateManager,
+    commanderService,
+  };
 }

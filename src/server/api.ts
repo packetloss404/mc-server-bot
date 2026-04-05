@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { CommanderService } from '../control/CommanderService';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -56,6 +58,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     socket.on('disconnect', () => {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
+  });
+
+  // ── Commander service (persisted to data/commander-history.json) ──
+  const commanderService = new CommanderService({
+    llmClient: null, // LLM wired later if available
   });
 
   // ═══════════════════════════════════════
@@ -381,5 +388,16 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  METRICS
+  // ═══════════════════════════════════════
+
+  app.get('/api/metrics', (_req: Request, res: Response) => {
+    const commanderMetrics = commanderService.getMetrics();
+    res.json({
+      commander: commanderMetrics,
+    });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService };
 }

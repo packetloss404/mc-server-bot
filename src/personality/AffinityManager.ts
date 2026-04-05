@@ -66,6 +66,17 @@ export class AffinityManager {
     this.save();
   }
 
+  // TODO: Add onCooperation(botName, playerName) handler to record 'cooperation'
+  // events when bots complete shared tasks (e.g. joint builds, supply chain
+  // deliveries). Should emit an EventLog entry and adjust affinity upward.
+  // The getRelationshipSummary() method in the full AffinityManager already
+  // references 'cooperation' event counts in its display logic.
+
+  // TODO: Add onHelpRequest(botName, playerName) handler to record 'help_request'
+  // events when a player asks a bot for assistance. Should emit an EventLog
+  // entry. The getRelationshipSummary() method already references
+  // 'help_request' event counts in its display logic.
+
   isHostile(botName: string, playerName: string): boolean {
     return this.get(botName, playerName) < this.config.hostileThreshold;
   }

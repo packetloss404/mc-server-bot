@@ -63,7 +63,7 @@ ipc.onCommand((type, cmdData) => {
       instance.getVoyagerLoop()?.queuePlayerTask(cmdData.description, cmdData.source || 'dashboard');
       break;
     case 'queueChat':
-      if ((instance as any).bot) {
+      if ((instance as any).bot?.emit) {
         (instance as any).bot.emit('chat', cmdData.playerName, cmdData.message);
       }
       break;

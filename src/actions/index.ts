@@ -2,6 +2,7 @@ export { walkTo } from './walkTo';
 export { followPlayer } from './followPlayer';
 export { mineBlock } from './mineBlock';
 export { patrol } from './patrol';
+export type { PatrolHandle } from './patrol';
 export { lookAt } from './lookAt';
 export { wander } from './wander';
 export { craft } from './craft';

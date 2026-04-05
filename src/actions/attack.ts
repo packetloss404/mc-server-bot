@@ -21,12 +21,15 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     return { success: false, message: `No ${entityName} nearby, please explore first` };
   }
 
+  const FLEE_HEALTH_THRESHOLD = 8; // 4 hearts = 8 half-hearts
+
   bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
 
   return new Promise<ActionResult>((resolve, reject) => {
     let hits = 0;
     const startTime = Date.now();
     let droppedItem: any = null;
+    let finished = false;
 
     const onEntityGone = (entity: any) => {
       if (entity === target) {
@@ -41,15 +44,23 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
       }
     };
 
+    const onDeath = () => {
+      cleanup();
+      finish(false, `Bot died while fighting ${entityName} after ${hits} hits`);
+    };
+
     const cleanup = () => {
       clearInterval(attackInterval);
       clearTimeout(timeoutId);
       bot.pathfinder.stop();
       bot.removeListener('entityGone' as any, onEntityGone);
       bot.removeListener('itemDrop' as any, onItemDrop);
+      bot.removeListener('death', onDeath);
     };
 
     const finish = async (success: boolean, message: string) => {
+      if (finished) return;
+      finished = true;
       if (success && droppedItem) {
         try {
           await (bot as any).collectBlock.collect(droppedItem, { ignoreNoPath: true });
@@ -68,6 +79,7 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
 
     bot.on('entityGone' as any, onEntityGone);
     bot.on('itemDrop' as any, onItemDrop);
+    bot.on('death', onDeath);
 
     const timeoutId = setTimeout(() => {
       cleanup();
@@ -82,6 +94,14 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
       if (!target.isValid) {
         cleanup();
         void finish(true, `Target ${entityName} is no longer valid after ${hits} hits`);
+        return;
+      }
+
+      // Flee if health drops below threshold (4 hearts)
+      if (bot.health !== undefined && bot.health <= FLEE_HEALTH_THRESHOLD) {
+        cleanup();
+        bot.pathfinder.stop();
+        void finish(false, `Fleeing from ${entityName} at low health (${bot.health / 2} hearts) after ${hits} hits`);
         return;
       }
 

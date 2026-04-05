@@ -16,11 +16,6 @@ export async function followPlayer(
   bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, followDistance), true);
 
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      bot.pathfinder.stop();
-      resolve({ success: true, message: 'Follow duration ended' });
-    }, duration);
-
     const onPlayerLeft = (p: { username: string }) => {
       if (p.username === playerName) {
         clearTimeout(timeout);
@@ -29,6 +24,12 @@ export async function followPlayer(
         resolve({ success: true, message: 'Player left' });
       }
     };
+
+    const timeout = setTimeout(() => {
+      bot.pathfinder.stop();
+      bot.removeListener('playerLeft', onPlayerLeft);
+      resolve({ success: true, message: 'Follow duration ended' });
+    }, duration);
 
     bot.on('playerLeft', onPlayerLeft);
   });

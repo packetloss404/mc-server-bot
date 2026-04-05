@@ -16,6 +16,12 @@ export interface OverrideRecord {
   at: number;
 }
 
+/** Structured verdict returned by shouldBotAcceptTask */
+export interface TaskAcceptanceVerdict {
+  allowed: boolean;
+  reason: string;
+}
+
 const OVERRIDE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 const APPROVAL_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
 
@@ -42,6 +48,129 @@ export class RoleManager {
   setMissionManager(missionManager: MissionManager): void {
     this.missionManager = missionManager;
     this.evaluateAutomation();
+  }
+
+  // ── Role Policy: Task Acceptance ────────────────────────────
+
+  /**
+   * Determine whether a bot should accept an auto-generated task based on its
+   * role assignment and current state.
+   *
+   * Returns a structured verdict with `allowed` (boolean) and `reason` (string).
+   *
+   * Rules:
+   * - Manual-autonomy bots must not auto-generate tasks.
+   * - Overridden bots must not auto-generate tasks (manual override in effect).
+   * - Bots with no assignment are allowed (they act as free agents).
+   */
+  shouldBotAcceptTask(botName: string): TaskAcceptanceVerdict {
+    const assignment = this.getAssignmentForBot(botName);
+
+    // No assignment means the bot is a free agent — allow
+    if (!assignment) {
+      return { allowed: true, reason: 'No role assignment; bot operates as free agent' };
+    }
+
+    // Manual autonomy: all tasks must come from explicit player/dashboard commands
+    if (assignment.autonomyLevel === 'manual') {
+      return {
+        allowed: false,
+        reason: `Bot "${botName}" has autonomy level "manual" (role: ${assignment.role}); auto-generated tasks are blocked`,
+      };
+    }
+
+    // If the bot has an active manual override, block auto-generation
+    if (this.isOverridden(botName)) {
+      const override = this.getOverride(botName);
+      return {
+        allowed: false,
+        reason: `Bot "${botName}" is under manual override (reason: ${override?.reason ?? 'unknown'}); auto-generated tasks are blocked`,
+      };
+    }
+
+    // Loadout policy warning (non-blocking)
+    if (assignment.loadoutPolicy) {
+      this.checkLoadoutPolicy(botName, assignment);
+    }
+
+    return { allowed: true, reason: 'Role policy allows task acceptance' };
+  }
+
+  /**
+   * Check whether the bot's current state matches its loadout policy.
+   * Logs a warning if there is a mismatch. This is advisory only (non-blocking).
+   */
+  private checkLoadoutPolicy(botName: string, assignment: RoleAssignmentRecord): void {
+    if (!assignment.loadoutPolicy) return;
+
+    const requiredItems = assignment.loadoutPolicy.requiredItems as string[] | undefined;
+    if (requiredItems && requiredItems.length > 0) {
+      logger.warn(
+        { botName, role: assignment.role, requiredItems },
+        'RoleManager: loadout policy specifies required items — loadout compliance not verified (no inventory access in RoleManager)',
+      );
+    }
+
+    const forbiddenItems = assignment.loadoutPolicy.forbiddenItems as string[] | undefined;
+    if (forbiddenItems && forbiddenItems.length > 0) {
+      logger.warn(
+        { botName, role: assignment.role, forbiddenItems },
+        'RoleManager: loadout policy specifies forbidden items — loadout compliance not verified',
+      );
+    }
+  }
+
+  /**
+   * Check whether a command dispatch should be allowed for the given bot,
+   * considering the bot's interrupt policy and active mission state.
+   *
+   * Returns a structured verdict. When `allowed` is false the caller should
+   * reject the command unless `force` is set.
+   */
+  shouldAllowCommandDispatch(botName: string, force?: boolean): TaskAcceptanceVerdict {
+    const assignment = this.getAssignmentForBot(botName);
+    if (!assignment || !assignment.interruptPolicy) {
+      return { allowed: true, reason: 'No interrupt policy configured' };
+    }
+
+    if (!this.missionManager) {
+      return { allowed: true, reason: 'MissionManager not available; skipping interrupt policy check' };
+    }
+
+    const activeMissions = this.missionManager.getMissions({ bot: botName })
+      .filter((m) => m.status === 'running');
+
+    if (activeMissions.length === 0) {
+      return { allowed: true, reason: 'Bot has no active missions' };
+    }
+
+    const hasCriticalMission = activeMissions.some(
+      (m) => m.priority === 'urgent' || m.priority === 'high',
+    );
+
+    switch (assignment.interruptPolicy) {
+      case 'never-while-critical':
+        if (hasCriticalMission) {
+          return {
+            allowed: false,
+            reason: `Bot "${botName}" has an active critical mission; interrupt policy "never-while-critical" blocks this command`,
+          };
+        }
+        return { allowed: true, reason: 'No critical missions active; command allowed' };
+
+      case 'confirm-if-busy':
+        if (!force) {
+          return {
+            allowed: false,
+            reason: `Bot "${botName}" is busy with an active mission; interrupt policy "confirm-if-busy" requires force:true to proceed`,
+          };
+        }
+        return { allowed: true, reason: 'Command forced despite busy bot' };
+
+      case 'always':
+      default:
+        return { allowed: true, reason: 'Interrupt policy allows commands at any time' };
+    }
   }
 
   // ── Manual Override Tracking ──────────────────────────────

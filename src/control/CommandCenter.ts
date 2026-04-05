@@ -12,6 +12,7 @@ import {
 import { BotManager } from '../bot/BotManager';
 import { BotInstance } from '../bot/BotInstance';
 import { MarkerStore } from './MarkerStore';
+import type { RoleManager } from './RoleManager';
 import { logger } from '../util/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,6 +37,8 @@ export interface CreateCommandParams {
   params?: Record<string, any>;
   /** Alias for params — either field is accepted */
   payload?: Record<string, any>;
+  /** When true, overrides interrupt policy "confirm-if-busy" checks */
+  force?: boolean;
 }
 
 interface CommandFilters {
@@ -67,6 +70,7 @@ export class CommandCenter {
   private botManager: BotManager;
   private io: SocketIOServer;
   private markerStore: MarkerStore | null;
+  private roleManager: RoleManager | null = null;
   private timeoutTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(botManager: BotManager, io: SocketIOServer, markerStore?: MarkerStore) {
@@ -75,6 +79,12 @@ export class CommandCenter {
     this.markerStore = markerStore ?? null;
     this.loadFromDisk();
     this.startTimeoutChecker();
+  }
+
+  // ── RoleManager integration ─────────────────────────────
+
+  setRoleManager(roleManager: RoleManager): void {
+    this.roleManager = roleManager;
   }
 
   // ── Cleanup ─────────────────────────────────────────────
@@ -120,13 +130,13 @@ export class CommandCenter {
     return command;
   }
 
-  async dispatchCommand(command: CommandRecord): Promise<CommandRecord> {
+  async dispatchCommand(command: CommandRecord, force?: boolean): Promise<CommandRecord> {
     // Fan-out for multi-target scopes
     if (
       (command.scope === 'squad' || command.scope === 'selection' || command.scope === 'all') &&
       command.targets.length > 1
     ) {
-      return this.dispatchFanOut(command);
+      return this.dispatchFanOut(command, force);
     }
 
     const botName = command.targets[0];
@@ -134,6 +144,24 @@ export class CommandCenter {
       command.error = { code: 'NO_TARGET', message: 'No target bot specified' };
       this.updateStatus(command, 'failed');
       return command;
+    }
+
+    // ── Role policy: check interrupt policy before dispatching ──
+    if (this.roleManager) {
+      const verdict = this.roleManager.shouldAllowCommandDispatch(botName, force);
+      if (!verdict.allowed) {
+        command.error = {
+          code: 'INTERRUPT_POLICY_BLOCKED',
+          message: verdict.reason,
+          botName,
+        };
+        this.updateStatus(command, 'failed');
+        logger.warn(
+          { commandId: command.id, botName, type: command.type, reason: verdict.reason, force },
+          'Command dispatch blocked by interrupt policy',
+        );
+        return command;
+      }
     }
 
     // ── Task 4: Validate bot exists and is connected ──
@@ -382,7 +410,7 @@ export class CommandCenter {
 
   // ── Fan-out ────────────────────────────────────────────────
 
-  private async dispatchFanOut(parent: CommandRecord): Promise<CommandRecord> {
+  private async dispatchFanOut(parent: CommandRecord, force?: boolean): Promise<CommandRecord> {
     this.updateStatus(parent, 'started');
 
     const childIds: string[] = [];
@@ -401,7 +429,7 @@ export class CommandCenter {
       child.parentCommandId = parent.id;
       childIds.push(child.id);
 
-      await this.dispatchCommand(child);
+      await this.dispatchCommand(child, force);
 
       if (child.status !== 'succeeded') {
         allSucceeded = false;

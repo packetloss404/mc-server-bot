@@ -6,9 +6,10 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
-    "start": "node --max-old-space-size=8192 dist/index.js",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "start": "node dist/index.js",
+    "test:e2e": "npx playwright test --config e2e/playwright.config.ts",
+    "test:e2e:ui": "npx playwright test --config e2e/playwright.config.ts --ui",
+    "test:e2e:headed": "npx playwright test --config e2e/playwright.config.ts --headed"
   },
   "dependencies": {
     "@babel/generator": "^7.29.1",
@@ -35,8 +36,8 @@
     "@types/express": "^5.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
+    "@playwright/test": "^1.52.0",
     "tsx": "^4.19.0",
-    "typescript": "^5.7.0",
-    "vitest": "^4.1.0"
+    "typescript": "^5.7.0"
   }
 }

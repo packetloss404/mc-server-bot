@@ -1,14 +1,10 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore, useWorldStore, useSchematicPlacementStore, useControlStore, useFleetStore, useMissionStore } from '@/lib/store';
+import { useBotStore, useControlStore } from '@/lib/store';
 import { api } from '@/lib/api';
-import type { MarkerRecord, MarkerKind, ZoneRecord, RouteRecord } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
-import MapContextMenu, { type ContextTarget } from '@/components/map/MapContextMenu';
-import MarkerEditor from '@/components/map/MarkerEditor';
-import { drawSchematicFootprint } from '@/components/map/mapDrawing';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
@@ -16,26 +12,6 @@ const TRAIL_LENGTH = 80;
 const TERRAIN_RADIUS = 96;
 const TERRAIN_STEP = 2;
 const ZOOM_SENSITIVITY = 0.002; // Normalized zoom speed
-
-// Marker kind colors
-const MARKER_KIND_COLORS: Record<string, string> = {
-  base: '#22C55E',
-  storage: '#EAB308',
-  mine: '#9CA3AF',
-  village: '#F97316',
-  'build-site': '#3B82F6',
-  custom: '#E5E7EB',
-};
-
-// Zone mode colors
-const ZONE_MODE_COLORS: Record<string, string> = {
-  guard: '#EF4444',
-  avoid: '#F97316',
-  farm: '#22C55E',
-  build: '#3B82F6',
-  gather: '#A855F7',
-  custom: '#6B7280',
-};
 
 interface MapEntity {
   name: string;
@@ -50,25 +26,8 @@ interface MapEntity {
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
-  const markers = useWorldStore((s) => s.markers);
-  const zones = useWorldStore((s) => s.zones);
-  const routes = useWorldStore((s) => s.routes);
-  const selectedMapObject = useWorldStore((s) => s.selectedMapObject);
-  const mapDrawingMode = useWorldStore((s) => s.drawingMode);
-  const setMarkers = useWorldStore((s) => s.setMarkers);
-  const addMarker = useWorldStore((s) => s.upsertMarker);
-  const removeMarker = useWorldStore((s) => s.removeMarker);
-  const updateMarkerInStore = (_id: string, marker: MarkerRecord) => useWorldStore.getState().upsertMarker(marker);
-  const setZones = useWorldStore((s) => s.setZones);
-  const setRoutes = useWorldStore((s) => s.setRoutes);
-  const setMapDrawingMode = useWorldStore((s) => s.setDrawingMode);
+  const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
   const selectedBotIds = useControlStore((s) => s.selectedBotIds);
-  const selectAllBots = useControlStore((s) => s.selectAll);
-  const clearSelection = useControlStore((s) => s.clearSelection);
-  const squads = useFleetStore((s) => s.squads);
-  const selectedSquadId = useFleetStore((s) => s.selectedSquadId);
-  const missions = useMissionStore((s) => s.missions);
-
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -79,21 +38,11 @@ export default function MapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true, markers: true, zones: true, routes: true });
+  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
-  const markersRef = useRef(markers);
-  const zonesRef = useRef(zones);
-  const routesRef = useRef(routes);
-  const selectedMapObjectRef = useRef(selectedMapObject);
-  const squadsRef = useRef(squads);
-  const selectedSquadIdRef = useRef(selectedSquadId);
-  const missionsRef = useRef(missions);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
   const entityPositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
-  const markerPositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
-  const zonePositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
-  const routePositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
   const terrainCanvas = useRef<OffscreenCanvas | null>(null);
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
@@ -101,44 +50,12 @@ export default function MapPage() {
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
   const kick = () => forceRender((n) => n + 1);
-  const [showState, setShowState] = useState({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true, markers: true, zones: true, routes: true });
-  const [dragging, setDragging] = useState(false);
-  const [hovered, setHovered] = useState<string | null>(null);
-  const [selectedEntity, setSelectedEntity] = useState<string | null>(null);
-  const [zoomLevel, setZoomLevel] = useState(3);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
-  // Context menu state
-  const [contextMenu, setContextMenu] = useState<{ target: ContextTarget; screenX: number; screenY: number } | null>(null);
-
-  // Marker editor state
-  const [markerEditor, setMarkerEditor] = useState<{
-    marker?: MarkerRecord;
-    defaultX?: number;
-    defaultZ?: number;
-  } | null>(null);
-  const [zoneEditor, setZoneEditor] = useState<{ x: number; z: number; zone?: ZoneRecord } | null>(null);
-  const [routeEditor, setRouteEditor] = useState<{ route?: RouteRecord } | null>(null);
-
-  useEffect(() => {
-    botsRef.current = bots;
-    playersRef.current = players;
-    markersRef.current = markers;
-    zonesRef.current = zones;
-    routesRef.current = routes;
-    selectedMapObjectRef.current = selectedMapObject;
-    squadsRef.current = squads;
-    selectedSquadIdRef.current = selectedSquadId;
-    missionsRef.current = missions;
-  }, [bots, players, markers, zones, routes, selectedMapObject, squads, selectedSquadId, missions]);
-
-  // Load markers, zones, routes on mount
-  useEffect(() => {
-    api.getMarkers().then((r) => setMarkers(r.markers)).catch(() => {});
-    api.getZones().then((r) => setZones(r.zones)).catch(() => {});
-    api.getRoutes().then((r) => setRoutes(r.routes)).catch(() => {});
-  }, [setMarkers, setZones, setRoutes]);
+  // Keep refs in sync with zustand
+  botsRef.current = bots;
+  playersRef.current = players;
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -193,29 +110,12 @@ export default function MapPage() {
     const allEntities = [...bots, ...players.filter((p) => p.isOnline)];
     const first = allEntities.find((e) => e.position);
     if (first?.position) {
-      const { x, z } = first.position;
-      offsetRef.current = { x: -x * scaleRef.current, y: -z * scaleRef.current };
+      offsetRef.current = { x: -first.position.x * scaleRef.current, y: -first.position.z * scaleRef.current };
       initializedRef.current = true;
-      const timeout = window.setTimeout(() => {
-        void loadTerrain(x, z);
-      }, 0);
-      return () => window.clearTimeout(timeout);
+      loadTerrain(first.position.x, first.position.z);
+      kick();
     }
   }, [bots, players, loadTerrain]);
-
-  // Helper: screen coords to world coords
-  const screenToWorld = useCallback((screenX: number, screenY: number) => {
-    const container = containerRef.current;
-    if (!container) return { x: 0, z: 0 };
-    const rect = container.getBoundingClientRect();
-    const cx = rect.width / 2;
-    const cy = rect.height / 2;
-    const mx = screenX - rect.left;
-    const my = screenY - rect.top;
-    const worldX = (mx - cx - offsetRef.current.x) / scaleRef.current;
-    const worldZ = (my - cy - offsetRef.current.y) / scaleRef.current;
-    return { x: worldX, z: worldZ };
-  }, []);
 
   // Single stable draw loop — never restarts
   useEffect(() => {
@@ -249,11 +149,8 @@ export default function MapPage() {
       const offset = offsetRef.current;
       const scale = scaleRef.current;
       const show = showRef.current;
-      const curBots = botsRef.current;
-      const curPlayers = playersRef.current;
-      const curMarkers = markersRef.current;
-      const curZones = zonesRef.current;
-      const curRoutes = routesRef.current;
+      const bots = botsRef.current;
+      const players = playersRef.current;
       const hovered = hoveredRef.current;
       const selected = selectedRef.current;
 
@@ -319,132 +216,24 @@ export default function MapPage() {
         }
       }
 
-      entityPositions.current.clear();
-      markerPositions.current.clear();
-      zonePositions.current.clear();
-      routePositions.current.clear();
-
-      // --- Draw zones ---
-      if (show.zones) {
-        for (const zone of curZones) {
-          const zoneColor = ZONE_MODE_COLORS[zone.mode] || '#6B7280';
-          const isSelectedZone = selectedMapObjectRef.current?.type === 'zone' && selectedMapObjectRef.current.id === zone.id;
-          let zsx = cx + offset.x;
-          let zsy = cy + offset.y;
-
-          if (zone.shape === 'circle' && zone.circle) {
-            zsx = cx + zone.circle.x * scale + offset.x;
-            zsy = cy + zone.circle.z * scale + offset.y;
-            const sr = zone.circle.radius * scale;
-            ctx.beginPath();
-            ctx.arc(zsx, zsy, sr, 0, Math.PI * 2);
-            ctx.fillStyle = zoneColor + '18';
-            ctx.fill();
-            ctx.strokeStyle = zoneColor + '60';
-            ctx.lineWidth = isSelectedZone ? 2.5 : 1.5;
-            ctx.setLineDash([6, 4]);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            zonePositions.current.set(zone.id, { sx: zsx, sy: zsy, radius: Math.max(16, sr) });
-          } else if (zone.shape === 'rectangle' && zone.rectangle) {
-            zsx = cx + ((zone.rectangle.minX + zone.rectangle.maxX) / 2) * scale + offset.x;
-            zsy = cy + ((zone.rectangle.minZ + zone.rectangle.maxZ) / 2) * scale + offset.y;
-            const sw = (zone.rectangle.maxX - zone.rectangle.minX) * scale;
-            const sh = (zone.rectangle.maxZ - zone.rectangle.minZ) * scale;
-            ctx.fillStyle = zoneColor + '18';
-            ctx.fillRect(zsx - sw / 2, zsy - sh / 2, sw, sh);
-            ctx.strokeStyle = zoneColor + '60';
-            ctx.lineWidth = isSelectedZone ? 2.5 : 1.5;
-            ctx.setLineDash([6, 4]);
-            ctx.strokeRect(zsx - sw / 2, zsy - sh / 2, sw, sh);
-            ctx.setLineDash([]);
-            zonePositions.current.set(zone.id, { sx: zsx, sy: zsy, radius: Math.max(16, Math.max(sw, sh) / 2) });
-          }
-
-          // Zone label
-          ctx.save();
-          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
-          ctx.fillStyle = zoneColor + 'B0';
-          ctx.font = '10px system-ui, sans-serif';
-          ctx.textAlign = 'center';
-          ctx.fillText(zone.name, zsx, zsy + 4);
-          ctx.restore();
-        }
-      }
-
-      // --- Draw routes ---
-      if (show.routes) {
-        const markerById = new Map(curMarkers.map((m) => [m.id, m]));
-        for (const route of curRoutes) {
-          const isSelectedRoute = selectedMapObjectRef.current?.type === 'route' && selectedMapObjectRef.current.id === route.id;
-          const waypoints = route.waypointIds
-            .map((id: string) => markerById.get(id))
-            .filter((m): m is MarkerRecord => !!m);
-
-          if (waypoints.length < 2) continue;
-
-          ctx.save();
-          ctx.setLineDash([8, 6]);
-          ctx.strokeStyle = isSelectedRoute ? '#C4B5FD' : '#A78BFA90';
-          ctx.lineWidth = isSelectedRoute ? 3 : 2;
-          ctx.beginPath();
-
-          for (let i = 0; i < waypoints.length; i++) {
-            const sx = cx + waypoints[i].position.x * scale + offset.x;
-            const sy = cx + waypoints[i].position.z * scale + offset.y;
-            if (i === 0) ctx.moveTo(sx, sy);
-            else ctx.lineTo(sx, sy);
-          }
-          ctx.stroke();
-          ctx.setLineDash([]);
-
-          // Draw arrows along route segments
-          for (let i = 0; i < waypoints.length - 1; i++) {
-            const ax = cx + waypoints[i].position.x * scale + offset.x;
-            const ay = cy + waypoints[i].position.z * scale + offset.y;
-            const bx = cx + waypoints[i + 1].position.x * scale + offset.x;
-            const by = cy + waypoints[i + 1].position.z * scale + offset.y;
-            const midX = (ax + bx) / 2;
-            const midY = (ay + by) / 2;
-            const angle = Math.atan2(by - ay, bx - ax);
-            const arrowSize = 6;
-
-            ctx.beginPath();
-            ctx.moveTo(midX + Math.cos(angle) * arrowSize, midY + Math.sin(angle) * arrowSize);
-            ctx.lineTo(midX + Math.cos(angle + 2.5) * arrowSize, midY + Math.sin(angle + 2.5) * arrowSize);
-            ctx.lineTo(midX + Math.cos(angle - 2.5) * arrowSize, midY + Math.sin(angle - 2.5) * arrowSize);
-            ctx.closePath();
-            ctx.fillStyle = '#A78BFAB0';
-            ctx.fill();
-          }
-
-          const first = waypoints[0];
-          const last = waypoints[waypoints.length - 1];
-          routePositions.current.set(route.id, {
-            sx: cx + ((first.position.x + last.position.x) / 2) * scale + offset.x,
-            sy: cy + ((first.position.z + last.position.z) / 2) * scale + offset.y,
-            radius: 18,
-          });
-          ctx.restore();
-        }
-      }
-
       // Collect entities
       const entities: MapEntity[] = [];
       const drawnNames = new Set<string>();
       if (show.bots) {
-        for (const bot of curBots) {
+        for (const bot of bots) {
           if (!bot.position) continue;
           drawnNames.add(bot.name.toLowerCase());
           entities.push({ name: bot.name, x: bot.position.x, z: bot.position.z, color: getPersonalityColor(bot.personality), type: 'bot', state: bot.state, personality: bot.personality });
         }
       }
       if (show.players) {
-        for (const player of curPlayers) {
+        for (const player of players) {
           if (!player.isOnline || !player.position || drawnNames.has(player.name.toLowerCase())) continue;
           entities.push({ name: player.name, x: player.position.x, z: player.position.z, color: PLAYER_COLOR, type: 'player' });
         }
       }
+
+      entityPositions.current.clear();
 
       // Trails
       if (show.trails) {
@@ -465,7 +254,6 @@ export default function MapPage() {
       }
 
       // Entity markers
-      const selectedSquad = squadsRef.current.find((squad) => squad.id === selectedSquadIdRef.current);
       for (const entity of entities) {
         const sx = cx + entity.x * scale + offset.x;
         const sy = cy + entity.z * scale + offset.y;
@@ -480,10 +268,6 @@ export default function MapPage() {
 
         if (isSelected || isHovered) {
           ctx.beginPath(); ctx.arc(sx, sy, r + 6, 0, Math.PI * 2); ctx.fillStyle = entity.color + '20'; ctx.fill();
-        }
-        if (entity.type === 'bot' && selectedSquad?.botNames.includes(entity.name)) {
-          ctx.beginPath(); ctx.arc(sx, sy, r + 8, 0, Math.PI * 2);
-          ctx.strokeStyle = '#22C55E80'; ctx.lineWidth = 2; ctx.stroke();
         }
         if (entity.type === 'bot' && entity.state && !['IDLE', 'DISCONNECTED'].includes(entity.state)) {
           ctx.beginPath(); ctx.arc(sx, sy, r + 3, 0, Math.PI * 2);
@@ -514,98 +298,6 @@ export default function MapPage() {
           if (entity.state) { ctx.fillStyle = STATE_COLORS[entity.state] ?? '#6B7280'; ctx.font = '9px system-ui'; ctx.fillText(entity.state, sx, sy + r + 26); }
           ctx.restore();
         }
-
-        if (entity.type === 'bot') {
-          const activeMission = missionsRef.current.find((mission) =>
-            ['queued', 'running', 'paused'].includes(mission.status) &&
-            mission.assigneeIds.some((id) => id.toLowerCase() === entity.name.toLowerCase()),
-          );
-          if (activeMission) {
-            ctx.save();
-            ctx.fillStyle = '#111827dd';
-            ctx.strokeStyle = activeMission.source === 'role' ? '#22C55E99' : '#60A5FA99';
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.roundRect(sx - 22, sy + r + 6, 44, 14, 4);
-            ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = '#E5E7EB';
-            ctx.font = '9px system-ui, sans-serif';
-            ctx.textAlign = 'center';
-            ctx.fillText(activeMission.type.slice(0, 10), sx, sy + r + 16);
-            ctx.restore();
-          }
-        }
-      }
-
-      // --- Draw markers (diamond/pin shapes) ---
-      if (show.markers) {
-        for (const marker of curMarkers) {
-          if (!marker.position) continue;
-          const sx = cx + marker.position.x * scale + offset.x;
-          const sy = cy + marker.position.z * scale + offset.y;
-          if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
-
-          const color = MARKER_KIND_COLORS[marker.kind] || '#E5E7EB';
-          const isHov = hovered === `marker:${marker.id}`;
-          const size = isHov ? 8 : 6;
-
-          markerPositions.current.set(marker.id, { sx, sy, radius: size + 4 });
-
-          // Draw diamond shape
-          ctx.save();
-          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3; ctx.shadowOffsetY = 1;
-          ctx.beginPath();
-          ctx.moveTo(sx, sy - size);
-          ctx.lineTo(sx + size * 0.7, sy);
-          ctx.lineTo(sx, sy + size);
-          ctx.lineTo(sx - size * 0.7, sy);
-          ctx.closePath();
-          ctx.fillStyle = color;
-          ctx.fill();
-          ctx.strokeStyle = '#ffffffb0';
-          ctx.lineWidth = 1.5;
-          ctx.stroke();
-          ctx.shadowColor = 'transparent'; ctx.shadowBlur = 0; ctx.shadowOffsetY = 0;
-          ctx.restore();
-
-          // Label (always show name, show details on hover)
-          ctx.save();
-          ctx.shadowColor = '#000000'; ctx.shadowBlur = 3;
-          ctx.fillStyle = color;
-          ctx.font = `${isHov ? 'bold ' : ''}10px system-ui, sans-serif`;
-          ctx.textAlign = 'center';
-          ctx.fillText(marker.name, sx, sy - size - 5);
-          if (isHov) {
-            ctx.fillStyle = '#ffffff70';
-            ctx.font = '9px monospace';
-            ctx.fillText(`${Math.round(marker.position.x)}, ${Math.round(marker.position.z)}`, sx, sy + size + 12);
-          }
-          ctx.restore();
-        }
-      }
-
-      // Schematic placement footprint
-      const placement = useSchematicPlacementStore.getState();
-      if (placement.activeSchematic) {
-        const sch = placement.activeSchematic;
-        if (placement.placedOrigin) {
-          drawSchematicFootprint(ctx, cx, cy, scale, offset, { x: placement.placedOrigin.x, z: placement.placedOrigin.z }, sch.sizeX, sch.sizeZ, 'placed');
-        }
-        if (placement.cursorWorldPos) {
-          const snapped = { x: Math.floor(placement.cursorWorldPos.x), z: Math.floor(placement.cursorWorldPos.z) };
-          drawSchematicFootprint(ctx, cx, cy, scale, offset, snapped, sch.sizeX, sch.sizeZ, 'preview');
-        }
-      }
-
-      // Active build footprint
-      const activeBuild = useBotStore.getState().activeBuild;
-      if (activeBuild?.origin) {
-        // Approximate footprint from schematic filename if dimensions available
-        const bp = placement.activeSchematic;
-        if (bp) {
-          drawSchematicFootprint(ctx, cx, cy, scale, offset, { x: activeBuild.origin.x, z: activeBuild.origin.z }, bp.sizeX, bp.sizeZ, 'active');
-        }
       }
 
       // HUD overlays
@@ -625,86 +317,30 @@ export default function MapPage() {
     return () => cancelAnimationFrame(animFrame);
   }, []); // Empty deps — loop runs forever, reads from refs
 
-  // Find what's under a given screen position
-  const hitTest = useCallback((mx: number, my: number): { type: 'entity'; name: string } | { type: 'marker'; id: string } | { type: 'zone'; id: string } | { type: 'route'; id: string } | null => {
-    // Check entities first
-    for (const [name, pos] of entityPositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        return { type: 'entity', name };
-      }
-    }
-    // Check markers
-    for (const [id, pos] of markerPositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        return { type: 'marker', id };
-      }
-    }
-    for (const [id, pos] of zonePositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        return { type: 'zone', id };
-      }
-    }
-    for (const [id, pos] of routePositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        return { type: 'route', id };
-      }
-    }
-    return null;
-  }, []);
-
   // Input handlers — all mutate refs directly, no state updates during drag/hover
   const handleMouseDown = (e: React.MouseEvent) => {
-    if (e.button === 2) return; // handled by context menu
-    setContextMenu(null); // close context menu on left click
-
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
 
-    // Check if clicking in add-marker mode
-    if (mapDrawingMode === 'add-marker') {
-      const world = screenToWorld(e.clientX, e.clientY);
-      setMarkerEditor({ defaultX: world.x, defaultZ: world.z });
-      setMapDrawingMode('none');
-      return;
-    }
-
-    const hit = hitTest(mx, my);
-    if (hit) {
-      if (hit.type === 'entity') {
-        const bot = botsRef.current.find((b) => b.name === hit.name);
-        if (bot) {
-          selectAllBots([bot.name]);
+    for (const [name, pos] of entityPositions.current) {
+      const dx = mx - pos.sx;
+      const dy = my - pos.sy;
+      if (dx * dx + dy * dy < pos.radius * pos.radius) {
+        selectedRef.current = selectedRef.current === name ? null : name;
+        // Sync bot selections to the global control store
+        const matchedBot = botsRef.current.find((b) => b.name === name);
+        if (matchedBot) {
+          toggleBotSelection(name);
         }
-        selectedRef.current = selectedRef.current === hit.name ? null : hit.name;
-        setSelectedEntity(selectedRef.current);
-      } else if (hit.type === 'marker') {
-        useWorldStore.getState().setSelectedMapObject({ type: 'marker', id: hit.id });
-      } else if (hit.type === 'zone') {
-        useWorldStore.getState().setSelectedMapObject({ type: 'zone', id: hit.id });
-      } else if (hit.type === 'route') {
-        useWorldStore.getState().setSelectedMapObject({ type: 'route', id: hit.id });
+        kick();
+        return;
       }
-      kick();
-      return;
     }
-
-    useWorldStore.getState().setSelectedMapObject(null);
-    clearSelection();
-    setSelectedEntity(null);
 
     draggingRef.current = true;
-    setDragging(true);
     dragStartRef.current = { x: e.clientX - offsetRef.current.x, y: e.clientY - offsetRef.current.y };
   };
 
@@ -721,28 +357,17 @@ export default function MapPage() {
     const my = e.clientY - rect.top;
 
     let found: string | null = null;
-    // Check entities
     for (const [name, pos] of entityPositions.current) {
       const dx = mx - pos.sx;
       const dy = my - pos.sy;
       if (dx * dx + dy * dy < pos.radius * pos.radius) { found = name; break; }
     }
-    // Check markers
-    if (!found) {
-      for (const [id, pos] of markerPositions.current) {
-        const dx = mx - pos.sx;
-        const dy = my - pos.sy;
-        if (dx * dx + dy * dy < pos.radius * pos.radius) { found = `marker:${id}`; break; }
-      }
-    }
     hoveredRef.current = found;
-    setHovered(found);
   };
 
   const handleMouseUp = () => {
     if (draggingRef.current) {
       draggingRef.current = false;
-      setDragging(false);
       // Trigger terrain reload check after drag ends
       if (showRef.current.terrain) {
         const viewCenterX = -offsetRef.current.x / scaleRef.current;
@@ -751,192 +376,6 @@ export default function MapPage() {
       }
       kick();
     }
-  };
-
-  // Right-click handler for context menu
-  const handleContextMenu = (e: React.MouseEvent) => {
-    e.preventDefault();
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const mx = e.clientX - rect.left;
-    const my = e.clientY - rect.top;
-
-    const hit = hitTest(mx, my);
-    let target: ContextTarget;
-
-    if (hit?.type === 'entity') {
-      const entity = [...botsRef.current, ...playersRef.current].find(
-        (e) => e.name === hit.name
-      );
-      if (entity?.position) {
-        const isBot = botsRef.current.some((b) => b.name === hit.name);
-        target = {
-          type: isBot ? 'bot' : 'player',
-          name: hit.name,
-          worldX: entity.position.x,
-          worldZ: entity.position.z,
-        };
-      } else {
-        const world = screenToWorld(e.clientX, e.clientY);
-        target = { type: 'terrain', worldX: world.x, worldZ: world.z };
-      }
-    } else if (hit?.type === 'marker') {
-      const marker = markersRef.current.find((m) => m.id === hit.id);
-      if (marker) {
-        target = { type: 'marker', marker };
-      } else {
-        const world = screenToWorld(e.clientX, e.clientY);
-        target = { type: 'terrain', worldX: world.x, worldZ: world.z };
-      }
-    } else {
-      const world = screenToWorld(e.clientX, e.clientY);
-      target = { type: 'terrain', worldX: world.x, worldZ: world.z };
-    }
-
-    setContextMenu({ target, screenX: e.clientX, screenY: e.clientY });
-  };
-
-  // Context menu action handlers
-  const getSelectedBot = (): string | null => {
-    return Array.from(selectedBotIds)[0] ?? null;
-  };
-
-  const handleWalkHere = (x: number, z: number) => {
-    const botName = getSelectedBot();
-    if (botName) {
-      api.walkTo(botName, Math.round(x), null, Math.round(z)).catch(() => {});
-    }
-  };
-
-  const handleCreateMarker = (x: number, z: number) => {
-    setMarkerEditor({ defaultX: x, defaultZ: z });
-  };
-
-  const handleCopyCoords = (x: number, z: number) => {
-    navigator.clipboard.writeText(`${Math.round(x)}, ${Math.round(z)}`).catch(() => {});
-  };
-
-  const handleFollow = (targetName: string) => {
-    const botName = getSelectedBot();
-    if (botName) {
-      api.followPlayer(botName, targetName).catch(() => {});
-    }
-  };
-
-  const handleEditMarker = (marker: MarkerRecord) => {
-    setMarkerEditor({ marker });
-  };
-
-  const handleDeleteMarker = (marker: MarkerRecord) => {
-    api.deleteMarker(marker.id).then(() => removeMarker(marker.id)).catch(() => {
-      // If the API doesn't exist yet, still remove locally
-      removeMarker(marker.id);
-    });
-  };
-
-  const handleSaveMarker = async (data: { name: string; kind: MarkerKind; x: number; y: number; z: number; tags: string[]; notes: string }) => {
-    if (markerEditor?.marker) {
-      // Update existing
-      try {
-        const result = await api.updateMarker(markerEditor.marker.id, data);
-        updateMarkerInStore(markerEditor.marker.id, result.marker);
-      } catch {
-        // If API doesn't exist, update locally
-        const updated: MarkerRecord = {
-          ...markerEditor.marker,
-          name: data.name,
-          kind: data.kind,
-          position: { x: data.x, y: data.y, z: data.z },
-          tags: data.tags,
-          notes: data.notes,
-          updatedAt: Date.now(),
-        };
-        updateMarkerInStore(markerEditor.marker.id, updated);
-      }
-    } else {
-      // Create new
-      try {
-        const result = await api.createMarker(data);
-        addMarker(result.marker);
-      } catch {
-        // If API doesn't exist, create locally with generated id
-        const localMarker: MarkerRecord = {
-          id: `local-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: data.name,
-          kind: data.kind,
-          position: { x: data.x, y: data.y, z: data.z },
-          tags: data.tags,
-          notes: data.notes,
-          createdAt: Date.now(),
-          updatedAt: Date.now(),
-        };
-        addMarker(localMarker);
-      }
-    }
-    setMarkerEditor(null);
-  };
-
-  const handleSaveZone = async (data: {
-    name: string;
-    mode: string;
-    shape: 'circle' | 'rectangle';
-    radius: number;
-    width: number;
-    height: number;
-  }) => {
-    if (!zoneEditor) return;
-    const payload = data.shape === 'circle'
-      ? {
-          name: data.name,
-          mode: data.mode,
-          shape: 'circle' as const,
-          circle: {
-            x: Math.round(zoneEditor.x),
-            z: Math.round(zoneEditor.z),
-            radius: Math.max(1, Math.round(data.radius)),
-          },
-        }
-      : {
-          name: data.name,
-          mode: data.mode,
-          shape: 'rectangle' as const,
-          rectangle: {
-            minX: Math.round(zoneEditor.x - data.width / 2),
-            maxX: Math.round(zoneEditor.x + data.width / 2),
-            minZ: Math.round(zoneEditor.z - data.height / 2),
-            maxZ: Math.round(zoneEditor.z + data.height / 2),
-          },
-        };
-    const result = zoneEditor?.zone
-      ? await api.updateZone(zoneEditor.zone.id, payload)
-      : await api.createZone(payload);
-    useWorldStore.getState().upsertZone(result.zone);
-    setZoneEditor(null);
-  };
-
-  const handleDeleteZone = async (zoneId: string) => {
-    await api.deleteZone(zoneId);
-    useWorldStore.getState().removeZone(zoneId);
-    if (selectedMapObject?.type === 'zone' && selectedMapObject.id === zoneId) {
-      useWorldStore.getState().setSelectedMapObject(null);
-    }
-  };
-
-  const handleDeleteRoute = async (routeId: string) => {
-    await api.deleteRoute(routeId);
-    useWorldStore.getState().removeRoute(routeId);
-    if (selectedMapObject?.type === 'route' && selectedMapObject.id === routeId) {
-      useWorldStore.getState().setSelectedMapObject(null);
-    }
-  };
-
-  const handleSaveRoute = async (data: { name: string; waypointIds: string[]; loop: boolean }) => {
-    const result = routeEditor?.route
-      ? await api.updateRoute(routeEditor.route.id, data)
-      : await api.createRoute(data);
-    useWorldStore.getState().upsertRoute(result.route);
-    setRouteEditor(null);
   };
 
   // Zoom toward cursor with normalized sensitivity
@@ -966,7 +405,6 @@ export default function MapPage() {
         y: mouseY - ch - (mouseY - ch - offsetRef.current.y) * ratio,
       };
       scaleRef.current = newScale;
-      setZoomLevel(newScale);
       kick();
     };
     container.addEventListener('wheel', onWheel, { passive: false });
@@ -1003,63 +441,8 @@ export default function MapPage() {
     })),
   ];
 
-  const show = showState;
-  const toggleShow = (key: keyof typeof showState) => {
-    const next = { ...showRef.current, [key]: !showRef.current[key] };
-    showRef.current = next;
-    setShowState(next);
-    kick();
-  };
-  const selectedBots = Array.from(selectedBotIds);
-  const selectedZone = selectedMapObject?.type === 'zone' ? zones.find((zone) => zone.id === selectedMapObject.id) ?? null : null;
-  const selectedRoute = selectedMapObject?.type === 'route' ? routes.find((route) => route.id === selectedMapObject.id) ?? null : null;
-  const selectedMarker = selectedMapObject?.type === 'marker' ? markers.find((marker) => marker.id === selectedMapObject.id) ?? null : null;
-
-  const assignZoneMission = async () => {
-    if (!selectedZone || selectedBots.length === 0) return;
-    const result = await api.createMission({
-      type: 'patrol_zone',
-      title: `Patrol ${selectedZone.name}`,
-      description: `Map-assigned patrol mission for zone ${selectedZone.name}`,
-      assigneeType: 'bot',
-      assigneeIds: selectedBots,
-      priority: 'normal',
-      source: 'dashboard',
-    });
-    useMissionStore.getState().upsertMission(result.mission);
-  };
-
-  const assignRouteCommand = async () => {
-    if (!selectedRoute || selectedBots.length === 0) return;
-    const result = await api.createCommand({
-      type: 'patrol_route',
-      targets: selectedBots,
-      scope: selectedBots.length > 1 ? 'selection' : 'bot',
-      source: 'map',
-      payload: { routeId: selectedRoute.id },
-    });
-    useControlStore.getState().upsertCommand(result.command);
-  };
-
-  const sendBotsToMarker = async () => {
-    if (!selectedMarker || selectedBots.length === 0) return;
-    const result = await api.createCommand({
-      type: 'move_to_marker',
-      targets: selectedBots,
-      scope: selectedBots.length > 1 ? 'selection' : 'bot',
-      source: 'map',
-      payload: { markerId: selectedMarker.id },
-    });
-    useControlStore.getState().upsertCommand(result.command);
-  };
-
-  const cursorClass = mapDrawingMode === 'add-marker'
-    ? 'cursor-crosshair'
-    : dragging
-      ? 'cursor-grabbing'
-      : hovered
-        ? 'cursor-pointer'
-        : 'cursor-grab';
+  const show = showRef.current;
+  const toggleShow = (key: keyof typeof show) => { showRef.current = { ...show, [key]: !show[key] }; kick(); };
 
   return (
     <div className="h-screen flex flex-col">
@@ -1075,10 +458,6 @@ export default function MapPage() {
             <span className="w-px h-4 bg-zinc-800 mx-1" />
             <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
             <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
-            <span className="w-px h-4 bg-zinc-800 mx-1" />
-            <ToggleBtn active={show.markers} onClick={() => toggleShow('markers')} label="Markers" color="#EAB308" />
-            <ToggleBtn active={show.zones} onClick={() => toggleShow('zones')} label="Zones" color="#A855F7" />
-            <ToggleBtn active={show.routes} onClick={() => toggleShow('routes')} label="Routes" color="#A78BFA" />
           </div>
           {terrainStatus === 'loading' && (
             <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
@@ -1089,33 +468,6 @@ export default function MapPage() {
           {terrainStatus === 'error' && <span className="text-[10px] text-red-400/70">Terrain unavailable</span>}
         </div>
         <div className="flex items-center gap-2">
-          {/* Drawing mode buttons */}
-          <button
-            onClick={() => setMapDrawingMode(mapDrawingMode === 'add-marker' ? 'none' : 'add-marker')}
-            className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${
-              mapDrawingMode === 'add-marker'
-                ? 'bg-emerald-600 text-white'
-                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-400'
-            }`}
-            title="Click on map to place a marker"
-          >
-            + Marker
-          </button>
-          <button
-            onClick={() => setZoneEditor({ x: -offsetRef.current.x / scaleRef.current, z: -offsetRef.current.y / scaleRef.current })}
-            className="px-2 py-1 rounded text-[11px] font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
-            title="Create a zone at the current view center"
-          >
-            + Zone
-          </button>
-          <button
-            onClick={() => setRouteEditor({})}
-            className="px-2 py-1 rounded text-[11px] font-medium transition-colors bg-zinc-800 hover:bg-zinc-700 text-zinc-400"
-            title="Create a route from markers"
-          >
-            + Route
-          </button>
-          <span className="w-px h-4 bg-zinc-800" />
           <button
             onClick={() => {
               terrainMeta.current = null;
@@ -1132,12 +484,12 @@ export default function MapPage() {
           </button>
           <span className="w-px h-4 bg-zinc-800" />
           <button
-            onClick={() => { const next = Math.min(MAX_SCALE, scaleRef.current * 1.3); scaleRef.current = next; setZoomLevel(next); kick(); }}
+            onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
           >+</button>
-          <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{zoomLevel.toFixed(1)}x</span>
+          <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
           <button
-            onClick={() => { const next = Math.max(MIN_SCALE, scaleRef.current / 1.3); scaleRef.current = next; setZoomLevel(next); kick(); }}
+            onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
           >-</button>
         </div>
@@ -1154,18 +506,10 @@ export default function MapPage() {
               {allEntities.map((entity) => (
                 <button
                   key={`${entity.type}-${entity.name}`}
-                    onClick={() => {
-                      centerOn(entity.x, entity.z);
-                      selectedRef.current = entity.name;
-                      setSelectedEntity(entity.name);
-                      if (entity.type === 'bot') {
-                        selectAllBots([entity.name]);
-                      }
-                    kick();
-                  }}
+                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; if (entity.type === 'bot') toggleBotSelection(entity.name); kick(); }}
                   className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
-                    selectedEntity === entity.name || selectedBotIds.has(entity.name) ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                  }`}
+                    selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+                  } ${entity.type === 'bot' && selectedBotIds.has(entity.name.toLowerCase()) ? 'ring-1 ring-emerald-500/30' : ''}`}
                 >
                   <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
                   <div className="min-w-0 flex-1">
@@ -1180,230 +524,27 @@ export default function MapPage() {
               {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
             </div>
           </div>
-
-          {/* Markers section in sidebar */}
-          {markers.length > 0 && (
-            <div className="p-3 border-t border-zinc-800/60">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                Markers ({markers.length})
-              </p>
-              <div className="space-y-0.5">
-                {markers.filter((m) => m.position).map((marker) => (
-                  <button
-                    key={marker.id}
-                    onClick={() => {
-                      centerOn(marker.position.x, marker.position.z);
-                      useWorldStore.getState().setSelectedMapObject({ type: 'marker', id: marker.id });
-                      kick();
-                    }}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors hover:bg-zinc-800/50"
-                  >
-                    <span
-                      className="w-2.5 h-2.5 shrink-0"
-                      style={{
-                        backgroundColor: MARKER_KIND_COLORS[marker.kind] || '#E5E7EB',
-                        clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
-                      }}
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="text-[11px] font-medium text-zinc-300 truncate">{marker.name}</p>
-                      <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(marker.position.x)}, {Math.round(marker.position.z)}</p>
-                    </div>
-                    <span className="text-[9px] text-zinc-600 uppercase shrink-0">
-                      {marker.kind.slice(0, 3)}
-                    </span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {zones.length > 0 && (
-            <div className="p-3 border-t border-zinc-800/60">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                Zones ({zones.length})
-              </p>
-              <div className="space-y-0.5">
-                {zones.map((zone) => (
-                  <div
-                    key={zone.id}
-                    className={`flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors ${selectedMapObject?.type === 'zone' && selectedMapObject.id === zone.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
-                  >
-                    <button
-                      onClick={() => {
-                        useWorldStore.getState().setSelectedMapObject({ type: 'zone', id: zone.id });
-                        const center = zone.shape === 'circle' && zone.circle
-                          ? { x: zone.circle.x, z: zone.circle.z }
-                          : zone.rectangle
-                            ? { x: (zone.rectangle.minX + zone.rectangle.maxX) / 2, z: (zone.rectangle.minZ + zone.rectangle.maxZ) / 2 }
-                            : { x: 0, z: 0 };
-                        centerOn(center.x, center.z);
-                        kick();
-                      }}
-                      className="flex items-center gap-2 text-left flex-1 min-w-0"
-                    >
-                      <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: ZONE_MODE_COLORS[zone.mode] || '#6B7280' }} />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-medium text-zinc-300 truncate">{zone.name}</p>
-                        <p className="text-[9px] text-zinc-600 uppercase">{zone.mode} {zone.shape}</p>
-                      </div>
-                    </button>
-                    <button onClick={() => {
-                      const center = zone.shape === 'circle' && zone.circle
-                        ? { x: zone.circle.x, z: zone.circle.z }
-                        : zone.rectangle
-                          ? { x: (zone.rectangle.minX + zone.rectangle.maxX) / 2, z: (zone.rectangle.minZ + zone.rectangle.maxZ) / 2 }
-                          : { x: 0, z: 0 };
-                      setZoneEditor({ ...center, zone });
-                    }} className="text-[10px] text-zinc-500 hover:text-zinc-300">Edit</button>
-                    <button onClick={() => handleDeleteZone(zone.id)} className="text-[10px] text-zinc-600 hover:text-red-400">Del</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {routes.length > 0 && (
-            <div className="p-3 border-t border-zinc-800/60">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                Routes ({routes.length})
-              </p>
-              <div className="space-y-0.5">
-                {routes.map((route) => (
-                  <div
-                    key={route.id}
-                    className={`flex items-center gap-2 px-2 py-1.5 rounded-md transition-colors ${selectedMapObject?.type === 'route' && selectedMapObject.id === route.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'}`}
-                  >
-                    <button
-                      onClick={() => {
-                        useWorldStore.getState().setSelectedMapObject({ type: 'route', id: route.id });
-                        const firstMarker = markers.find((marker) => marker.id === route.waypointIds[0]);
-                        if (firstMarker) {
-                          centerOn(firstMarker.position.x, firstMarker.position.z);
-                        }
-                        kick();
-                      }}
-                      className="flex items-center gap-2 text-left flex-1 min-w-0"
-                    >
-                      <span className="w-2.5 h-2.5 rounded-sm shrink-0 bg-violet-400" />
-                      <div className="min-w-0 flex-1">
-                        <p className="text-[11px] font-medium text-zinc-300 truncate">{route.name}</p>
-                        <p className="text-[9px] text-zinc-600">{route.waypointIds.length} waypoints{route.loop ? ' - loop' : ''}</p>
-                      </div>
-                    </button>
-                    <button onClick={() => setRouteEditor({ route })} className="text-[10px] text-zinc-500 hover:text-zinc-300">Edit</button>
-                    <button onClick={() => handleDeleteRoute(route.id)} className="text-[10px] text-zinc-600 hover:text-red-400">Del</button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {missions.length > 0 && (
-            <div className="p-3 border-t border-zinc-800/60">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                Active Missions ({missions.filter((mission) => ['queued', 'running', 'paused'].includes(mission.status)).length})
-              </p>
-              <div className="space-y-1">
-                {missions.filter((mission) => ['queued', 'running', 'paused'].includes(mission.status)).slice(0, 8).map((mission) => (
-                  <div key={mission.id} className="px-2 py-1.5 rounded-md bg-zinc-900/60 border border-zinc-800/50">
-                    <p className="text-[11px] text-zinc-300 truncate">{mission.title}</p>
-                    <p className="text-[9px] text-zinc-600 truncate">{(mission.assigneeIds ?? []).join(', ')} - {mission.source}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {(selectedZone || selectedRoute || selectedMarker) && (
-            <div className="p-3 border-t border-zinc-800/60 space-y-2">
-              <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider">
-                Selected Object
-              </p>
-              <div className="rounded-lg border border-zinc-800/60 bg-zinc-900/60 p-3 space-y-2">
-                {selectedZone && (
-                  <>
-                    <p className="text-[11px] text-zinc-200">Zone: {selectedZone.name}</p>
-                    <p className="text-[10px] text-zinc-600 uppercase">{selectedZone.mode} {selectedZone.shape}</p>
-                    <button
-                      onClick={assignZoneMission}
-                      disabled={selectedBots.length === 0}
-                      className="w-full text-[11px] px-3 py-1.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/20 disabled:opacity-40"
-                    >
-                      Patrol With Selected Bots
-                    </button>
-                  </>
-                )}
-                {selectedRoute && (
-                  <>
-                    <p className="text-[11px] text-zinc-200">Route: {selectedRoute.name}</p>
-                    <p className="text-[10px] text-zinc-600">{selectedRoute.waypointIds.length} waypoints</p>
-                    <button
-                      onClick={assignRouteCommand}
-                      disabled={selectedBots.length === 0}
-                      className="w-full text-[11px] px-3 py-1.5 rounded bg-violet-500/15 text-violet-300 border border-violet-500/20 disabled:opacity-40"
-                    >
-                      Patrol Route With Selected Bots
-                    </button>
-                  </>
-                )}
-                {selectedMarker && (
-                  <>
-                    <p className="text-[11px] text-zinc-200">Marker: {selectedMarker.name}</p>
-                    <p className="text-[10px] text-zinc-600 uppercase">{selectedMarker.kind}</p>
-                    <button
-                      onClick={sendBotsToMarker}
-                      disabled={selectedBots.length === 0}
-                      className="w-full text-[11px] px-3 py-1.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/20 disabled:opacity-40"
-                    >
-                      Move Selected Bots Here
-                    </button>
-                  </>
-                )}
-                <p className="text-[10px] text-zinc-600">
-                  {selectedBots.length > 0 ? `${selectedBots.length} selected bot${selectedBots.length !== 1 ? 's' : ''}` : 'Select one or more bots to issue actions'}
-                </p>
-              </div>
-            </div>
-          )}
         </div>
 
         {/* Canvas */}
         <div
           ref={containerRef}
-          className={`flex-1 relative ${cursorClass}`}
+          className={`flex-1 relative ${draggingRef.current ? 'cursor-grabbing' : hoveredRef.current ? 'cursor-pointer' : 'cursor-grab'}`}
         >
           <canvas
             ref={canvasRef}
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; setHovered(null); }}
-            onContextMenu={handleContextMenu}
+            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
             className="w-full h-full"
           />
-
-          {/* Drawing mode indicator */}
-          {mapDrawingMode === 'add-marker' && (
-            <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-emerald-600/90 backdrop-blur-sm border border-emerald-500/60 rounded-lg px-4 py-2 text-[12px] text-white font-medium">
-              Click on the map to place a marker
-              <button
-                onClick={() => setMapDrawingMode('none')}
-                className="ml-3 text-emerald-200 hover:text-white underline"
-              >
-                Cancel
-              </button>
-            </div>
-          )}
-
-          {/* Legend */}
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
             <p className="text-zinc-500 font-semibold uppercase tracking-wider mb-2">Legend</p>
             <div className="space-y-1.5">
               <LegendItem shape="circle" color="#6B7280" label="Bot" />
               <LegendItem shape="square" color="#60A5FA" label="Player" />
-              <LegendItem shape="diamond" color="#EAB308" label="Marker" />
-              {show.terrain && terrainStatus === 'loaded' && (
+              {show.terrain && terrainCanvas.current && (
                 <>
                   <LegendItem shape="square" color="#5B8C33" label="Grass" />
                   <LegendItem shape="square" color="#3366CC" label="Water" />
@@ -1413,74 +554,8 @@ export default function MapPage() {
               )}
             </div>
           </div>
-
-          {/* Marker Editor overlay */}
-          {markerEditor && (
-            <div className="absolute top-4 right-4 z-40">
-              <MarkerEditor
-                key={markerEditor.marker?.id ?? `new-${markerEditor.defaultX ?? 0}-${markerEditor.defaultZ ?? 0}`}
-                marker={markerEditor.marker}
-                defaultX={markerEditor.defaultX}
-                defaultZ={markerEditor.defaultZ}
-                onSave={handleSaveMarker}
-                onCancel={() => setMarkerEditor(null)}
-              />
-            </div>
-          )}
-
-          {zoneEditor && (
-            <div className="absolute top-4 right-4 z-40">
-              <ZoneEditor
-                defaultX={zoneEditor.x}
-                defaultZ={zoneEditor.z}
-                zone={zoneEditor.zone}
-                onSave={handleSaveZone}
-                onCancel={() => setZoneEditor(null)}
-              />
-            </div>
-          )}
-
-          {routeEditor && (
-            <div className="absolute top-4 right-4 z-40">
-              <RouteEditor
-                markers={markers}
-                route={routeEditor.route}
-                onSave={handleSaveRoute}
-                onCancel={() => setRouteEditor(null)}
-              />
-            </div>
-          )}
         </div>
       </div>
-
-      {/* Context Menu */}
-      {contextMenu && (
-        <MapContextMenu
-          target={contextMenu.target}
-          screenX={contextMenu.screenX}
-          screenY={contextMenu.screenY}
-          selectedBot={getSelectedBot()}
-          onClose={() => setContextMenu(null)}
-          onWalkHere={handleWalkHere}
-          onCreateMarker={handleCreateMarker}
-          onCreateZone={(x, z) => setZoneEditor({ x, z })}
-          onCopyCoords={handleCopyCoords}
-          onFollow={handleFollow}
-          onMoveToMarker={(marker) => {
-            const botName = getSelectedBot();
-            if (!botName) return;
-            api.createCommand({
-              type: 'move_to_marker',
-              targets: [botName],
-              scope: 'bot',
-              source: 'map',
-              payload: { markerId: marker.id },
-            }).catch(() => {});
-          }}
-          onEditMarker={handleEditMarker}
-          onDeleteMarker={handleDeleteMarker}
-        />
-      )}
     </div>
   );
 }
@@ -1495,117 +570,11 @@ function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick
   );
 }
 
-function LegendItem({ shape, color, label }: { shape: 'circle' | 'square' | 'diamond'; color: string; label: string }) {
+function LegendItem({ shape, color, label }: { shape: 'circle' | 'square'; color: string; label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span
-        className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : shape === 'square' ? 'rounded-sm' : ''}`}
-        style={{
-          backgroundColor: color,
-          ...(shape === 'diamond' ? { clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' } : {}),
-        }}
-      />
+      <span className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : 'rounded-sm'}`} style={{ backgroundColor: color }} />
       <span className="text-zinc-400">{label}</span>
-    </div>
-  );
-}
-
-function ZoneEditor({
-  defaultX,
-  defaultZ,
-  zone,
-  onSave,
-  onCancel,
-}: {
-  defaultX: number;
-  defaultZ: number;
-  zone?: ZoneRecord;
-  onSave: (data: { name: string; mode: string; shape: 'circle' | 'rectangle'; radius: number; width: number; height: number }) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(zone?.name ?? '');
-  const [mode, setMode] = useState<'guard' | 'avoid' | 'farm' | 'build' | 'gather' | 'custom'>((zone?.mode as 'guard' | 'avoid' | 'farm' | 'build' | 'gather' | 'custom') ?? 'guard');
-  const [shape, setShape] = useState<'circle' | 'rectangle'>(zone?.shape ?? 'circle');
-  const [radius, setRadius] = useState(zone?.circle?.radius ?? 16);
-  const [width, setWidth] = useState(zone?.rectangle ? zone.rectangle.maxX - zone.rectangle.minX : 24);
-  const [height, setHeight] = useState(zone?.rectangle ? zone.rectangle.maxZ - zone.rectangle.minZ : 24);
-
-  return (
-    <div className="bg-zinc-900/95 border border-zinc-700/60 rounded-lg shadow-xl p-4 w-72">
-      <h3 className="text-[12px] font-semibold text-zinc-300 mb-3">{zone ? 'Edit Zone' : 'Create Zone'}</h3>
-      <div className="space-y-2.5">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Zone name..." className="w-full bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200" />
-        <div className="grid grid-cols-2 gap-2">
-          <select value={mode} onChange={(e) => setMode(e.target.value as typeof mode)} className="bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200">
-            <option value="guard">guard</option>
-            <option value="avoid">avoid</option>
-            <option value="farm">farm</option>
-            <option value="build">build</option>
-            <option value="gather">gather</option>
-            <option value="custom">custom</option>
-          </select>
-          <select value={shape} onChange={(e) => setShape(e.target.value as typeof shape)} className="bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200">
-            <option value="circle">circle</option>
-            <option value="rectangle">rectangle</option>
-          </select>
-        </div>
-        <p className="text-[10px] text-zinc-500">Center: {Math.round(defaultX)}, {Math.round(defaultZ)}</p>
-        {shape === 'circle' ? (
-          <input type="number" value={radius} onChange={(e) => setRadius(Number(e.target.value))} placeholder="Radius" className="w-full bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200" />
-        ) : (
-          <div className="grid grid-cols-2 gap-2">
-            <input type="number" value={width} onChange={(e) => setWidth(Number(e.target.value))} placeholder="Width" className="bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200" />
-            <input type="number" value={height} onChange={(e) => setHeight(Number(e.target.value))} placeholder="Height" className="bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200" />
-          </div>
-        )}
-        <div className="flex gap-2 pt-1">
-          <button onClick={() => name.trim() && onSave({ name: name.trim(), mode, shape, radius, width, height })} className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium transition-colors">{zone ? 'Update' : 'Create'}</button>
-          <button onClick={onCancel} className="flex-1 px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-[11px] font-medium transition-colors">Cancel</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function RouteEditor({
-  markers,
-  route,
-  onSave,
-  onCancel,
-}: {
-  markers: MarkerRecord[];
-  route?: RouteRecord;
-  onSave: (data: { name: string; waypointIds: string[]; loop: boolean }) => void;
-  onCancel: () => void;
-}) {
-  const [name, setName] = useState(route?.name ?? '');
-  const [loop, setLoop] = useState(route?.loop ?? false);
-  const [waypointIds, setWaypointIds] = useState<string[]>(route?.waypointIds ?? []);
-
-  const toggleWaypoint = (id: string) => {
-    setWaypointIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
-  };
-
-  return (
-    <div className="bg-zinc-900/95 border border-zinc-700/60 rounded-lg shadow-xl p-4 w-80">
-      <h3 className="text-[12px] font-semibold text-zinc-300 mb-3">{route ? 'Edit Route' : 'Create Route'}</h3>
-      <div className="space-y-2.5">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Route name..." className="w-full bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1.5 text-[12px] text-zinc-200" />
-        <label className="flex items-center gap-2 text-[11px] text-zinc-400"><input type="checkbox" checked={loop} onChange={(e) => setLoop(e.target.checked)} /> Loop route</label>
-        <div className="max-h-48 overflow-y-auto space-y-1 rounded border border-zinc-800/60 p-2 bg-zinc-950/60">
-          {markers.map((marker) => (
-            <label key={marker.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
-              <input type="checkbox" checked={waypointIds.includes(marker.id)} onChange={() => toggleWaypoint(marker.id)} />
-              <span>{marker.name}</span>
-            </label>
-          ))}
-          {markers.length === 0 && <p className="text-[11px] text-zinc-600">No markers available</p>}
-        </div>
-        <div className="flex gap-2 pt-1">
-          <button onClick={() => name.trim() && waypointIds.length > 0 && onSave({ name: name.trim(), waypointIds, loop })} className="flex-1 px-3 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-medium transition-colors">{route ? 'Update' : 'Create'}</button>
-          <button onClick={onCancel} className="flex-1 px-3 py-1.5 rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-[11px] font-medium transition-colors">Cancel</button>
-        </div>
-      </div>
     </div>
   );
 }

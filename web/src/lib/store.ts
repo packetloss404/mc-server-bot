@@ -431,3 +431,52 @@ export const useSchematicPlacementStore = create<SchematicPlacementStore>((set) 
   setCursorWorldPos: (pos) => set({ cursorWorldPos: pos }),
   cancelPlacement: () => set({ activeSchematic: null, placedOrigin: null, cursorWorldPos: null }),
 }));
+
+/* ───────────────────────────────────────────────
+ * Control store – shared selection state
+ * ─────────────────────────────────────────────── */
+
+interface ControlStore {
+  selectedBotIds: Set<string>;
+  toggleBotSelection: (name: string) => void;
+  selectBot: (name: string) => void;
+  deselectBot: (name: string) => void;
+  clearSelection: () => void;
+  setSelection: (names: string[]) => void;
+}
+
+export const useControlStore = create<ControlStore>((set) => ({
+  selectedBotIds: new Set<string>(),
+
+  toggleBotSelection: (name) =>
+    set((state) => {
+      const next = new Set(state.selectedBotIds);
+      const key = name.toLowerCase();
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return { selectedBotIds: next };
+    }),
+
+  selectBot: (name) =>
+    set((state) => {
+      const key = name.toLowerCase();
+      if (state.selectedBotIds.has(key)) return state;
+      const next = new Set(state.selectedBotIds);
+      next.add(key);
+      return { selectedBotIds: next };
+    }),
+
+  deselectBot: (name) =>
+    set((state) => {
+      const key = name.toLowerCase();
+      if (!state.selectedBotIds.has(key)) return state;
+      const next = new Set(state.selectedBotIds);
+      next.delete(key);
+      return { selectedBotIds: next };
+    }),
+
+  clearSelection: () => set({ selectedBotIds: new Set() }),
+
+  setSelection: (names) =>
+    set({ selectedBotIds: new Set(names.map((n) => n.toLowerCase())) }),
+}));

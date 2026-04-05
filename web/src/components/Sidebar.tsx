@@ -1,9 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore } from '@/lib/store';
 import { motion } from 'framer-motion';
 
 const NAV_ITEMS = [
@@ -41,6 +40,7 @@ const NAV_ITEMS = [
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     ),
+    badge: 'fleet',
   },
   {
     href: '/social',
@@ -51,15 +51,6 @@ const NAV_ITEMS = [
         <circle cx="9" cy="7" r="4" />
         <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-      </svg>
-    ),
-  },
-  {
-    href: '/roles',
-    label: 'Roles',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
       </svg>
     ),
   },
@@ -93,16 +84,6 @@ const NAV_ITEMS = [
     ),
   },
   {
-    href: '/coordination',
-    label: 'Coordination',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="2" />
-        <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
-      </svg>
-    ),
-  },
-  {
     href: '/stats',
     label: 'Stats',
     icon: (
@@ -110,47 +91,6 @@ const NAV_ITEMS = [
         <line x1="18" y1="20" x2="18" y2="10" />
         <line x1="12" y1="20" x2="12" y2="4" />
         <line x1="6" y1="20" x2="6" y2="14" />
-      </svg>
-    ),
-  },
-  {
-    href: '/history',
-    label: 'History',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <circle cx="12" cy="12" r="10" />
-        <polyline points="12 6 12 12 16 14" />
-      </svg>
-    ),
-  },
-  {
-    href: '/build',
-    label: 'Build',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M2 20h20" />
-        <path d="M5 20V8l7-5 7 5v12" />
-        <path d="M9 20v-4h6v4" />
-      </svg>
-    ),
-  },
-  {
-    href: '/chains',
-    label: 'Chains',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
-        <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
-      </svg>
-    ),
-  },
-  {
-    href: '/commander',
-    label: 'Commander',
-    icon: (
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <polyline points="4 17 10 11 4 5" />
-        <line x1="12" y1="19" x2="20" y2="19" />
       </svg>
     ),
   },
@@ -172,48 +112,10 @@ export function Sidebar() {
   const botCount = useBotStore((s) => s.botList.length);
   const playerCount = useBotStore((s) => s.playerList.filter((p) => p.isOnline).length);
   const unreadChats = useBotStore((s) => s.unreadChats);
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  // Close mobile sidebar on route change
-  useEffect(() => {
-    const timeout = window.setTimeout(() => setMobileOpen(false), 0);
-    return () => window.clearTimeout(timeout);
-  }, [pathname]);
+  const fleetSelectionCount = useControlStore((s) => s.selectedBotIds.size);
 
   return (
-    <>
-      {/* Mobile toggle button */}
-      <button
-        onClick={() => setMobileOpen(!mobileOpen)}
-        className="fixed top-4 left-4 z-50 md:hidden bg-zinc-900 border border-zinc-800/60 rounded-lg p-2 text-zinc-400 hover:text-white transition-colors"
-        aria-label="Toggle menu"
-      >
-        {mobileOpen ? (
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M18 6L6 18M6 6l12 12" />
-          </svg>
-        ) : (
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <line x1="3" y1="12" x2="21" y2="12" />
-            <line x1="3" y1="6" x2="21" y2="6" />
-            <line x1="3" y1="18" x2="21" y2="18" />
-          </svg>
-        )}
-      </button>
-
-      {/* Backdrop for mobile */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 bg-black/60 z-30 md:hidden"
-          onClick={() => setMobileOpen(false)}
-        />
-      )}
-
-    <aside className={`
-      w-[220px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col shrink-0 h-screen top-0
-      fixed z-40 transition-transform duration-200 md:sticky md:translate-x-0
-      ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}
-    `}>
+    <aside className="w-[220px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col shrink-0 h-screen sticky top-0">
       {/* Logo */}
       <div className="px-5 py-5 border-b border-zinc-800/60">
         <div className="flex items-center gap-2.5">
@@ -250,7 +152,8 @@ export function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
           const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-          const showBadge = item.badge && unreadChats > 0;
+          const showChatBadge = item.badge === true && unreadChats > 0;
+          const showFleetBadge = item.badge === 'fleet' && fleetSelectionCount > 0;
           return (
             <Link
               key={item.href}
@@ -272,9 +175,14 @@ export function Sidebar() {
                 {item.icon}
               </span>
               <span>{item.label}</span>
-              {showBadge && (
+              {showChatBadge && (
                 <span className="ml-auto bg-emerald-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
                   {unreadChats > 9 ? '9+' : unreadChats}
+                </span>
+              )}
+              {showFleetBadge && (
+                <span className="ml-auto bg-emerald-500/20 text-emerald-400 text-[10px] font-bold min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center">
+                  {fleetSelectionCount}
                 </span>
               )}
             </Link>
@@ -287,6 +195,5 @@ export function Sidebar() {
         <p className="text-[10px] text-zinc-600">DyoCraft v0.1.0</p>
       </div>
     </aside>
-    </>
   );
 }

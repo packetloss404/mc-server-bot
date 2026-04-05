@@ -1,139 +1,77 @@
 'use client';
 
-import { useState } from 'react';
-import { motion, AnimatePresence } from 'framer-motion';
-import { useControlStore, useFleetStore } from '@/lib/store';
-import { api } from '@/lib/api';
+import Link from 'next/link';
+import { useBotStore, useControlStore } from '@/lib/store';
+import { getPersonalityColor, PERSONALITY_ICONS } from '@/lib/constants';
 
 export function FleetSelectionBar() {
   const selectedBotIds = useControlStore((s) => s.selectedBotIds);
   const clearSelection = useControlStore((s) => s.clearSelection);
-  const upsertSquad = useFleetStore((s) => s.upsertSquad);
-  const [showNameInput, setShowNameInput] = useState(false);
-  const [squadName, setSquadName] = useState('');
-  const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const deselectBot = useControlStore((s) => s.deselectBot);
+  const bots = useBotStore((s) => s.botList);
 
-  const count = selectedBotIds.size;
-  const botNames = Array.from(selectedBotIds);
+  const selectedBots = bots.filter((b) => selectedBotIds.has(b.name.toLowerCase()));
+  const count = selectedBots.length;
 
-  const handleStopAll = async () => {
-    setActionLoading('stop');
-    try {
-      await api.createCommand({ type: 'stop_movement', targets: botNames, scope: 'selection', source: 'dashboard' });
-    } catch {
-      // ignore individual failures
-    }
-    setActionLoading(null);
-  };
-
-  const handlePauseAll = async () => {
-    setActionLoading('pause');
-    try {
-      await api.createCommand({ type: 'pause_voyager', targets: botNames, scope: 'selection', source: 'dashboard' });
-    } catch {
-      // ignore
-    }
-    setActionLoading(null);
-  };
-
-  const handleCreateSquad = async () => {
-    if (!squadName.trim()) return;
-    const result = await api.createSquad({ name: squadName.trim(), botNames });
-    upsertSquad(result.squad);
-    setSquadName('');
-    setShowNameInput(false);
-  };
+  if (count === 0) return null;
 
   return (
-    <AnimatePresence>
-      {count > 0 && (
-        <motion.div
-          initial={{ y: 100, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          exit={{ y: 100, opacity: 0 }}
-          transition={{ type: 'spring', stiffness: 400, damping: 30 }}
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50"
-        >
-          <div className="bg-zinc-900/95 backdrop-blur-lg border border-zinc-700/60 rounded-2xl shadow-2xl shadow-black/40 px-5 py-3 flex items-center gap-4">
-            {/* Bot count & names */}
-            <div className="flex items-center gap-2.5">
-              <span className="bg-emerald-500/20 text-emerald-400 text-xs font-bold px-2.5 py-1 rounded-lg">
-                {count}
-              </span>
-              <div className="text-sm text-zinc-300">
-                <span className="font-medium">bot{count !== 1 ? 's' : ''} selected</span>
-                <span className="text-zinc-500 ml-2 text-xs hidden sm:inline">
-                  {botNames.slice(0, 3).join(', ')}
-                  {botNames.length > 3 && ` +${botNames.length - 3}`}
-                </span>
-              </div>
-            </div>
+    <div className="flex items-center gap-3 bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-4 py-2.5">
+      {/* Count & label */}
+      <div className="flex items-center gap-2">
+        <span className="inline-flex items-center justify-center w-6 h-6 rounded-full bg-emerald-500/20 text-emerald-400 text-xs font-bold">
+          {count}
+        </span>
+        <span className="text-xs font-medium text-emerald-300">
+          bot{count !== 1 ? 's' : ''} selected
+        </span>
+      </div>
 
-            <div className="w-px h-6 bg-zinc-700/60" />
-
-            {/* Actions */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={handleStopAll}
-                disabled={actionLoading === 'stop'}
-                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors disabled:opacity-50"
-              >
-                {actionLoading === 'stop' ? 'Stopping...' : 'Stop All'}
-              </button>
-              <button
-                onClick={handlePauseAll}
-                disabled={actionLoading === 'pause'}
-                className="text-xs font-medium px-3 py-1.5 rounded-lg bg-yellow-500/10 text-yellow-400 hover:bg-yellow-500/20 transition-colors disabled:opacity-50"
-              >
-                {actionLoading === 'pause' ? 'Pausing...' : 'Pause All'}
-              </button>
-
-              {showNameInput ? (
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={squadName}
-                    onChange={(e) => setSquadName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleCreateSquad()}
-                    placeholder="Squad name..."
-                    autoFocus
-                    className="w-32 text-xs bg-zinc-800 border border-zinc-600 text-white rounded-lg px-2.5 py-1.5 focus:outline-none focus:border-emerald-500"
-                  />
-                  <button
-                    onClick={handleCreateSquad}
-                    disabled={!squadName.trim()}
-                    className="text-xs font-medium px-2.5 py-1.5 rounded-lg bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/25 transition-colors disabled:opacity-50"
-                  >
-                    Save
-                  </button>
-                  <button
-                    onClick={() => { setShowNameInput(false); setSquadName(''); }}
-                    className="text-xs text-zinc-500 hover:text-zinc-300 px-1"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <button
-                  onClick={() => setShowNameInput(true)}
-                  className="text-xs font-medium px-3 py-1.5 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 transition-colors"
-                >
-                  Group as Squad
-                </button>
-              )}
-            </div>
-
-            <div className="w-px h-6 bg-zinc-700/60" />
-
-            <button
-              onClick={clearSelection}
-              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors px-2 py-1"
+      {/* Selected bot chips */}
+      <div className="flex items-center gap-1.5 flex-1 overflow-x-auto">
+        {selectedBots.map((bot) => {
+          const color = getPersonalityColor(bot.personality);
+          const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
+          return (
+            <span
+              key={bot.name}
+              className="inline-flex items-center gap-1.5 text-[11px] font-medium text-zinc-200 bg-zinc-800/80 border border-zinc-700/50 rounded-lg pl-2 pr-1 py-1 shrink-0"
             >
-              Clear
-            </button>
-          </div>
-        </motion.div>
-      )}
-    </AnimatePresence>
+              <span
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ backgroundColor: color }}
+              />
+              {emoji && <span className="text-[10px]">{emoji}</span>}
+              {bot.name}
+              <button
+                onClick={() => deselectBot(bot.name)}
+                className="ml-0.5 w-4 h-4 rounded flex items-center justify-center text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700 transition-colors"
+                title={`Deselect ${bot.name}`}
+              >
+                <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round">
+                  <path d="M18 6L6 18M6 6l12 12" />
+                </svg>
+              </button>
+            </span>
+          );
+        })}
+      </div>
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 shrink-0">
+        <Link
+          href="/fleet"
+          className="text-[11px] font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 px-2.5 py-1 rounded-md transition-colors"
+        >
+          Fleet View
+        </Link>
+        <button
+          onClick={clearSelection}
+          className="text-[11px] text-zinc-500 hover:text-zinc-300 px-2 py-1 rounded-md hover:bg-zinc-800 transition-colors"
+        >
+          Clear All
+        </button>
+      </div>
+    </div>
   );
 }

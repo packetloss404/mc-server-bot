@@ -2,20 +2,8 @@
 
 import Link from 'next/link';
 import { motion } from 'framer-motion';
-import type { BotLiveData } from '@/lib/store';
-import { useControlStore, useRoleStore } from '@/lib/store';
+import { useControlStore, type BotLiveData } from '@/lib/store';
 import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
-
-const ROLE_COLORS: Record<string, string> = {
-  guard: '#EF4444',
-  builder: '#3B82F6',
-  hauler: '#F59E0B',
-  farmer: '#10B981',
-  miner: '#6B7280',
-  scout: '#8B5CF6',
-  merchant: '#EC4899',
-  'free-agent': '#6B7280',
-};
 
 function HealthBar({ value, max, color, label }: { value: number; max: number; color: string; label: string }) {
   const pct = Math.max(0, Math.min(100, (value / max) * 100));
@@ -42,10 +30,9 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
   const stateLabel = STATE_LABELS[bot.state] ?? bot.state;
   const isActive = !['IDLE', 'DISCONNECTED', 'SPAWNING'].includes(bot.state);
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
-  const isSelected = useControlStore((s) => s.selectedBotIds.has(bot.name));
+  const selectedBotIds = useControlStore((s) => s.selectedBotIds);
   const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
-  const roleAssignment = useRoleStore((s) => s.assignments.find((a) => a.botName === bot.name));
-  const roleColor = roleAssignment ? (ROLE_COLORS[roleAssignment.role] ?? '#6B7280') : null;
+  const isSelected = selectedBotIds.has(bot.name.toLowerCase());
 
   return (
     <motion.div
@@ -54,19 +41,15 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
       transition={{ duration: 0.3, delay: index * 0.05 }}
       className="relative"
     >
-      {/* Selection checkbox */}
+      {/* Selection checkbox overlay */}
       <button
-        onClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          toggleBotSelection(bot.name);
-        }}
+        onClick={(e) => { e.preventDefault(); e.stopPropagation(); toggleBotSelection(bot.name); }}
         className={`absolute top-3 right-3 z-10 w-5 h-5 rounded border-2 flex items-center justify-center transition-all duration-150 ${
           isSelected
-            ? 'bg-emerald-500 border-emerald-500'
-            : 'bg-zinc-800/80 border-zinc-600 hover:border-zinc-400'
+            ? 'bg-emerald-500 border-emerald-400 shadow-[0_0_8px_rgba(16,185,129,0.4)]'
+            : 'border-zinc-600 hover:border-zinc-400 bg-zinc-900/80'
         }`}
-        title={isSelected ? 'Deselect bot' : 'Select bot'}
+        title={isSelected ? `Deselect ${bot.name}` : `Select ${bot.name}`}
       >
         {isSelected && (
           <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round">
@@ -77,7 +60,9 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
       <Link
         href={`/bots/${bot.name}`}
         className={`group block bg-zinc-900/80 border rounded-xl hover:border-zinc-600/60 transition-all duration-200 overflow-hidden hover:shadow-lg hover:shadow-black/20 ${
-          isSelected ? 'border-emerald-500/40 ring-1 ring-emerald-500/20' : 'border-zinc-800/60'
+          isSelected
+            ? 'border-emerald-500/50 ring-1 ring-emerald-500/20'
+            : 'border-zinc-800/60'
         }`}
       >
         {/* Accent gradient bar */}
@@ -97,17 +82,7 @@ export function BotCard({ bot, index = 0 }: { bot: BotLiveData; index?: number }
                 {emoji}
               </div>
               <div className="min-w-0">
-                <div className="flex items-center gap-1.5">
-                  <h3 className="text-sm font-semibold text-white truncate">{bot.name}</h3>
-                  {roleAssignment && roleColor && (
-                    <span
-                      className="text-[9px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded"
-                      style={{ color: roleColor, backgroundColor: `${roleColor}15` }}
-                    >
-                      {roleAssignment.role}
-                    </span>
-                  )}
-                </div>
+                <h3 className="text-sm font-semibold text-white truncate">{bot.name}</h3>
                 <p className="text-[11px] text-zinc-500 capitalize">{bot.personality}</p>
               </div>
             </div>

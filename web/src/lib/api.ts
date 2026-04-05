@@ -133,6 +133,23 @@ export interface TerrainData {
   blocks: string[];
 }
 
+export interface SquadRecord {
+  id: string;
+  name: string;
+  botNames: string[];
+  defaultRole?: string;
+  homeMarkerId?: string;
+  activeMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionRecord {
+  id: string;
+  title: string;
+  status: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +221,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Squads
+  getSquads: () => fetchJSON<{ squads: SquadRecord[] }>('/api/squads').catch(() => ({ squads: [] })),
+
+  // Missions
+  getMission: (id: string) => fetchJSON<MissionRecord>(`/api/missions/${id}`).catch(() => null),
 };

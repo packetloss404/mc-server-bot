@@ -1,3 +1,33 @@
+// Re-export shared control-platform types so frontend consumers import from one place
+export type {
+  CommandType,
+  CommandScope,
+  CommandPriority,
+  CommandSource,
+  CommandStatus,
+  CommandError,
+  CommandRecord,
+  CommanderPlanCommand,
+  CommanderPlanMission,
+  CommanderPlan,
+  MissionType,
+  MissionStatus,
+  MissionPriority,
+  MissionSource,
+  MissionStep,
+  MissionRecord,
+  SquadRecord,
+  RoleType,
+  AutonomyLevel,
+  InterruptPolicy,
+  RoleApprovalStatus,
+  RoleApprovalRequestRecord,
+  RoleAssignmentRecord,
+  MarkerRecord,
+  ZoneRecord,
+  RouteRecord,
+} from '@shared/index';
+
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {

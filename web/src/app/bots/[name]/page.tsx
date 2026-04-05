@@ -12,6 +12,7 @@ import { BotActivityPanel } from '@/components/BotActivityPanel';
 import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
+import { DiagnosticTimeline } from '@/components/DiagnosticTimeline';
 
 export default function BotProfilePage() {
   const params = useParams();
@@ -247,6 +248,11 @@ export default function BotProfilePage() {
                 )}
               </>
             )}
+          </Section>
+
+          {/* Diagnostic Timeline */}
+          <Section title="Diagnostic Timeline">
+            <DiagnosticTimeline botName={bot.name} accentColor={accentColor} />
           </Section>
 
           {/* Inventory */}

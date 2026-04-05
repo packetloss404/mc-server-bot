@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
@@ -26,6 +26,8 @@ interface MapEntity {
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
+  const toggleBotSelection = useControlStore((s) => s.toggleBotSelection);
+  const selectedBotIds = useControlStore((s) => s.selectedBotIds);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -328,6 +330,11 @@ export default function MapPage() {
       const dy = my - pos.sy;
       if (dx * dx + dy * dy < pos.radius * pos.radius) {
         selectedRef.current = selectedRef.current === name ? null : name;
+        // Sync bot selections to the global control store
+        const matchedBot = botsRef.current.find((b) => b.name === name);
+        if (matchedBot) {
+          toggleBotSelection(name);
+        }
         kick();
         return;
       }
@@ -499,10 +506,10 @@ export default function MapPage() {
               {allEntities.map((entity) => (
                 <button
                   key={`${entity.type}-${entity.name}`}
-                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; kick(); }}
+                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; if (entity.type === 'bot') toggleBotSelection(entity.name); kick(); }}
                   className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
                     selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                  }`}
+                  } ${entity.type === 'bot' && selectedBotIds.has(entity.name.toLowerCase()) ? 'ring-1 ring-emerald-500/30' : ''}`}
                 >
                   <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
                   <div className="min-w-0 flex-1">

@@ -2,9 +2,10 @@
 
 import { useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore } from '@/lib/store';
 import { api, type BotEvent } from '@/lib/api';
 import { BotCard } from '@/components/BotCard';
+import { FleetSelectionBar } from '@/components/FleetSelectionBar';
 import { EVENT_CONFIG } from '@/lib/constants';
 import Link from 'next/link';
 
@@ -14,6 +15,8 @@ export default function DashboardPage() {
   const activityFeed = useBotStore((s) => s.activityFeed);
   const connected = useBotStore((s) => s.connected);
   const world = useBotStore((s) => s.world);
+  const selectedBotIds = useControlStore((s) => s.selectedBotIds);
+  const selectionCount = selectedBotIds.size;
 
   useEffect(() => {
     api.getActivity(20).then((data) => {
@@ -85,12 +88,22 @@ export default function DashboardPage() {
         </Link>
       </div>
 
+      {/* Fleet Selection Bar */}
+      {selectionCount > 0 && <FleetSelectionBar />}
+
       {/* Bot Grid */}
       <section>
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
-            Bots ({bots.length})
-          </h2>
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
+              Bots ({bots.length})
+            </h2>
+            {selectionCount > 0 && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                {selectionCount} selected
+              </span>
+            )}
+          </div>
           <Link href="/manage" className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
             Manage All
           </Link>

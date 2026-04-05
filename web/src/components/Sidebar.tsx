@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useControlStore } from '@/lib/store';
 import { motion } from 'framer-motion';
 
 const NAV_ITEMS = [
@@ -28,6 +28,19 @@ const NAV_ITEMS = [
         <path d="M16 6v16" />
       </svg>
     ),
+  },
+  {
+    href: '/fleet',
+    label: 'Fleet',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+      </svg>
+    ),
+    badge: 'fleet',
   },
   {
     href: '/social',
@@ -99,6 +112,7 @@ export function Sidebar() {
   const botCount = useBotStore((s) => s.botList.length);
   const playerCount = useBotStore((s) => s.playerList.filter((p) => p.isOnline).length);
   const unreadChats = useBotStore((s) => s.unreadChats);
+  const fleetSelectionCount = useControlStore((s) => s.selectedBotIds.size);
 
   return (
     <aside className="w-[220px] bg-zinc-950 border-r border-zinc-800/60 flex flex-col shrink-0 h-screen sticky top-0">
@@ -138,7 +152,8 @@ export function Sidebar() {
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
           const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
-          const showBadge = item.badge && unreadChats > 0;
+          const showChatBadge = item.badge === true && unreadChats > 0;
+          const showFleetBadge = item.badge === 'fleet' && fleetSelectionCount > 0;
           return (
             <Link
               key={item.href}
@@ -160,9 +175,14 @@ export function Sidebar() {
                 {item.icon}
               </span>
               <span>{item.label}</span>
-              {showBadge && (
+              {showChatBadge && (
                 <span className="ml-auto bg-emerald-500 text-white text-[10px] font-bold w-5 h-5 rounded-full flex items-center justify-center">
                   {unreadChats > 9 ? '9+' : unreadChats}
+                </span>
+              )}
+              {showFleetBadge && (
+                <span className="ml-auto bg-emerald-500/20 text-emerald-400 text-[10px] font-bold min-w-[20px] h-5 px-1 rounded-full flex items-center justify-center">
+                  {fleetSelectionCount}
                 </span>
               )}
             </Link>

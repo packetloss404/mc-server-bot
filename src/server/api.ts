@@ -104,46 +104,58 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Create bot
   app.post('/api/bots', async (req: Request, res: Response) => {
-    const { name, personality, location, mode } = req.body;
+    try {
+      const { name, personality, location, mode } = req.body;
 
-    if (!name || !personality) {
-      res.status(400).json({ error: 'name and personality are required' });
-      return;
+      if (!name || !personality) {
+        res.status(400).json({ error: 'name and personality are required' });
+        return;
+      }
+
+      const handle = await botManager.spawnBot(name, personality, location, mode);
+      if (!handle) {
+        res.status(409).json({ error: 'Bot already exists or max limit reached' });
+        return;
+      }
+
+      const event = eventLog.push({ type: 'bot:spawn', botName: name, description: `${name} spawned` });
+      io.emit('bot:spawn', { bot: name });
+      io.emit('activity', event);
+
+      res.status(201).json({ success: true, bot: handle.getCachedStatus() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
-
-    const handle = await botManager.spawnBot(name, personality, location, mode);
-    if (!handle) {
-      res.status(409).json({ error: 'Bot already exists or max limit reached' });
-      return;
-    }
-
-    const event = eventLog.push({ type: 'bot:spawn', botName: name, description: `${name} spawned` });
-    io.emit('bot:spawn', { bot: name });
-    io.emit('activity', event);
-
-    res.status(201).json({ success: true, bot: handle.getCachedStatus() });
   });
 
   // Remove single bot
   app.delete('/api/bots/:name', async (req: Request, res: Response) => {
-    const removed = await botManager.removeBot(req.params.name as string);
-    if (!removed) {
-      res.status(404).json({ error: 'Bot not found' });
-      return;
+    try {
+      const removed = await botManager.removeBot(req.params.name as string);
+      if (!removed) {
+        res.status(404).json({ error: 'Bot not found' });
+        return;
+      }
+
+      const deletedName = req.params.name as string;
+      const event = eventLog.push({ type: 'bot:disconnect', botName: deletedName, description: `${deletedName} removed` });
+      io.emit('bot:disconnect', { bot: deletedName });
+      io.emit('activity', event);
+
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
-
-    const deletedName = req.params.name as string;
-    const event = eventLog.push({ type: 'bot:disconnect', botName: deletedName, description: `${deletedName} removed` });
-    io.emit('bot:disconnect', { bot: deletedName });
-    io.emit('activity', event);
-
-    res.json({ success: true });
   });
 
   // Remove all bots
   app.delete('/api/bots', async (_req: Request, res: Response) => {
-    const count = await botManager.removeAllBots();
-    res.json({ success: true, count });
+    try {
+      const count = await botManager.removeAllBots();
+      res.json({ success: true, count });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Toggle mode
@@ -257,26 +269,34 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Bot relationships (affinities) — read directly from main thread manager
   app.get('/api/bots/:name/relationships', (req: Request, res: Response) => {
-    const name = req.params.name as string;
-    const handle = botManager.getWorker(name);
-    if (!handle) {
-      res.status(404).json({ error: 'Bot not found' });
-      return;
+    try {
+      const name = req.params.name as string;
+      const handle = botManager.getWorker(name);
+      if (!handle) {
+        res.status(404).json({ error: 'Bot not found' });
+        return;
+      }
+      const affinities = botManager.getAffinityManager().getAllForBot(name);
+      res.json({ relationships: affinities });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
-    const affinities = botManager.getAffinityManager().getAllForBot(name);
-    res.json({ relationships: affinities });
   });
 
   // Bot conversations — read directly from main thread manager
   app.get('/api/bots/:name/conversations', (req: Request, res: Response) => {
-    const name = req.params.name as string;
-    const handle = botManager.getWorker(name);
-    if (!handle) {
-      res.status(404).json({ error: 'Bot not found' });
-      return;
+    try {
+      const name = req.params.name as string;
+      const handle = botManager.getWorker(name);
+      if (!handle) {
+        res.status(404).json({ error: 'Bot not found' });
+        return;
+      }
+      const conversations = botManager.getConversationManager().getAllConversations(name);
+      res.json({ conversations });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
-    const conversations = botManager.getConversationManager().getAllConversations(name);
-    res.json({ conversations });
   });
 
   // Bot tasks — from cached detailed status
@@ -302,8 +322,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Full social graph (all bots, all players) — direct from main thread
   app.get('/api/relationships', (_req: Request, res: Response) => {
-    const allAffinities = botManager.getAffinityManager().getAll();
-    res.json({ relationships: allAffinities });
+    try {
+      const allAffinities = botManager.getAffinityManager().getAll();
+      res.json({ relationships: allAffinities });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Global skill library — read from disk
@@ -574,7 +598,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Shared blackboard state — direct from main thread
   app.get('/api/blackboard', (_req: Request, res: Response) => {
-    res.json({ blackboard: botManager.getBlackboardManager().getState() });
+    try {
+      res.json({ blackboard: botManager.getBlackboardManager().getState() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // Activity log
@@ -882,21 +910,25 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Set a swarm directive from dashboard/UI
   app.post('/api/swarm', async (req: Request, res: Response) => {
-    const { description, requestedBy } = req.body;
-    if (!description) {
-      res.status(400).json({ error: 'description is required' });
-      return;
-    }
-    await botManager.handleSwarmDirective(description, requestedBy || 'dashboard');
+    try {
+      const { description, requestedBy } = req.body;
+      if (!description) {
+        res.status(400).json({ error: 'description is required' });
+        return;
+      }
+      await botManager.handleSwarmDirective(description, requestedBy || 'dashboard');
 
-    const event = eventLog.push({
-      type: 'swarm:directive',
-      botName: 'swarm',
-      description: `Swarm directive set: ${description}`,
-      metadata: { requestedBy: requestedBy || 'dashboard' },
-    });
-    io.emit('activity', event);
-    res.json({ success: true });
+      const event = eventLog.push({
+        type: 'swarm:directive',
+        botName: 'swarm',
+        description: `Swarm directive set: ${description}`,
+        metadata: { requestedBy: requestedBy || 'dashboard' },
+      });
+      io.emit('activity', event);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ═══════════════════════════════════════

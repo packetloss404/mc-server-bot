@@ -293,6 +293,220 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ name: skillName, code });
   });
 
+  // ═══════════════════════════════════════
+  //  DIAGNOSTICS
+  // ═══════════════════════════════════════
+
+  // Bot diagnostics — "Why is this bot stuck?"
+  app.get('/api/bots/:name/diagnostics', (req: Request, res: Response) => {
+    const botName = req.params.name as string;
+    const handle = botManager.getWorker(botName);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+
+    const diag = handle.getCachedDiagnostics();
+    const detailed = handle.getCachedDetailedStatus();
+    const workerAlive = handle.isAlive();
+
+    // Build structured diagnostic report
+    const now = Date.now();
+    const checks: Array<{
+      id: string;
+      label: string;
+      status: 'ok' | 'warn' | 'error';
+      detail: string;
+    }> = [];
+
+    // 1. Connection status
+    const connected = workerAlive && diag?.connected !== false && diag?.state !== 'DISCONNECTED';
+    checks.push({
+      id: 'connection',
+      label: 'Connection',
+      status: connected ? 'ok' : 'error',
+      detail: connected ? 'Bot is connected to the server' : 'Bot is disconnected or worker thread is dead',
+    });
+
+    // 2. Health check
+    const health = diag?.health ?? detailed?.health ?? 0;
+    const food = diag?.food ?? detailed?.food ?? 0;
+    checks.push({
+      id: 'health',
+      label: 'Health',
+      status: health <= 0 ? 'error' : health <= 6 ? 'warn' : 'ok',
+      detail: health <= 0 ? 'Bot is dead (0 HP)' : health <= 6 ? `Low health (${health}/20)` : `${health}/20 HP`,
+    });
+    checks.push({
+      id: 'hunger',
+      label: 'Hunger',
+      status: food <= 0 ? 'error' : food <= 6 ? 'warn' : 'ok',
+      detail: food <= 0 ? 'Starving (0 food)' : food <= 6 ? `Low hunger (${food}/20)` : `${food}/20 food`,
+    });
+
+    // 3. Voyager loop state
+    const voyager = diag?.voyager ?? null;
+    if (voyager) {
+      // Paused check
+      checks.push({
+        id: 'voyager_paused',
+        label: 'Voyager Loop',
+        status: !voyager.isRunning ? 'error' : voyager.isPaused ? 'warn' : 'ok',
+        detail: !voyager.isRunning
+          ? 'Voyager loop is not running'
+          : voyager.isPaused
+            ? 'Voyager loop is paused'
+            : 'Voyager loop is running',
+      });
+
+      // Current task stale check (>30 min)
+      const lastExec = voyager.lastExecution;
+      const taskAge = lastExec?.timestamp ? now - lastExec.timestamp : null;
+      const staleThresholdMs = 30 * 60 * 1000; // 30 minutes
+      const isTaskStale = voyager.currentTask && taskAge !== null && taskAge > staleThresholdMs;
+      if (voyager.currentTask) {
+        checks.push({
+          id: 'task_stale',
+          label: 'Current Task',
+          status: isTaskStale ? 'warn' : 'ok',
+          detail: isTaskStale
+            ? `Task "${voyager.currentTask}" has been running for ${Math.round((taskAge ?? 0) / 60000)} min (stale >30 min)`
+            : `Working on: "${voyager.currentTask}"`,
+        });
+      }
+
+      // Last execution success
+      if (lastExec) {
+        checks.push({
+          id: 'last_execution',
+          label: 'Last Execution',
+          status: lastExec.success ? 'ok' : 'warn',
+          detail: lastExec.success
+            ? `Task "${lastExec.task}" succeeded (attempt ${lastExec.attempt})`
+            : `Task "${lastExec.task}" failed on attempt ${lastExec.attempt}`,
+        });
+      }
+    } else {
+      checks.push({
+        id: 'voyager_paused',
+        label: 'Voyager Loop',
+        status: 'warn',
+        detail: 'No voyager loop instance (bot may be in primitive mode)',
+      });
+    }
+
+    // 4. Instinct / combat override
+    const instinctActive = diag?.instinctActive ?? false;
+    if (instinctActive) {
+      checks.push({
+        id: 'instinct',
+        label: 'Combat Instinct',
+        status: 'warn',
+        detail: `Instinct active: ${diag?.instinctReason ?? 'unknown reason'} -- voyager is paused while fighting/fleeing`,
+      });
+    }
+
+    // 5. Bot state
+    const state = diag?.state ?? detailed?.state ?? 'UNKNOWN';
+    if (state === 'SPAWNING') {
+      checks.push({
+        id: 'state',
+        label: 'Bot State',
+        status: 'warn',
+        detail: 'Bot is still spawning',
+      });
+    } else if (state === 'IDLE' && voyager && !voyager.isPaused && voyager.isRunning && !voyager.currentTask) {
+      checks.push({
+        id: 'state',
+        label: 'Bot State',
+        status: 'ok',
+        detail: 'Idle -- waiting for next task from curriculum',
+      });
+    }
+
+    // 6. Recent failures
+    const recentFails = diag?.recentFailedTasks ?? [];
+    if (recentFails.length > 0) {
+      checks.push({
+        id: 'recent_failures',
+        label: 'Recent Failures',
+        status: recentFails.length >= 3 ? 'warn' : 'ok',
+        detail: recentFails.length >= 3
+          ? `${recentFails.length} recently failed tasks -- bot may be stuck on impossible goals`
+          : `${recentFails.length} failed task(s)`,
+      });
+    }
+
+    // Build recovery actions
+    const actions: Array<{
+      id: string;
+      label: string;
+      description: string;
+      available: boolean;
+      endpoint: string;
+      method: string;
+    }> = [];
+
+    if (voyager?.isPaused) {
+      actions.push({
+        id: 'resume_voyager',
+        label: 'Resume Voyager',
+        description: 'Unpause the voyager loop so the bot continues working on tasks',
+        available: connected,
+        endpoint: `/api/bots/${botName}/resume`,
+        method: 'POST',
+      });
+    }
+
+    if (voyager?.currentTask) {
+      actions.push({
+        id: 'run_unstuck',
+        label: 'Run Unstuck',
+        description: 'Queue an unstuck task to break the bot out of its current situation',
+        available: connected,
+        endpoint: `/api/bots/${botName}/task`,
+        method: 'POST',
+      });
+    }
+
+    if (!connected && workerAlive) {
+      actions.push({
+        id: 'reconnect',
+        label: 'Reconnect',
+        description: 'Remove and re-create the bot to force a fresh connection',
+        available: true,
+        endpoint: `/api/bots/${botName}`,
+        method: 'DELETE',
+      });
+    }
+
+    const overallStatus: 'ok' | 'warn' | 'error' =
+      checks.some((c) => c.status === 'error') ? 'error'
+      : checks.some((c) => c.status === 'warn') ? 'warn'
+      : 'ok';
+
+    res.json({
+      botName,
+      timestamp: now,
+      overallStatus,
+      checks,
+      actions,
+      raw: {
+        state,
+        connected,
+        health,
+        food,
+        instinctActive,
+        voyagerRunning: voyager?.isRunning ?? false,
+        voyagerPaused: voyager?.isPaused ?? false,
+        currentTask: voyager?.currentTask ?? null,
+        queuedTaskCount: voyager?.queuedTaskCount ?? 0,
+        recentFailedTasks: recentFails,
+        lastExecution: voyager?.lastExecution ?? null,
+      },
+    });
+  });
+
   // Aggregate world state — from first bot's cached detailed status
   app.get('/api/world', (_req: Request, res: Response) => {
     const workers = botManager.getAllWorkers();

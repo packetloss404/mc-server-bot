@@ -1,4 +1,3 @@
-import { EventEmitter } from 'events';
 import mineflayer, { Bot } from 'mineflayer';
 import { pathfinder, Movements } from 'mineflayer-pathfinder';
 import { plugin as collectBlock } from 'mineflayer-collectblock';
@@ -17,11 +16,7 @@ import { VoyagerLoop } from '../voyager/VoyagerLoop';
 import { StatsTracker } from '../voyager/StatsTracker';
 import { renderObservation } from '../voyager/Observation';
 import { PERSONALITIES } from '../personality/PersonalityType';
-import { SocialMemory } from '../social/SocialMemory';
-import { BotComms, BotMessage } from '../social/BotComms';
-import type { BotManager } from './BotManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
-import type { RoleManager } from '../control/RoleManager';
 
 export interface BotOptions {
   name: string;
@@ -32,35 +27,18 @@ export interface BotOptions {
   llmClient: LLMClient | null;
   affinityManager: AffinityManager;
   conversationManager: ConversationManager;
-  socialMemory: SocialMemory;
-  botComms: BotComms;
-  botManager: BotManager;
   blackboardManager: BlackboardManager;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
 }
 
-export class BotInstance extends EventEmitter {
+export class BotInstance {
   private static OWNER_PLAYER = 'Nerdfuryz';
   private static nextAvailableConnectAt = 0;
   readonly name: string;
   readonly personality: string;
   mode: BotMode;
-  private _state: BotState = BotState.SPAWNING;
+  state: BotState = BotState.SPAWNING;
   bot: Bot | null = null;
-
-  /** State getter/setter that emits 'stateChanged' for event-driven socket updates. */
-  get state(): BotState { return this._state; }
-  set state(newState: BotState) {
-    const prev = this._state;
-    this._state = newState;
-    if (prev !== newState) {
-      this.emit('stateChanged', { bot: this.name, state: newState, previousState: prev });
-    }
-  }
-
-  // Throttle tracking for event-driven position/inventory updates
-  private _lastPositionEmit = 0;
-  private _inventoryDebounceTimer: NodeJS.Timeout | null = null;
 
   private config: Config;
   private spawnLocation?: { x: number; y: number; z: number };
@@ -76,28 +54,20 @@ export class BotInstance extends EventEmitter {
   private blackboardManager: BlackboardManager;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private chatCooldowns: Map<string, number> = new Map();
-  private socialMemory: SocialMemory;
-  private botComms: BotComms;
-  private botManager: BotManager;
   private voyagerLoop: VoyagerLoop | null = null;
-  private reflectionInterval: ReturnType<typeof setInterval> | null = null;
-  private rawMessageHandler: ((jsonMsg: any) => void) | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
   private instinctResumeTimeout: NodeJS.Timeout | null = null;
   private instinctActive = false;
   private instinctReason: 'attack' | 'hazard' | null = null;
-  private instinctPauseKey: string | null = null;
+  private voyagerPausedByInstinct = false;
   private lastAttackedAt = 0;
   private lastHealth = 20;
   private lastAttackerName: string | null = null;
   private statsTracker = new StatsTracker('./data');
   private static CHAT_COOLDOWN_MS = 3000;
   private lastPathResetLog: { reason: string; at: number; suppressed: number } | null = null;
-  private lastInteractionAt: number = Date.now();
-  private roleManager: RoleManager | null = null;
 
   constructor(options: BotOptions) {
-    super();
     this.name = options.name;
     this.personality = options.personality;
     this.mode = options.mode;
@@ -106,19 +76,8 @@ export class BotInstance extends EventEmitter {
     this.llmClient = options.llmClient;
     this.affinityManager = options.affinityManager;
     this.conversationManager = options.conversationManager;
-    this.socialMemory = options.socialMemory;
-    this.botComms = options.botComms;
-    this.botManager = options.botManager;
     this.blackboardManager = options.blackboardManager;
     this.onSwarmDirective = options.onSwarmDirective;
-  }
-
-  /** Set a RoleManager so the Voyager loop can check role policies before auto-task generation. */
-  setRoleManager(manager: RoleManager): void {
-    this.roleManager = manager;
-    if (this.voyagerLoop) {
-      this.voyagerLoop.setRoleManager(manager);
-    }
   }
 
   async connect(skipQueue = false): Promise<void> {
@@ -203,51 +162,6 @@ export class BotInstance extends EventEmitter {
             this.startWandering(); // Voyager owns movement in codegen mode
           }
           this.startChatListener();
-          // Debug: log all raw messages to diagnose chat issues
-          if (!this.bot) return; // Bot disconnected during auth/class selection
-          if (this.rawMessageHandler) {
-            this.bot.removeListener('message', this.rawMessageHandler);
-          }
-          this.rawMessageHandler = (jsonMsg: any) => {
-            const text = jsonMsg.toString();
-            if (text && !text.includes('Chunk size') && text.trim().length > 0) {
-              logger.debug({ bot: this.name, rawMessage: text }, 'Raw message received');
-            }
-          };
-          this.bot.on('message', this.rawMessageHandler);
-
-          // Listen for inter-bot messages (unregister first to avoid duplicates on reconnect)
-          this.botComms.unregisterListener(this.name);
-          this.botComms.registerListener(this.name, (msg: BotMessage) => {
-            // Don't process messages from self
-            if (msg.from.toLowerCase() === this.name.toLowerCase()) return;
-
-            logger.info({ bot: this.name, from: msg.from, content: msg.content }, 'Received bot message');
-            this.socialMemory.addMemory(this.name, 'social',
-              `${msg.from} sent me a message: "${msg.content.substring(0, 80)}"`,
-              [msg.from], 5
-            );
-
-            // Detect task-like requests and queue them via VoyagerLoop
-            const taskRequest = this.extractBotTaskRequest(msg.content);
-            if (taskRequest && this.voyagerLoop) {
-              logger.info(
-                { bot: this.name, from: msg.from, task: taskRequest },
-                'Queuing bot-to-bot task request'
-              );
-              this.voyagerLoop.queuePlayerTask(taskRequest, msg.from);
-            }
-          });
-
-          // Periodic reflection every 10 minutes
-          this.reflectionInterval = setInterval(() => {
-            const recent = this.socialMemory.getRecentMemories(this.name, 10);
-            if (recent.length >= 5) {
-              this.socialMemory.reflect(this.name, recent);
-            }
-          }, 600000);
-
-          this.scheduleAmbientChat();
           this.startVoyagerIfCodegen();
         });
       });
@@ -298,54 +212,6 @@ export class BotInstance extends EventEmitter {
       this.triggerAttackInstinct(source || this.findLikelyThreat(), 'entity-hurt');
     });
 
-    // --- Event-driven socket updates (position, health, inventory) ---
-
-    // Position: throttle to max once per second
-    this.bot.on('move', () => {
-      const now = Date.now();
-      if (now - this._lastPositionEmit < 1000) return;
-      const pos = this.bot?.entity?.position;
-      if (!pos) return;
-      this._lastPositionEmit = now;
-      this.emit('positionChanged', {
-        bot: this.name,
-        x: Math.round(pos.x),
-        y: Math.round(pos.y),
-        z: Math.round(pos.z),
-      });
-    });
-
-    // Health: emit on change (mineflayer fires 'health' on actual change)
-    this.bot.on('health', () => {
-      this.emit('healthChanged', {
-        bot: this.name,
-        health: this.bot?.health ?? 0,
-        food: this.bot?.food ?? 0,
-      });
-    });
-
-    // Inventory: debounce to once per 2 seconds since changes can be rapid
-    const emitInventory = () => {
-      if (!this.bot) return;
-      try {
-        const items = this.bot.inventory.items();
-        this.emit('inventoryChanged', {
-          bot: this.name,
-          items: items.map((i: any) => ({ name: i.name, count: i.count, slot: i.slot })),
-        });
-      } catch { /* bot may be disconnected */ }
-    };
-    const debouncedInventory = () => {
-      if (this._inventoryDebounceTimer) clearTimeout(this._inventoryDebounceTimer);
-      this._inventoryDebounceTimer = setTimeout(emitInventory, 2000);
-    };
-    this.bot.on('playerCollect' as any, debouncedInventory);
-    this.bot.once('spawn', () => {
-      (this.bot?.inventory as any)?.on?.('updateSlot', debouncedInventory);
-    });
-
-    // --- End event-driven socket updates ---
-
     this.bot.on('goal_reached', () => {
       const pos = this.bot?.entity?.position;
       logger.info({
@@ -394,7 +260,7 @@ export class BotInstance extends EventEmitter {
       logger.warn({ bot: this.name, reason }, 'Bot was kicked');
       this.state = BotState.DISCONNECTED;
       this.stopAmbientBehaviors();
-      // 'end' will also fire after kick — let 'end' handle reconnect
+      this.scheduleReconnect();
     });
 
     this.bot.on('end', (reason) => {
@@ -408,24 +274,11 @@ export class BotInstance extends EventEmitter {
 
   private static BOT_PASSWORD = 'dyobot2026';
 
-  // Map bot personality to server class (hotbar slot)
-  // Classes: Warrior=0, Mage=1, Archer=2, Tank=3
-  private static CLASS_MAP: Record<string, { slot: number; name: string }> = {
-    guard:      { slot: 3, name: 'Tank' },
-    blacksmith: { slot: 0, name: 'Warrior' },
-    explorer:   { slot: 2, name: 'Archer' },
-    elder:      { slot: 1, name: 'Mage' },
-    merchant:   { slot: 2, name: 'Archer' },
-    farmer:     { slot: 0, name: 'Warrior' },
-    builder:    { slot: 3, name: 'Tank' },
-  };
-
   private handleAuth(onReady: () => void): void {
     if (!this.bot) return;
 
     const bot = this.bot;
     let authDone = false;
-    let classSelected = false;
 
     const finish = () => {
       if (authDone) return;
@@ -435,38 +288,12 @@ export class BotInstance extends EventEmitter {
       onReady();
     };
 
-    const selectClass = () => {
-      if (classSelected) return;
-      classSelected = true;
-      const mapping = BotInstance.CLASS_MAP[this.personality] || { slot: 0, name: 'Warrior' };
-      logger.info({ bot: this.name, class: mapping.name, slot: mapping.slot }, 'Selecting class');
-      try {
-        bot.setQuickBarSlot(mapping.slot);
-        setTimeout(() => {
-          try {
-            bot.activateItem();
-            logger.info({ bot: this.name, class: mapping.name }, 'Class selected via activateItem');
-          } catch (e) {
-            logger.debug({ bot: this.name, err: String(e) }, 'activateItem failed, trying swingArm');
-            try { bot.swingArm('right'); } catch {}
-          }
-        }, 500);
-      } catch (e) {
-        logger.warn({ bot: this.name, err: String(e) }, 'Class selection failed');
-      }
-    };
-
     const onMessage = (jsonMsg: any) => {
       if (authDone) return;
       const msg = jsonMsg.toString();
-      if (msg.trim()) {
-        logger.info({ bot: this.name, authMsg: msg.substring(0, 200) }, 'Auth phase message');
-      }
 
-      // Auth login/register flow
       if (msg.includes('Registered successfully') || msg.includes('Logged in successfully') || msg.includes('already logged in')) {
-        // Don't finish yet — class selection may follow
-        logger.info({ bot: this.name }, 'Login successful, waiting for class selection');
+        finish();
       } else if (msg.includes('already registered') || msg.includes('Please log in')) {
         logger.info({ bot: this.name }, 'Already registered, logging in');
         bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
@@ -474,57 +301,33 @@ export class BotInstance extends EventEmitter {
         logger.info({ bot: this.name }, 'Registering with DyoAuth');
         bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
       }
-
-      // Class selection flow
-      if (msg.includes('Choose your class') || msg.includes('choose your class')) {
-        logger.info({ bot: this.name }, 'Class selection prompt detected');
-        setTimeout(() => selectClass(), 1000);
-      } else if (msg.includes('Please select a class')) {
-        logger.info({ bot: this.name }, 'Class reminder, retrying selection');
-        classSelected = false; // Allow retry
-        setTimeout(() => selectClass(), 500);
-      } else if (msg.includes('You are now a') || msg.includes('Class selected') || msg.includes('you have selected')) {
-        logger.info({ bot: this.name }, 'Class confirmed, auth complete');
-        finish();
-      }
     };
 
     bot.on('message', onMessage);
 
-    // Proactively try login after 2s (in case message event was missed)
+    // Proactively try login after 1s, then register after 3s (in case message events were missed)
     setTimeout(() => {
-      if (!authDone && bot && typeof bot.chat === 'function') {
-        try {
-          logger.info({ bot: this.name }, 'Proactively trying /login');
-          bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
-        } catch (e) {
-          logger.debug({ bot: this.name, err: String(e) }, 'Proactive login failed');
-        }
+      if (!authDone && bot) {
+        logger.info({ bot: this.name }, 'Proactively trying /login');
+        bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
       }
-    }, 2000);
+    }, 1000);
 
-    // Try /register at 4s if still not authed
     setTimeout(() => {
-      if (!authDone && bot && typeof bot.chat === 'function') {
-        try {
-          logger.info({ bot: this.name }, 'Proactively trying /register');
-          bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
-        } catch (e) {
-          logger.debug({ bot: this.name, err: String(e) }, 'Proactive register failed');
-        }
+      if (!authDone && bot) {
+        logger.info({ bot: this.name }, 'Proactively trying /register');
+        bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
       }
-    }, 4000);
+    }, 3000);
 
-    // Timeout fallback — finish even if class wasn't confirmed
+    // Timeout fallback
     setTimeout(() => {
       if (!authDone) {
         logger.warn({ bot: this.name }, 'Auth timeout, proceeding anyway');
         finish();
       }
-    }, 20000);
+    }, 15000);
   }
-
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Maps personality to the class hotbar slot (DyoClasses puts icons in slots 2-5)
   private static PERSONALITY_CLASS_MAP: Record<string, { slot: number; className: string }> = {
@@ -601,19 +404,12 @@ export class BotInstance extends EventEmitter {
     }, 10000);
   }
 
-  /** Reset reconnect state so the bot can be reconnected by the watchdog. */
-  resetReconnect(): void {
-    this.reconnectAttempts = 0;
-    this.destroyed = false;
-  }
-
-  isDestroyed(): boolean {
-    return this.destroyed;
-  }
-
   private scheduleReconnect(): void {
     if (this.destroyed) return;
-    if (this.reconnectTimer) return; // Already scheduled
+    if (this.pendingConnectTimeout) {
+      logger.debug({ bot: this.name }, 'Reconnect already queued, skipping duplicate schedule');
+      return;
+    }
     if (this.reconnectAttempts >= this.config.bots.maxReconnectAttempts) {
       logger.error({ bot: this.name }, 'Max reconnect attempts reached');
       return;
@@ -621,13 +417,13 @@ export class BotInstance extends EventEmitter {
 
     const delay = Math.min(
       this.config.bots.reconnectDelaySec * Math.pow(2, this.reconnectAttempts) * 1000,
-      60000
+      30000
     );
     this.reconnectAttempts++;
 
     logger.info({ bot: this.name, delay, attempt: this.reconnectAttempts }, 'Scheduling reconnect');
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
+    this.pendingConnectTimeout = setTimeout(() => {
+      this.pendingConnectTimeout = null;
       void this.connect();
     }, delay);
   }
@@ -644,7 +440,7 @@ export class BotInstance extends EventEmitter {
     if (this.headTrackingInterval) return;
 
     this.headTrackingInterval = setInterval(() => {
-      if (!this.bot || this.state === BotState.DISCONNECTED || !this.bot.players || !this.bot.entity) return;
+      if (!this.bot || this.state === BotState.DISCONNECTED) return;
       if (this.mode === BotMode.CODEGEN && this.voyagerLoop?.getCurrentTask()) return;
       if (this.state === BotState.EXECUTING_TASK) return;
 
@@ -718,22 +514,11 @@ export class BotInstance extends EventEmitter {
       // Ignore own messages and empty messages
       if (!this.bot || username === this.bot.username || !message.trim()) return;
 
-      logger.info({ bot: this.name, from: username, message }, 'Chat received');
-
-      // Check if the chatting player is actually another bot
-      const otherBot = this.botManager.getBot(username);
-      if (otherBot) {
-        this.botComms.sendMessage(username, this.name, message, 'chat');
-      }
-
       // Check if player is within conversation radius
       const player = this.bot.players[username];
-      if (!player?.entity) {
-        logger.debug({ bot: this.name, from: username, hasPlayer: !!player, hasEntity: !!player?.entity }, 'Chat ignored: no player entity');
-        return;
-      }
+      if (!player?.entity) return;
+      if (username.toLowerCase() !== BotInstance.OWNER_PLAYER.toLowerCase()) return;
 
-      // Handle swarm directives from owner
       const swarmMatch = message.match(/^swarm:\s*(.+)$/i);
       if (swarmMatch && this.onSwarmDirective) {
         const directive = swarmMatch[1].trim();
@@ -744,10 +529,7 @@ export class BotInstance extends EventEmitter {
       }
 
       const dist = player.entity.position.distanceTo(this.bot.entity.position);
-      if (dist > this.config.behavior.conversationRadius) {
-        logger.debug({ bot: this.name, from: username, dist, radius: this.config.behavior.conversationRadius }, 'Chat ignored: out of range');
-        return;
-      }
+      if (dist > this.config.behavior.conversationRadius) return;
 
       // Rate limit per player
       const now = Date.now();
@@ -789,10 +571,10 @@ export class BotInstance extends EventEmitter {
       case 'follow':
         this.bot.chat(`Alright ${playerName}, I'll follow you.`);
         this.state = BotState.FOLLOWING;
-        if (this.voyagerLoop) this.voyagerLoop.pause('command:follow');
+        if (this.voyagerLoop) this.voyagerLoop.pause();
         followPlayer(this.bot, playerName, 600000).finally(() => {
           if (this.state === BotState.FOLLOWING) this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume('command:follow');
+          if (this.voyagerLoop) this.voyagerLoop.resume();
         });
         break;
 
@@ -823,18 +605,18 @@ export class BotInstance extends EventEmitter {
         }
         this.bot.chat(`Starting build from ${match}. This may take a while...`);
         this.state = BotState.EXECUTING_TASK;
-        if (this.voyagerLoop) this.voyagerLoop.pause('command:build-schematic');
+        if (this.voyagerLoop) this.voyagerLoop.pause();
         const origin = this.bot.entity.position.floored();
         buildSchematic(this.bot, match, { x: origin.x, y: origin.y, z: origin.z }, (placed, total) => {
           this.bot?.chat(`Building... ${placed}/${total} blocks`);
         }).then((result) => {
           if (this.bot) this.bot.chat(result.message ?? 'Build complete.');
           this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume('command:build-schematic');
+          if (this.voyagerLoop) this.voyagerLoop.resume();
         }).catch((err) => {
           this.bot?.chat(`Build failed: ${err.message}`);
           this.state = BotState.IDLE;
-          if (this.voyagerLoop) this.voyagerLoop.resume('command:build-schematic');
+          if (this.voyagerLoop) this.voyagerLoop.resume();
         });
         break;
       }
@@ -858,17 +640,7 @@ export class BotInstance extends EventEmitter {
       const affinity = await this.affinityManager.get(this.name, playerName);
       const isCodegen = this.mode === BotMode.CODEGEN;
       const internalState = this.voyagerLoop?.getInternalState();
-
-      // Build social context for enhanced prompts
-      const memoryContext = this.socialMemory.buildMemoryContext(this.name, [playerName]);
-      const emotionalState = this.socialMemory.getEmotionalState(this.name);
-      const relationshipSummary = this.affinityManager.getRelationshipSummary(this.name, playerName);
-      const nearbyBots = this.botManager.getNearbyBotInfo(this.name);
-
-      const systemPrompt = buildSystemPrompt(
-        this.name, this.personality, affinity, isCodegen, internalState,
-        { nearbyBots, memoryContext, emotionalState, relationshipSummary }
-      );
+      const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen, internalState);
 
       // Build conversation history (current message appended by buildContentsArray)
       const contents = await this.conversationManager.buildContentsArray(this.name, playerName, message);
@@ -908,36 +680,13 @@ export class BotInstance extends EventEmitter {
         'Chat response sent'
       );
 
-      // Record memory of this interaction
-      this.socialMemory.addMemory(this.name, 'social',
-        `${playerName} said: "${message.substring(0, 50)}". I responded about ${flatText.substring(0, 50)}`,
-        [playerName],
-        sentiment === 'POSITIVE' ? 6 : sentiment === 'NEGATIVE' ? 7 : 4
-      );
-      this.socialMemory.updateEmotionalState(this.name,
-        sentiment === 'POSITIVE' ? 'positive_chat' : sentiment === 'NEGATIVE' ? 'negative_chat' : 'social_interaction'
-      );
-      this.lastInteractionAt = Date.now();
-
       // Queue task in Voyager loop if extracted
-      if ((goalDescription || taskDescription) && this.voyagerLoop) {
-        // Force-resume if paused so the player's request actually executes
-        if (this.voyagerLoop.isPaused()) {
-          this.voyagerLoop.resume('player-chat-request');
-          logger.info({ bot: this.name, player: playerName }, 'Resumed voyager loop for player request');
-        }
-        if (!this.voyagerLoop.isRunning()) {
-          this.voyagerLoop.start();
-          logger.info({ bot: this.name, player: playerName }, 'Auto-started voyager loop for player request');
-        }
-
-        if (goalDescription) {
-          logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
-          this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
-        } else if (taskDescription) {
-          logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
-          this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
-        }
+      if (goalDescription && this.voyagerLoop) {
+        logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
+        this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
+      } else if (taskDescription && this.voyagerLoop) {
+        logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
+        this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
       }
     } catch (err: any) {
       logger.error({ bot: this.name, player: playerName, err: err.message }, 'Chat response failed');
@@ -948,43 +697,13 @@ export class BotInstance extends EventEmitter {
   private scheduleAmbientChat(): void {
     if (!this.llmClient) return;
 
-    // Mood-based ambient chat intervals
-    const emotionalState = this.socialMemory.getEmotionalState(this.name);
-    let minMs: number;
-    let maxMs: number;
-    switch (emotionalState.mood) {
-      case 'lonely':
-        minMs = 300_000;    // 5 minutes
-        maxMs = 600_000;    // 10 minutes
-        break;
-      case 'annoyed':
-        minMs = 1_200_000;  // 20 minutes
-        maxMs = 2_400_000;  // 40 minutes
-        break;
-      case 'happy':
-      case 'excited':
-        minMs = 480_000;    // 8 minutes
-        maxMs = 900_000;    // 15 minutes
-        break;
-      case 'scared':
-        minMs = 900_000;    // 15 minutes
-        maxMs = 1_800_000;  // 30 minutes
-        break;
-      default: // neutral
-        minMs = 600_000;    // 10 minutes
-        maxMs = 1_200_000;  // 20 minutes
-        break;
-    }
+    // Ambient chat is rare — 10 to 20 minutes between attempts
+    const minMs = 600_000;  // 10 minutes
+    const maxMs = 1_200_000; // 20 minutes
     const delay = minMs + Math.random() * (maxMs - minMs);
 
     this.ambientChatTimeout = setTimeout(async () => {
       if (!this.bot || this.destroyed) return;
-
-      // Check for idle_long: if no interactions for 10+ minutes, trigger lonely mood
-      const idleMs = Date.now() - this.lastInteractionAt;
-      if (idleMs > 600_000) { // 10 minutes
-        this.socialMemory.updateEmotionalState(this.name, 'idle_long');
-      }
 
       // 30% chance to actually say something even when timer fires
       if (Math.random() > 0.3) {
@@ -993,10 +712,6 @@ export class BotInstance extends EventEmitter {
       }
 
       // Find nearest player within conversation radius
-      if (!this.bot.players || !this.bot.entity) {
-        this.scheduleAmbientChat();
-        return;
-      }
       const players = Object.values(this.bot.players).filter(
         (p) => p.entity && p.username !== this.bot!.username
       );
@@ -1054,22 +769,6 @@ export class BotInstance extends EventEmitter {
       this.llmClient
     );
     this.voyagerLoop.setBlackboardManager(this.blackboardManager);
-    if (this.roleManager) {
-      this.voyagerLoop.setRoleManager(this.roleManager);
-    }
-
-    // Wire social memory into task lifecycle
-    this.voyagerLoop.onTaskSuccess = (taskDescription: string) => {
-      this.socialMemory.addMemory(this.name, 'event', `Successfully completed: ${taskDescription}`, [], 5);
-      this.socialMemory.updateEmotionalState(this.name, 'task_success');
-      this.lastInteractionAt = Date.now();
-    };
-    this.voyagerLoop.onTaskFailure = (taskDescription: string) => {
-      this.socialMemory.addMemory(this.name, 'event', `Failed task: ${taskDescription}`, [], 4);
-      this.socialMemory.updateEmotionalState(this.name, 'task_failure');
-      this.lastInteractionAt = Date.now();
-    };
-
     this.voyagerLoop.start();
   }
 
@@ -1082,11 +781,6 @@ export class BotInstance extends EventEmitter {
 
     this.lastAttackedAt = Date.now();
     this.lastAttackerName = source?.username || source?.name || null;
-
-    // Track affinity hit when a real player (not another bot) attacks this bot
-    if (this.lastAttackerName && source?.type === 'player' && !this.botManager.getBot(this.lastAttackerName)) {
-      this.affinityManager.onHit(this.name, this.lastAttackerName);
-    }
 
     if (!this.instinctActive) {
       this.activateInstinct('attack', trigger);
@@ -1133,10 +827,9 @@ export class BotInstance extends EventEmitter {
       this.bot.pathfinder.stop();
     }
     this.clearMovementControls();
-    if (this.voyagerLoop?.isRunning()) {
-      const key = `instinct:${trigger}`;
-      this.instinctPauseKey = key;
-      this.voyagerLoop.pause(key);
+    if (this.voyagerLoop?.isRunning() && !this.voyagerLoop.isPaused()) {
+      this.voyagerLoop.pause(`instinct:${trigger}`);
+      this.voyagerPausedByInstinct = true;
     }
   }
 
@@ -1188,10 +881,10 @@ export class BotInstance extends EventEmitter {
     if (this.state === BotState.INSTINCT) {
       this.state = BotState.IDLE;
     }
-    if (!this.destroyed && this.state !== BotState.DISCONNECTED && this.instinctPauseKey && this.voyagerLoop) {
-      this.voyagerLoop.resume(this.instinctPauseKey);
+    if (!this.destroyed && this.state !== BotState.DISCONNECTED && this.voyagerPausedByInstinct && this.voyagerLoop) {
+      this.voyagerLoop.resume(`instinct-ended:${reason}`);
     }
-    this.instinctPauseKey = null;
+    this.voyagerPausedByInstinct = false;
     if (this.mode !== BotMode.CODEGEN) {
       this.startWandering();
     }
@@ -1207,10 +900,7 @@ export class BotInstance extends EventEmitter {
       if (dist > 12) return false;
       if (entity.type === 'hostile') return true;
       if (hostileNames.has(entity.name)) return true;
-      if (entity.type === 'player' && entity.username !== this.bot!.username) {
-        // Only treat players as threats if they are hostile (low affinity)
-        return this.affinityManager.isHostile(this.name, entity.username);
-      }
+      if (entity.type === 'player' && entity.username !== this.bot!.username) return true;
       return false;
     });
   }
@@ -1338,18 +1028,9 @@ export class BotInstance extends EventEmitter {
       clearTimeout(this.ambientChatTimeout);
       this.ambientChatTimeout = null;
     }
-    if (this.reflectionInterval) {
-      clearInterval(this.reflectionInterval);
-      this.reflectionInterval = null;
-    }
     if (this.voyagerLoop) {
       this.voyagerLoop.stop();
       this.voyagerLoop = null;
-    }
-    this.chatCooldowns.clear();
-    if (this._inventoryDebounceTimer) {
-      clearTimeout(this._inventoryDebounceTimer);
-      this._inventoryDebounceTimer = null;
     }
   }
 
@@ -1397,27 +1078,11 @@ export class BotInstance extends EventEmitter {
     this.destroyed = true;
     this.stopAmbientBehaviors();
 
-    if (this.pendingConnectTimeout) {
-      clearTimeout(this.pendingConnectTimeout);
-      this.pendingConnectTimeout = null;
-    }
-    if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
-      this.reconnectTimer = null;
-    }
-
-    this.botComms.unregisterListener(this.name);
-
     if (this.bot) {
-      if (this.rawMessageHandler) {
-        this.bot.removeListener('message', this.rawMessageHandler);
-        this.rawMessageHandler = null;
-      }
       this.bot.quit();
       this.bot = null;
     }
 
-    this.removeAllListeners();
     this.state = BotState.DISCONNECTED;
     logger.info({ bot: this.name }, 'Bot disconnected and destroyed');
   }
@@ -1509,11 +1174,15 @@ export class BotInstance extends EventEmitter {
   }
 
   getDiagnosticsSummary() {
+    const lastExec = this.voyagerLoop?.getLastExecutionMetrics() ?? null;
+    const failedTasks = this.voyagerLoop?.getFailedTasks() ?? [];
+
     return {
       name: this.name,
       personality: this.personality,
       mode: this.mode,
       state: this.state,
+      connected: this.bot !== null && this.state !== BotState.DISCONNECTED,
       position: this.bot?.entity?.position
         ? {
             x: Math.round(this.bot.entity.position.x),
@@ -1523,17 +1192,18 @@ export class BotInstance extends EventEmitter {
         : null,
       health: this.bot?.health ?? 0,
       food: this.bot?.food ?? 0,
+      instinctActive: this.instinctActive,
+      instinctReason: this.instinctReason,
       voyager: this.voyagerLoop
         ? {
             isRunning: this.voyagerLoop.isRunning(),
             isPaused: this.voyagerLoop.isPaused(),
             currentTask: this.voyagerLoop.getCurrentTask(),
-            queuedTasks: this.voyagerLoop.getQueuedTasks().length,
-            queuedTaskCount: this.voyagerLoop.getQueueLength(),
-            queuedTaskPreviews: this.voyagerLoop.getQueuedTasksDetailed().slice(0, 5),
-            lastExecution: this.voyagerLoop.getLastExecutionMetrics(),
+            queuedTaskCount: this.voyagerLoop.getQueuedTasks().length,
+            lastExecution: lastExec,
           }
         : null,
+      recentFailedTasks: failedTasks.slice(-5),
     };
   }
 
@@ -1548,27 +1218,5 @@ export class BotInstance extends EventEmitter {
 
   getVoyagerLoop(): VoyagerLoop | null {
     return this.voyagerLoop;
-  }
-
-  /**
-   * Detect task-like requests in bot-to-bot messages using keyword matching.
-   * Returns the extracted task string if the message looks like a request, or null otherwise.
-   */
-  private extractBotTaskRequest(content: string): string | null {
-    const lower = content.toLowerCase();
-
-    // Only match direct requests — require "please", "can you", "could you", "go", "I need you to"
-    // or imperative form directed at this bot. This avoids matching status chatter like
-    // "I need to gather more resources" which is self-directed, not a request.
-    const directRequestPattern = /\b(please|can you|could you|go|i need you to|would you|will you)\b/;
-    if (!directRequestPattern.test(lower)) return null;
-
-    // Check that the message also contains an action verb + noun
-    const taskPattern = /\b(mine|craft|gather|bring|come|help|build|collect|get|find|chop|dig|smelt|cook|farm|harvest|fetch|deliver|make|place|break)\b.*?\b(\w{3,})\b/;
-    const match = lower.match(taskPattern);
-    if (!match) return null;
-
-    // Use the original content (preserving case) as the task description
-    return content.trim();
   }
 }

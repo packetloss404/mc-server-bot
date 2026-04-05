@@ -133,6 +133,47 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Command & Mission types (control platform)
+export type CommandStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
+export type MissionStatus = 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface CommandRecord {
+  id: string;
+  type: string;
+  botName: string;
+  params: Record<string, any>;
+  status: CommandStatus;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+  linkedMissionId?: string;
+}
+
+export interface MissionRecord {
+  id: string;
+  type: string;
+  botName: string;
+  description: string;
+  status: MissionStatus;
+  priority: number;
+  createdAt: string;
+  updatedAt: string;
+  error?: string;
+  blockedReason?: string;
+  linkedCommandIds?: string[];
+  dependencies?: string[];
+}
+
+export interface CommanderHistoryEntry {
+  id: string;
+  nlInput: string;
+  parsedIntent: string;
+  resultingCommandIds: string[];
+  resultingMissionIds: string[];
+  createdAt: string;
+  botName?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -186,6 +227,24 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ description }),
     }),
+
+  // Commands & Missions (control platform)
+  getCommands: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ commands: CommandRecord[] }>(`/api/commands${qs ? `?${qs}` : ''}`);
+  },
+  getCommand: (id: string) => fetchJSON<{ command: CommandRecord }>(`/api/commands/${id}`),
+  getMissions: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? `?${qs}` : ''}`);
+  },
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+  getCommanderHistory: () =>
+    fetchJSON<{ entries: CommanderHistoryEntry[] }>('/api/commander/history'),
 
   // Bot commands
   pauseBot: (botName: string) =>

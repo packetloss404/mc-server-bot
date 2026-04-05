@@ -160,13 +160,33 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
 
+    const botName = req.params.name as string;
+    const event = eventLog.push({
+      type: 'bot:mode',
+      botName,
+      description: `${botName} mode changed to ${mode}`,
+      metadata: { mode },
+    });
+    io.emit('bot:mode', { bot: botName, mode });
+    io.emit('activity', event);
+
     res.json({ success: true, mode });
   });
 
   // Event relay endpoints (for Java plugin)
   app.post('/api/events/chat', (req: Request, res: Response) => {
-    const { playerName, message, nearestBot } = req.body;
+    const { playerName, message, nearestBot, position } = req.body;
     const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
+
+    // If position is provided by the plugin, broadcast it
+    if (playerName && position && position.x != null) {
+      io.emit('player:position', {
+        name: playerName,
+        x: position.x,
+        y: position.y,
+        z: position.z,
+      });
+    }
 
     if (!handle) {
       res.json({ handled: false });
@@ -180,12 +200,28 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   app.post('/api/events/player-join', (req: Request, res: Response) => {
     const { playerName } = req.body;
     logger.info({ player: playerName }, 'Player joined');
+    io.emit('player:join', { name: playerName });
+    const event = eventLog.push({
+      type: 'player:join',
+      botName: '',
+      description: `${playerName} joined the server`,
+      metadata: { player: playerName },
+    });
+    io.emit('activity', event);
     res.json({ handled: true });
   });
 
   app.post('/api/events/player-leave', (req: Request, res: Response) => {
     const { playerName } = req.body;
     logger.info({ player: playerName }, 'Player left');
+    io.emit('player:leave', { name: playerName });
+    const event = eventLog.push({
+      type: 'player:leave',
+      botName: '',
+      description: `${playerName} left the server`,
+      metadata: { player: playerName },
+    });
+    io.emit('activity', event);
     res.json({ handled: true });
   });
 
@@ -563,6 +599,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
     handle.sendCommand('queueChat', { playerName, message });
+    io.emit('bot:chat', {
+      bot: req.params.name as string,
+      playerName,
+      message,
+      timestamp: Date.now(),
+    });
     res.json({ success: true });
   });
 

@@ -166,18 +166,15 @@ export class CommandCenter {
     }
 
     // ── Task 4: Validate bot exists and is connected ──
-    const bot = this.botManager.getBot(botName);
-    if (!bot) {
+    const worker = this.botManager.getWorker(botName);
+    if (!worker) {
       command.error = { code: 'BOT_NOT_FOUND', message: `Bot "${botName}" not found`, botName };
       this.updateStatus(command, 'failed');
       return command;
     }
 
-    if (!bot.bot) {
-      command.error = { code: 'BOT_OFFLINE', message: `Bot "${botName}" is not connected`, botName };
-      this.updateStatus(command, 'failed');
-      return command;
-    }
+    // WorkerHandle wraps a worker thread; cast to any for BotInstance-style access
+    const bot = worker as any;
 
     // ── Task 3: Concurrent command protection ──
     // If the bot already has an active (started) command, cancel it first
@@ -398,9 +395,9 @@ export class CommandCenter {
   private stopPathfinderForTargets(targets: string[]): void {
     for (const botName of targets) {
       try {
-        const bot = this.botManager.getBot(botName);
-        if (bot?.bot) {
-          bot.bot.pathfinder.stop();
+        const worker = this.botManager.getWorker(botName) as any;
+        if (worker?.bot) {
+          worker.bot.pathfinder.stop();
           logger.debug({ botName }, 'Pathfinder stopped for cancelled/timed-out command');
         }
       } catch (err: any) {

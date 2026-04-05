@@ -68,7 +68,7 @@ export class BuildCoordinator {
   // ── Schematic listing ───────────────────────────────────
 
   private getBotVersion(): string {
-    const bots = this.botManager.getAllBots();
+    const bots = this.botManager.getAllWorkers() as any[];
     const connected = bots.find((b) => b.bot);
     return connected?.bot?.version ?? '1.21.11';
   }
@@ -178,7 +178,7 @@ export class BuildCoordinator {
 
     // Validate bots exist and are connected
     for (const name of botNames) {
-      const instance = this.botManager.getBot(name);
+      const instance = this.botManager.getWorker(name) as any;
       if (!instance) throw new Error(`Bot not found: ${name}`);
       if (!instance.bot) throw new Error(`Bot not connected: ${name}`);
     }
@@ -239,9 +239,9 @@ export class BuildCoordinator {
     const snapToGround = options?.snapToGround === true; // default false
 
     // Find a connected bot to query world blocks
-    const probeInstance = botNames
-      .map((n) => this.botManager.getBot(n))
-      .find((inst) => inst?.bot);
+    const probeInstance = (botNames
+      .map((n) => this.botManager.getWorker(n)) as any[])
+      .find((inst: any) => inst?.bot);
     const probeBot = probeInstance?.bot;
 
     if (snapToGround && probeBot) {
@@ -471,7 +471,7 @@ export class BuildCoordinator {
     for (const assignment of job.assignments) {
       if (assignment.status === 'building' || assignment.status === 'waiting') {
         assignment.status = 'failed';
-        const instance = this.botManager.getBot(assignment.botName);
+        const instance = this.botManager.getWorker(assignment.botName) as any;
         if (instance) instance.state = BotState.IDLE;
       }
     }
@@ -535,7 +535,7 @@ export class BuildCoordinator {
       if (this.cancelledJobs.has(jobId)) return;
 
       // Get the mineflayer bot instance
-      const instance = this.botManager.getBot(assignment.botName);
+      const instance = this.botManager.getWorker(assignment.botName) as any;
       if (!instance || !instance.bot) {
         assignment.status = 'failed';
         logger.error({ jobId, bot: assignment.botName }, 'Bot not available for building');
@@ -554,7 +554,7 @@ export class BuildCoordinator {
 
       // Set creative mode so bot can't die during build, then teleport to site
       try {
-        const opBot = this.botManager.getAllBots().find((b) => b.bot && b.name !== assignment.botName);
+        const opBot = (this.botManager.getAllWorkers() as any[]).find((b: any) => b.bot && b.name !== assignment.botName);
         const cmds = [
           `/gamemode creative ${assignment.botName}`,
           `/tp ${assignment.botName} ${job.origin.x} ${job.origin.y + 50} ${job.origin.z}`,

@@ -212,7 +212,7 @@ export class ChainCoordinator {
     // Validate bot names
     for (const stage of stages) {
       if (stage.botName) {
-        const bot = this.botManager.getBot(stage.botName);
+        const bot = this.botManager.getWorker(stage.botName);
         if (!bot) {
           throw new Error(`Bot not found: ${stage.botName}`);
         }
@@ -369,8 +369,8 @@ export class ChainCoordinator {
       return;
     }
 
-    const bot = this.botManager.getBot(stage.botName);
-    if (!bot) {
+    const botWorker = this.botManager.getWorker(stage.botName) as any;
+    if (!botWorker) {
       stage.status = 'failed';
       stage.error = `Bot not found: ${stage.botName}`;
       chain.status = 'failed';
@@ -382,7 +382,7 @@ export class ChainCoordinator {
       return;
     }
 
-    const voyager = bot.getVoyagerLoop();
+    const voyager = botWorker.getVoyagerLoop();
     if (!voyager) {
       stage.status = 'failed';
       stage.error = `Bot ${stage.botName} is not in codegen mode`;
@@ -460,20 +460,20 @@ export class ChainCoordinator {
       const stage = chain.stages[stageIndex];
       if (stage.status !== 'running') continue;
 
-      const bot = this.botManager.getBot(stage.botName);
-      if (!bot) continue;
+      const stageBot = this.botManager.getWorker(stage.botName) as any;
+      if (!stageBot) continue;
 
-      const voyager = bot.getVoyagerLoop();
+      const voyager = stageBot.getVoyagerLoop();
       if (!voyager) continue;
 
       const taskDesc = this.taskDescriptionMap.get(stage.id) ?? stage.task;
       const currentTask = voyager.getCurrentTask();
-      const completedTasks = voyager.getCompletedTasks();
-      const failedTasks = voyager.getFailedTasks();
+      const completedTasks: string[] = voyager.getCompletedTasks();
+      const failedTasks: string[] = voyager.getFailedTasks();
 
       // Check if the task has completed (bot no longer working on it and it appears in completed list)
-      const isCompleted = completedTasks.some((t) => t.includes(taskDesc) || taskDesc.includes(t));
-      const isFailed = failedTasks.some((t) => t.includes(taskDesc) || taskDesc.includes(t));
+      const isCompleted = completedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
+      const isFailed = failedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
       const taskFinished = currentTask === null || (!currentTask.includes(taskDesc) && !taskDesc.includes(currentTask ?? ''));
 
       if (isCompleted) {

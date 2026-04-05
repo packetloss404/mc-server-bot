@@ -451,7 +451,7 @@ export class MissionManager {
     }
 
     for (const botName of botNames) {
-      const bot = this.botManager.getBot(botName);
+      const bot = this.botManager.getWorker(botName) as any;
       if (!bot) {
         logger.warn(
           { missionId: mission.id, botName },
@@ -530,7 +530,7 @@ export class MissionManager {
 
     // Check ALL assigned bots' VoyagerLoops for completion
     for (const botName of botNames) {
-      const bot = this.botManager.getBot(botName);
+      const bot = this.botManager.getWorker(botName) as any;
       if (!bot) continue;
 
       const voyager = bot.getVoyagerLoop();

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore, useControlStore, useWorldStore } from '@/lib/store';
+import { useBotStore, useControlStore, useWorldStore, useMapOverlayStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import type { ZoneRecord } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
@@ -17,8 +17,10 @@ import {
   drawRouteOverlay,
   drawRouteStatusBar,
   canvasToWorld,
+  drawMissionOverlays,
+  drawSquadOverlays,
 } from '@/components/map/mapDrawing';
-import { MapToolbar } from '@/components/map/MapToolbar';
+import { MapToolbar, OverlayToggleButtons, type OverlayToggles } from '@/components/map/MapToolbar';
 import { RouteNameDialog } from '@/components/map/RouteNameDialog';
 
 const MIN_SCALE = 0.5;
@@ -52,6 +54,20 @@ export default function MapPage() {
   const zonesRef = useRef(zones);
   zonesRef.current = zones;
 
+  // Map overlay state (missions, zones, squads for overlay rendering)
+  const overlayMissions = useMapOverlayStore((s) => s.missions);
+  const overlayZones = useMapOverlayStore((s) => s.zones);
+  const overlaySquads = useMapOverlayStore((s) => s.squads);
+  const setOverlayMissions = useMapOverlayStore((s) => s.setMissions);
+  const setOverlayZones = useMapOverlayStore((s) => s.setZones);
+  const setOverlaySquads = useMapOverlayStore((s) => s.setSquads);
+  const overlayMissionsRef = useRef(overlayMissions);
+  const overlayZonesRef = useRef(overlayZones);
+  const overlaySquadsRef = useRef(overlaySquads);
+  overlayMissionsRef.current = overlayMissions;
+  overlayZonesRef.current = overlayZones;
+  overlaySquadsRef.current = overlaySquads;
+
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -63,6 +79,7 @@ export default function MapPage() {
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
+  const overlayRef = useRef<OverlayToggles>({ missions: true, squads: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
@@ -130,6 +147,18 @@ export default function MapPage() {
       setTerrainStatus('error');
     }
   }, []);
+
+  // Fetch overlay data (missions, zones, squads) on mount and periodically
+  useEffect(() => {
+    const fetchOverlays = () => {
+      api.getMissions().then((d) => setOverlayMissions(d.missions as any)).catch(() => {});
+      api.getZones().then((d) => setOverlayZones(d.zones as any)).catch(() => {});
+      api.getSquads().then((d) => setOverlaySquads(d.squads as any)).catch(() => {});
+    };
+    fetchOverlays();
+    const interval = setInterval(fetchOverlays, 15000);
+    return () => clearInterval(interval);
+  }, [setOverlayMissions, setOverlayZones, setOverlaySquads]);
 
   // Track position history
   useEffect(() => {
@@ -352,6 +381,27 @@ export default function MapPage() {
       if (mapModeRef.current === 'draw-route') {
         drawRouteOverlay(ctx, drawRouteRef.current, w, h, offset, scale, mouseWorldRef.current);
         drawRouteStatusBar(ctx, drawRouteRef.current, w);
+      }
+
+      // --- Overlay layers (missions, squads) ---
+      const overlay = overlayRef.current;
+      const vp = { cx, cy, scale, offsetX: offset.x, offsetY: offset.y };
+
+      // Mission zone overlays
+      if (overlay.missions && overlayMissionsRef.current.length > 0 && overlayZonesRef.current.length > 0) {
+        drawMissionOverlays(ctx, vp, overlayMissionsRef.current, overlayZonesRef.current);
+      }
+
+      // Squad overlays
+      if (overlay.squads && overlaySquadsRef.current.length > 0) {
+        const botPosMap = new Map<string, { x: number; z: number }>();
+        for (const e of entities) {
+          if (e.type === 'bot') {
+            botPosMap.set(e.name, { x: e.x, z: e.z });
+            botPosMap.set(e.name.toLowerCase(), { x: e.x, z: e.z });
+          }
+        }
+        drawSquadOverlays(ctx, vp, overlaySquadsRef.current, botPosMap);
       }
 
       // HUD overlays
@@ -634,6 +684,13 @@ export default function MapPage() {
             <span className="w-px h-4 bg-zinc-800 mx-1" />
             <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
             <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
+            <OverlayToggleButtons
+              toggles={overlayRef.current}
+              onToggle={(key) => {
+                overlayRef.current = { ...overlayRef.current, [key]: !overlayRef.current[key] };
+                kick();
+              }}
+            />
           </div>
           <span className="w-px h-4 bg-zinc-800 mx-1" />
           <MapToolbar

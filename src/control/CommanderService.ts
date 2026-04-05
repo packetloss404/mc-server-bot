@@ -72,6 +72,18 @@ export interface CommanderDraft {
   updatedAt: string;
 }
 
+export interface CommanderMetrics {
+  totalParses: number;
+  successfulParses: number;
+  failedParses: number;
+  totalExecutions: number;
+  partialFailures: number;
+  averageConfidence: number;
+  clarificationRequestCount: number;
+  mostUsedCommandTypes: Record<string, number>;
+  mostUsedMissionTypes: Record<string, number>;
+}
+
 export interface CommanderServiceDeps {
   llmClient: LLMClient | null;
 }
@@ -84,6 +96,17 @@ export class CommanderService {
   private history: CommanderHistoryEntry[] = [];
   private drafts: CommanderDraft[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  // ── Metrics counters ───────────────────────────────────
+  private totalParses = 0;
+  private successfulParses = 0;
+  private failedParses = 0;
+  private totalExecutions = 0;
+  private partialFailures = 0;
+  private confidenceSum = 0;
+  private clarificationRequestCount = 0;
+  private commandTypeCounts: Record<string, number> = {};
+  private missionTypeCounts: Record<string, number> = {};
 
   constructor(deps: CommanderServiceDeps) {
     this.llmClient = deps.llmClient;
@@ -162,6 +185,73 @@ export class CommanderService {
 
   storePlan(plan: CommanderPlan): void {
     this.plans.set(plan.id, plan);
+  }
+
+  // ── Metrics ────────────────────────────────────────────
+
+  private trackParseMetrics(plan: CommanderPlan): void {
+    this.totalParses++;
+    this.confidenceSum += plan.confidence;
+
+    if (plan.confidence > CLARIFICATION_THRESHOLD) {
+      this.successfulParses++;
+    } else {
+      this.failedParses++;
+    }
+
+    if (plan.needsClarification) {
+      this.clarificationRequestCount++;
+    }
+
+    // Track command types from the parsed intent
+    if (plan.intent && plan.intent !== 'unknown') {
+      this.commandTypeCounts[plan.intent] = (this.commandTypeCounts[plan.intent] || 0) + 1;
+    }
+
+    // Track individual command types from the plan
+    for (const cmd of plan.commands) {
+      if (cmd.type) {
+        this.commandTypeCounts[cmd.type] = (this.commandTypeCounts[cmd.type] || 0) + 1;
+      }
+    }
+
+    // Track mission types from the plan
+    for (const mission of plan.missions) {
+      if (mission.type) {
+        this.missionTypeCounts[mission.type] = (this.missionTypeCounts[mission.type] || 0) + 1;
+      }
+    }
+  }
+
+  private trackExecutionMetrics(result: CommanderExecuteResult): void {
+    this.totalExecutions++;
+
+    // Detect partial failures: some commands/missions present but result arrays
+    // contain items with error indicators
+    const hasCommandErrors = result.commands.some(
+      (c: any) => c && (c.status === 'failed' || c.error),
+    );
+    const hasMissionErrors = result.missions.some(
+      (m: any) => m && (m.status === 'failed' || m.error),
+    );
+
+    if (hasCommandErrors || hasMissionErrors) {
+      this.partialFailures++;
+    }
+  }
+
+  getMetrics(): CommanderMetrics {
+    return {
+      totalParses: this.totalParses,
+      successfulParses: this.successfulParses,
+      failedParses: this.failedParses,
+      totalExecutions: this.totalExecutions,
+      partialFailures: this.partialFailures,
+      averageConfidence: this.totalParses > 0 ? this.confidenceSum / this.totalParses : 0,
+      clarificationRequestCount: this.clarificationRequestCount,
+      mostUsedCommandTypes: { ...this.commandTypeCounts },
+      mostUsedMissionTypes: { ...this.missionTypeCounts },
+    };
   }
 
   // ── Suggested commands ──────────────────────────────────
@@ -314,6 +404,7 @@ export class CommanderService {
       };
       this.plans.set(planId, plan);
       this.upsertHistory({ planId, input, plan, status: 'clarification_needed', createdAt: now });
+      this.trackParseMetrics(plan);
       return plan;
     }
 
@@ -411,6 +502,7 @@ export class CommanderService {
       status: needsClarification ? 'clarification_needed' : 'parsed',
       createdAt: now,
     });
+    this.trackParseMetrics(plan);
     return plan;
   }
 
@@ -443,6 +535,7 @@ export class CommanderService {
     }
 
     const result: CommanderExecuteResult = { commands: [], missions: [] };
+    this.trackExecutionMetrics(result);
     this.upsertHistory({
       planId,
       input: plan.input,

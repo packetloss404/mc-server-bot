@@ -7,6 +7,7 @@ import type {
   SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
   BuildJob, SupplyChain, CommandRecord, MissionRecord,
   Routine,
+  MapOverlayMission, MapOverlayZone, MapOverlaySquad,
 } from './api';
 import type { DrawnZone } from '@/components/map/mapDrawing';
 
@@ -503,4 +504,24 @@ export const useSchematicPlacementStore = create<SchematicPlacementStore>((set) 
   setPlacedOrigin: (origin) => set({ placedOrigin: origin }),
   setCursorWorldPos: (pos) => set({ cursorWorldPos: pos }),
   cancelPlacement: () => set({ activeSchematic: null, placedOrigin: null, cursorWorldPos: null }),
+}));
+
+// ─── Map Overlay Store (missions, zones, squads for map rendering) ───
+
+interface MapOverlayStore {
+  missions: MapOverlayMission[];
+  zones: MapOverlayZone[];
+  squads: MapOverlaySquad[];
+  setMissions: (missions: MapOverlayMission[]) => void;
+  setZones: (zones: MapOverlayZone[]) => void;
+  setSquads: (squads: MapOverlaySquad[]) => void;
+}
+
+export const useMapOverlayStore = create<MapOverlayStore>((set) => ({
+  missions: [],
+  zones: [],
+  squads: [],
+  setMissions: (missions) => set({ missions }),
+  setZones: (zones) => set({ zones }),
+  setSquads: (squads) => set({ squads }),
 }));

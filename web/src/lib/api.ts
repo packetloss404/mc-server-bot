@@ -580,6 +580,109 @@ export interface CommanderDraft {
 
 export type ZoneCreatePayload = Omit<ZoneRecord, 'id'>;
 
+// ===================================
+//  METRICS TYPES (agent 2-4)
+// ===================================
+
+export interface MetricsData {
+  timestamp: number;
+  bots: {
+    total: number;
+    alive: number;
+    idle: number;
+    working: number;
+    stateBreakdown: Record<string, number>;
+    personalityBreakdown: Record<string, number>;
+    healthStats: Array<{ name: string; health: number; food: number }>;
+  };
+  tasks: {
+    totalCompleted: number;
+    totalFailed: number;
+    totalQueued: number;
+    activeTasks: number;
+    successRate: number;
+    botTaskStats: Array<{
+      name: string;
+      personality: string;
+      completed: number;
+      failed: number;
+      queued: number;
+      currentTask: string | null;
+    }>;
+  };
+  commands: {
+    total: number;
+    succeeded: number;
+    failed: number;
+    pending: number;
+    cancelled: number;
+    successRate: number;
+  };
+  missions: {
+    total: number;
+    active: number;
+    completed: number;
+    failed: number;
+    paused: number;
+    completionRate: number;
+    byType: Record<string, number>;
+  };
+  commander: {
+    parseCount: number;
+    avgConfidence: number;
+    failureRate: number;
+  };
+  fleet: {
+    botsByRole: Record<string, number>;
+    overrideCount: number;
+    activeSquads: number;
+    totalSquads: number;
+  };
+  skills: {
+    count: number;
+  };
+}
+
+// ===================================
+//  MAP OVERLAY TYPES (agent 2-5)
+// ===================================
+
+/** Simplified mission type for map overlay rendering */
+export interface MapOverlayMission {
+  id: string;
+  type: string;
+  status: 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  assignee?: string;
+  params?: {
+    zoneId?: string;
+    [key: string]: any;
+  };
+  label?: string;
+}
+
+/** Simplified zone type for map overlay rendering */
+export interface MapOverlayZone {
+  id: string;
+  name: string;
+  type?: string;
+  shape: 'rect' | 'circle';
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  cx?: number;
+  cz?: number;
+  radius?: number;
+}
+
+/** Simplified squad type for map overlay rendering */
+export interface MapOverlaySquad {
+  id: string;
+  name: string;
+  members: string[];
+  color?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -623,6 +726,9 @@ export const api = {
     return fetchJSON<{ events: BotEvent[] }>(`/api/activity?${params}`);
   },
 
+  // Metrics
+  getMetrics: () => fetchJSON<MetricsData>('/api/metrics'),
+
   // Actions
   sendChat: (botName: string, playerName: string, message: string) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/chat`, {
@@ -650,6 +756,10 @@ export const api = {
     return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? `?${qs}` : ''}`);
   },
   getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+  retryMission: (id: string) =>
+    fetchJSON<{ success: boolean; mission?: MissionRecord }>(`/api/missions/${id}/retry`, { method: 'POST' }),
+  cancelMission: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/missions/${id}/cancel`, { method: 'POST' }),
   getCommanderHistory: (opts?: { limit?: number }) =>
     fetchJSON<{ entries: CommanderHistoryEntry[] }>(
       `/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`,
@@ -701,6 +811,9 @@ export const api = {
     fetchJSON<{ route: Route }>('/api/routes', { method: 'POST', body: JSON.stringify(route) }),
   deleteRoute: (id: string) =>
     fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
+
+  // Control platform — squads
+  getSquads: () => fetchJSON<{ squads: SquadRecord[] }>('/api/squads').catch(() => ({ squads: [] })),
 
   // Control platform — missions (simple)
   getSimpleMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),

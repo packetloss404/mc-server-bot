@@ -17,5 +17,6 @@ export type {
   CommanderExecuteResult,
   CommanderHistoryEntry,
   CommanderDraft,
+  CommanderMetrics,
   CommanderServiceDeps,
 } from './CommanderService';

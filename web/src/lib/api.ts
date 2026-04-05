@@ -133,6 +133,45 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Commander types
+export interface CommanderPlan {
+  id: string;
+  input: string;
+  intent?: string;
+  parsedIntent?: string;
+  confidence: number;
+  requiresConfirmation: boolean;
+  warnings: string[];
+  commands: unknown[];
+  missions: unknown[];
+  createdAt?: string;
+}
+
+export interface CommanderResult {
+  success: boolean;
+  commandResults: { success: boolean; command: { id?: string; type: string; targets: string[]; status?: string }; error?: string }[];
+  missionsCreated: { id?: string; title: string; assigneeIds: string[]; status?: string }[];
+}
+
+export interface CommanderHistoryEntry {
+  planId: string;
+  input: string;
+  plan: CommanderPlan;
+  result?: CommanderResult;
+  status: 'parsed' | 'executed' | 'partial_failure';
+  createdAt: string;
+  executedAt?: string;
+}
+
+export interface CommanderDraft {
+  id: string;
+  input: string;
+  plan?: CommanderPlan;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -203,5 +242,49 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/walkto`, {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
+    }),
+
+  // Commander
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }).then((result) => ({
+      plan: {
+        ...result.plan,
+        parsedIntent: result.plan.parsedIntent ?? result.plan.intent ?? 'unknown',
+      },
+    })),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ commands: unknown[]; missions: unknown[] } | { success: boolean; result: CommanderResult }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }).then((raw) => {
+      if ('result' in raw) return raw;
+      return {
+        success: true,
+        result: {
+          success: true,
+          commandResults: [],
+          missionsCreated: [],
+        },
+      };
+    }),
+  getCommanderHistory: (params?: { limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return fetchJSON<{ entries: CommanderHistoryEntry[] }>(`/api/commander/history${qs ? '?' + qs : ''}`);
+  },
+  getCommanderDrafts: () =>
+    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts'),
+  saveCommanderDraft: (data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }) =>
+    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     }),
 };

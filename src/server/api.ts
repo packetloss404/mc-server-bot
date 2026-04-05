@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { CommanderService } from '../control/CommanderService';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -56,6 +58,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     socket.on('disconnect', () => {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
+  });
+
+  // ── Commander service (persisted to data/commander-history.json) ──
+  const commanderService = new CommanderService({
+    llmClient: null, // LLM wired later if available
   });
 
   // ═══════════════════════════════════════
@@ -381,5 +388,94 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  COMMANDER ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Commander history (persisted)
+  app.get('/api/commander/history', (req: Request, res: Response) => {
+    const limit = Number(req.query.limit ?? 20);
+    res.json({ entries: commanderService.getHistory(Number.isFinite(limit) ? limit : 20) });
+  });
+
+  // Commander parse (NL → plan)
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    const { input } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parse(input.trim());
+      const event = eventLog.push({
+        type: 'commander:parse',
+        botName: 'system',
+        description: `Commander parsed input: ${input.trim().slice(0, 80)}`,
+        metadata: { planId: plan.id, confidence: plan.confidence, warnings: plan.warnings.length },
+      });
+      io.emit('activity', event);
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander parse failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander execute plan
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    const { planId } = req.body;
+    if (!planId) {
+      res.status(400).json({ error: 'planId is required' });
+      return;
+    }
+    const plan = commanderService.getPlan(planId);
+    if (!plan) {
+      res.status(404).json({ error: 'Plan not found' });
+      return;
+    }
+    try {
+      const result = await commanderService.execute(planId);
+      if (result) {
+        const event = eventLog.push({
+          type: 'commander:execute',
+          botName: 'system',
+          description: `Commander executed plan ${planId}`,
+          metadata: { planId, commands: result.commands.length, missions: result.missions.length },
+        });
+        io.emit('activity', event);
+      }
+      res.json(result);
+    } catch (err: any) {
+      logger.error({ err }, 'Commander execute failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander drafts — list
+  app.get('/api/commander/drafts', (_req: Request, res: Response) => {
+    res.json({ drafts: commanderService.getDrafts() });
+  });
+
+  // Commander drafts — create or update
+  app.post('/api/commander/drafts', (req: Request, res: Response) => {
+    const { input, plan, notes, id } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    const draft = commanderService.saveDraft({ input: input.trim(), plan, notes, id });
+    res.status(201).json({ draft });
+  });
+
+  // Commander drafts — delete
+  app.delete('/api/commander/drafts/:id', (req: Request, res: Response) => {
+    const deleted = commanderService.deleteDraft(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Draft not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService };
 }

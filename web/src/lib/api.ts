@@ -196,9 +196,9 @@ export interface ChainTemplate {
   stages: { task: string; inputItems?: { item: string; count: number }[]; outputItems?: { item: string; count: number }[] }[];
 }
 
-// ═══════════════════════════════════════
+// ===================================
 //  CONTROL PLATFORM TYPES
-// ═══════════════════════════════════════
+// ===================================
 
 export type CommandType =
   | 'pause_voyager' | 'resume_voyager' | 'stop_movement' | 'follow_player'
@@ -552,9 +552,9 @@ export const api = {
   pauseChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/pause`, { method: 'POST' }),
   cancelChain: (id: string) => fetchJSON<{ success: boolean }>(`/api/chains/${id}/cancel`, { method: 'POST' }),
 
-  // ═══════════════════════════════════════
+  // ===================================
   //  CONTROL PLATFORM
-  // ═══════════════════════════════════════
+  // ===================================
 
   // Commands
   createCommand: async (data: { type: CommandType; scope: 'bot' | 'squad' | 'selection'; targets: string[]; payload?: Record<string, unknown>; priority?: string; source?: string }) => {

@@ -125,7 +125,8 @@ export const useControlStore = create<ControlStore>((set) => ({
     }),
 }));
 
-// Squad store for fleet management (persisted in memory)
+/* --- Fleet Store (canonical, single source of truth for squads) --- */
+
 export type Squad = SquadRecord;
 
 interface FleetStore {
@@ -283,7 +284,7 @@ export const useBotStore = create<BotStore>((set) => ({
   setChains: (chains) => set({ chains }),
 }));
 
-/* ─── World Planning Store ─── */
+/* --- World Planning Store (canonical, single source of truth for markers/zones/routes) --- */
 
 interface WorldPlanningStore {
   markers: MarkerRecord[];
@@ -342,11 +343,7 @@ export const useWorldStore = create<WorldPlanningStore>((set) => ({
   setDrawingMode: (mode) => set({ drawingMode: mode === 'none' ? null : mode }),
 }));
 
-/* ─── Fleet Store (SquadRecord-based, merged) ─── */
-// Note: The primary useFleetStore is defined above with the Squad interface.
-// This section adds SquadRecord-based helpers as a secondary store if needed.
-
-/* ─── Role Store ─── */
+/* --- Role Store (canonical, single source of truth for role assignments) --- */
 
 interface RoleStore {
   assignments: RoleAssignmentRecord[];
@@ -371,6 +368,8 @@ export const useRoleStore = create<RoleStore>((set) => ({
   removeAssignment: (id) =>
     set((s) => ({ assignments: removeById(s.assignments, id) })),
 }));
+
+/* --- Mission Store (canonical, single source of truth for missions) --- */
 
 interface MissionStore {
   missions: MissionRecord[];
@@ -411,7 +410,7 @@ export const useMissionStore = create<MissionStore>((set, get) => ({
   },
 }));
 
-/* ─── Schematic Placement Store ─── */
+/* --- Schematic Placement Store --- */
 
 interface SchematicPlacementStore {
   activeSchematic: { filename: string; sizeX: number; sizeZ: number; sizeY: number } | null;

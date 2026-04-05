@@ -133,6 +133,48 @@ export interface TerrainData {
   blocks: string[];
 }
 
+export interface DiagnosticCheck {
+  id: string;
+  label: string;
+  status: 'ok' | 'warn' | 'error';
+  detail: string;
+}
+
+export interface DiagnosticAction {
+  id: string;
+  label: string;
+  description: string;
+  available: boolean;
+  endpoint: string;
+  method: string;
+}
+
+export interface DiagnosticReport {
+  botName: string;
+  timestamp: number;
+  overallStatus: 'ok' | 'warn' | 'error';
+  checks: DiagnosticCheck[];
+  actions: DiagnosticAction[];
+  raw: {
+    state: string;
+    connected: boolean;
+    health: number;
+    food: number;
+    instinctActive: boolean;
+    voyagerRunning: boolean;
+    voyagerPaused: boolean;
+    currentTask: string | null;
+    queuedTaskCount: number;
+    recentFailedTasks: string[];
+    lastExecution: {
+      attempt: number;
+      task: string;
+      success: boolean;
+      timestamp: number;
+    } | null;
+  };
+}
+
 // API functions
 export const api = {
   // Bots
@@ -141,6 +183,7 @@ export const api = {
   getBotRelationships: (name: string) => fetchJSON<{ relationships: Record<string, number> }>(`/api/bots/${name}/relationships`),
   getBotConversations: (name: string) => fetchJSON<{ conversations: Record<string, ChatMessage[]> }>(`/api/bots/${name}/conversations`),
   getBotTasks: (name: string) => fetchJSON<{ currentTask: string | null; completedTasks: string[]; failedTasks: string[] }>(`/api/bots/${name}/tasks`),
+  getBotDiagnostics: (name: string) => fetchJSON<DiagnosticReport>(`/api/bots/${name}/diagnostics`),
 
   // Create / delete
   createBot: (name: string, personality: string, mode?: string) =>

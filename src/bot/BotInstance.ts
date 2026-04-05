@@ -1174,11 +1174,15 @@ export class BotInstance {
   }
 
   getDiagnosticsSummary() {
+    const lastExec = this.voyagerLoop?.getLastExecutionMetrics() ?? null;
+    const failedTasks = this.voyagerLoop?.getFailedTasks() ?? [];
+
     return {
       name: this.name,
       personality: this.personality,
       mode: this.mode,
       state: this.state,
+      connected: this.bot !== null && this.state !== BotState.DISCONNECTED,
       position: this.bot?.entity?.position
         ? {
             x: Math.round(this.bot.entity.position.x),
@@ -1188,15 +1192,18 @@ export class BotInstance {
         : null,
       health: this.bot?.health ?? 0,
       food: this.bot?.food ?? 0,
+      instinctActive: this.instinctActive,
+      instinctReason: this.instinctReason,
       voyager: this.voyagerLoop
         ? {
             isRunning: this.voyagerLoop.isRunning(),
             isPaused: this.voyagerLoop.isPaused(),
             currentTask: this.voyagerLoop.getCurrentTask(),
-            queuedTasks: this.voyagerLoop.getQueuedTasks().length,
-            lastExecution: this.voyagerLoop.getLastExecutionMetrics(),
+            queuedTaskCount: this.voyagerLoop.getQueuedTasks().length,
+            lastExecution: lastExec,
           }
         : null,
+      recentFailedTasks: failedTasks.slice(-5),
     };
   }
 

@@ -12,6 +12,7 @@ import { BotActivityPanel } from '@/components/BotActivityPanel';
 import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
+import { DiagnosticPanel } from '@/components/DiagnosticPanel';
 
 export default function BotProfilePage() {
   const params = useParams();
@@ -179,6 +180,9 @@ export default function BotProfilePage() {
             voyagerRunning={bot.voyager?.isRunning}
             mode={bot.mode}
           />
+
+          {/* Diagnostics */}
+          <DiagnosticPanel botName={bot.name} />
 
           {/* Task Queue */}
           <Section title="Task Queue">

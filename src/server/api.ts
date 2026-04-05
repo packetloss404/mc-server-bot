@@ -338,7 +338,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Queue a task for a bot (from dashboard) — forward to worker
   app.post('/api/bots/:name/task', (req: Request, res: Response) => {
-    const { description } = req.body;
+    const { description, prepend } = req.body;
     if (!description) {
       res.status(400).json({ error: 'description is required' });
       return;
@@ -348,15 +348,51 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       res.status(404).json({ error: 'Bot not found' });
       return;
     }
-    handle.sendCommand('queueTask', { description, source: 'dashboard' });
+    handle.sendCommand('queueTask', { description, source: 'dashboard', prepend: !!prepend });
 
     const event = eventLog.push({
       type: 'bot:task',
       botName: req.params.name as string,
-      description: `Task queued: ${description}`,
-      metadata: { source: 'dashboard' },
+      description: `Task ${prepend ? 'prepended' : 'queued'}: ${description}`,
+      metadata: { source: 'dashboard', prepend: !!prepend },
     });
     io.emit('bot:task', { bot: req.params.name, task: description, status: 'queued' });
+    io.emit('activity', event);
+
+    res.json({ success: true });
+  });
+
+  // Reorder a bot's task queue
+  app.put('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const { order } = req.body;
+    if (!Array.isArray(order)) {
+      res.status(400).json({ error: 'order must be an array of task descriptions' });
+      return;
+    }
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    handle.sendCommand('reorderQueue', { order });
+    res.json({ success: true });
+  });
+
+  // Clear a bot's task queue
+  app.delete('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    handle.sendCommand('clearQueue', {});
+
+    const event = eventLog.push({
+      type: 'bot:task',
+      botName: req.params.name as string,
+      description: 'Task queue cleared',
+      metadata: { source: 'dashboard' },
+    });
     io.emit('activity', event);
 
     res.json({ success: true });

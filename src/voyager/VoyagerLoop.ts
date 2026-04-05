@@ -146,6 +146,63 @@ export class VoyagerLoop {
     return this.playerTaskQueue.map((task) => task.description);
   }
 
+  /** Reorder the player task queue to match the given order of descriptions */
+  reorderQueue(orderedDescriptions: string[]): void {
+    const byDesc = new Map<string, Task>();
+    for (const task of this.playerTaskQueue) {
+      byDesc.set(task.description, task);
+    }
+    const reordered: Task[] = [];
+    for (const desc of orderedDescriptions) {
+      const task = byDesc.get(desc);
+      if (task) {
+        reordered.push(task);
+        byDesc.delete(desc);
+      }
+    }
+    // Append any tasks not mentioned in the new order
+    for (const task of byDesc.values()) {
+      reordered.push(task);
+    }
+    this.playerTaskQueue = reordered;
+    logger.info({ bot: this.botName, newOrder: reordered.map(t => t.description) }, 'Task queue reordered');
+  }
+
+  /** Clear the entire player task queue */
+  clearQueue(): void {
+    const count = this.playerTaskQueue.length;
+    this.playerTaskQueue = [];
+    logger.info({ bot: this.botName, cleared: count }, 'Task queue cleared');
+  }
+
+  /** Queue a player task at the front of the queue (prepend) */
+  queuePlayerTaskFront(description: string, requestedBy: string): void {
+    this.decomposeAndQueueFront(description, requestedBy).catch((err) => {
+      logger.warn({ err: err.message, task: description }, 'Decompose failed, prepending raw task');
+      const keywords = description
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter((w) => w.length > 2);
+      this.playerTaskQueue.unshift({ description, keywords });
+    });
+  }
+
+  private async decomposeAndQueueFront(description: string, requestedBy: string): Promise<void> {
+    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
+    // Insert at front in order (first subtask at index 0)
+    for (let i = subtasks.length - 1; i >= 0; i--) {
+      this.playerTaskQueue.unshift(subtasks[i]);
+    }
+    logger.info({
+      bot: this.botName,
+      goal: description,
+      requestedBy,
+      subtasks: subtasks.map((t) => t.description),
+    }, subtasks.length > 1 ? 'Player goal decomposed and prepended' : 'Player task prepended');
+    this.blackboardManager?.postMessage(this.botName, 'info', `Prepended task: ${description}`);
+  }
+
   getLongTermGoal() {
     if (!this.activeLongTermGoal) return null;
     return {

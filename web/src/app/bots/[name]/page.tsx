@@ -12,6 +12,7 @@ import { BotActivityPanel } from '@/components/BotActivityPanel';
 import { StatsPanel } from '@/components/StatsPanel';
 import { WorldContext } from '@/components/WorldContext';
 import { BotCommandCenter } from '@/components/BotCommandCenter';
+import { MissionQueuePanel } from '@/components/MissionQueuePanel';
 
 export default function BotProfilePage() {
   const params = useParams();
@@ -21,8 +22,6 @@ export default function BotProfilePage() {
   const [conversations, setConversations] = useState<Record<string, ChatMessage[]>>({});
   const [selectedPlayer, setSelectedPlayer] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [taskInput, setTaskInput] = useState('');
-  const [sendingTask, setSendingTask] = useState(false);
   const [chatMsg, setChatMsg] = useState('');
   const [chatPlayer, setChatPlayer] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
@@ -39,11 +38,8 @@ export default function BotProfilePage() {
     return () => clearInterval(interval);
   }, [name]);
 
-  const handleQueueTask = async () => {
-    if (!taskInput.trim()) return;
-    setSendingTask(true);
-    try { await api.queueTask(name, taskInput.trim()); setTaskInput(''); } catch { /* ignore */ }
-    setSendingTask(false);
+  const refreshBot = () => {
+    api.getBotDetailed(name).then((data) => { setBot(data.bot); setError(null); }).catch(() => {});
   };
 
   const handleSendChat = async () => {
@@ -180,74 +176,64 @@ export default function BotProfilePage() {
             mode={bot.mode}
           />
 
-          {/* Task Queue */}
-          <Section title="Task Queue">
-            <div className="flex gap-2 mb-3">
-              <input
-                value={taskInput}
-                onChange={(e) => setTaskInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleQueueTask()}
-                placeholder="Queue a task..."
-                className="flex-1 bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-1.5 text-xs text-white placeholder-zinc-600"
-              />
-              <button
-                onClick={handleQueueTask}
-                disabled={sendingTask || !taskInput.trim()}
-                className="bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white px-3 py-1.5 rounded-lg text-xs font-medium transition-colors"
-              >
-                Queue
-              </button>
-            </div>
+          {/* Mission Queue */}
+          <MissionQueuePanel
+            botName={bot.name}
+            currentTask={bot.voyager?.currentTask ?? null}
+            queuedTasks={bot.voyager?.queuedTasks ?? []}
+            isRunning={bot.voyager?.isRunning ?? false}
+            onRefresh={refreshBot}
+          />
 
-            {bot.voyager && (
-              <>
-                {bot.voyager.completedTasks.length > 0 && (
-                  <div>
-                    <button
-                      onClick={() => setShowCompleted(!showCompleted)}
-                      className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
-                    >
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showCompleted ? 'rotate-90' : ''}`}>
-                        <polyline points="9 18 15 12 9 6" />
-                      </svg>
-                      Completed ({bot.voyager.completedTasks.length})
-                    </button>
-                    {showCompleted && (
-                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
-                        {bot.voyager.completedTasks.slice(-10).reverse().map((task, i) => (
-                          <div key={i} className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
-                            <span className="text-emerald-500/60">&#10003;</span> {task}
-                          </div>
-                        ))}
-                      </motion.div>
-                    )}
-                  </div>
-                )}
-                {bot.voyager.failedTasks.length > 0 && (
-                  <div className="mt-2">
-                    <button
-                      onClick={() => setShowFailed(!showFailed)}
-                      className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
-                    >
-                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showFailed ? 'rotate-90' : ''}`}>
-                        <polyline points="9 18 15 12 9 6" />
-                      </svg>
-                      Failed ({bot.voyager.failedTasks.length})
-                    </button>
-                    {showFailed && (
-                      <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
-                        {bot.voyager.failedTasks.slice(-8).reverse().map((task, i) => (
-                          <div key={i} className="text-xs text-red-400/60 truncate flex items-center gap-1.5">
-                            <span className="text-red-500/60">&#10007;</span> {task}
-                          </div>
-                        ))}
-                      </motion.div>
-                    )}
-                  </div>
-                )}
-              </>
-            )}
-          </Section>
+          {/* Completed / Failed Tasks */}
+          {bot.voyager && (bot.voyager.completedTasks.length > 0 || bot.voyager.failedTasks.length > 0) && (
+            <Section title="Task History">
+              {bot.voyager.completedTasks.length > 0 && (
+                <div>
+                  <button
+                    onClick={() => setShowCompleted(!showCompleted)}
+                    className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showCompleted ? 'rotate-90' : ''}`}>
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    Completed ({bot.voyager.completedTasks.length})
+                  </button>
+                  {showCompleted && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
+                      {bot.voyager.completedTasks.slice(-10).reverse().map((task, i) => (
+                        <div key={i} className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
+                          <span className="text-emerald-500/60">&#10003;</span> {task}
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </div>
+              )}
+              {bot.voyager.failedTasks.length > 0 && (
+                <div className="mt-2">
+                  <button
+                    onClick={() => setShowFailed(!showFailed)}
+                    className="flex items-center gap-1.5 text-[10px] text-zinc-500 font-semibold uppercase hover:text-zinc-300 transition-colors mb-1"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className={`transition-transform ${showFailed ? 'rotate-90' : ''}`}>
+                      <polyline points="9 18 15 12 9 6" />
+                    </svg>
+                    Failed ({bot.voyager.failedTasks.length})
+                  </button>
+                  {showFailed && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} className="space-y-0.5 ml-4 overflow-hidden">
+                      {bot.voyager.failedTasks.slice(-8).reverse().map((task, i) => (
+                        <div key={i} className="text-xs text-red-400/60 truncate flex items-center gap-1.5">
+                          <span className="text-red-500/60">&#10007;</span> {task}
+                        </div>
+                      ))}
+                    </motion.div>
+                  )}
+                </div>
+              )}
+            </Section>
+          )}
 
           {/* Inventory */}
           <Section title={`Inventory (${bot.inventory.length})`}>

@@ -60,7 +60,17 @@ ipc.onCommand((type, cmdData) => {
       instance.setMode(cmdData.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE);
       break;
     case 'queueTask':
-      instance.getVoyagerLoop()?.queuePlayerTask(cmdData.description, cmdData.source || 'dashboard');
+      if (cmdData.prepend) {
+        instance.getVoyagerLoop()?.queuePlayerTaskFront(cmdData.description, cmdData.source || 'dashboard');
+      } else {
+        instance.getVoyagerLoop()?.queuePlayerTask(cmdData.description, cmdData.source || 'dashboard');
+      }
+      break;
+    case 'reorderQueue':
+      instance.getVoyagerLoop()?.reorderQueue(cmdData.order);
+      break;
+    case 'clearQueue':
+      instance.getVoyagerLoop()?.clearQueue();
       break;
     case 'queueChat':
       if ((instance as any).bot) {

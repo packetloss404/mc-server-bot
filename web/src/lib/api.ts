@@ -86,6 +86,7 @@ export interface BotDetailed extends BotStatus {
     failedTasks: string[];
     internalState?: string;
     queuedTaskCount?: number;
+    queuedTasks?: string[];
   } | null;
   armor?: BotArmor;
   offhand?: EquipmentSlot | null;
@@ -181,10 +182,19 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ playerName, message }),
     }),
-  queueTask: (botName: string, description: string) =>
+  queueTask: (botName: string, description: string, prepend?: boolean) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ description, prepend }),
+    }),
+  reorderBotMissionQueue: (botName: string, order: string[]) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    }),
+  clearBotMissionQueue: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
+      method: 'DELETE',
     }),
 
   // Bot commands

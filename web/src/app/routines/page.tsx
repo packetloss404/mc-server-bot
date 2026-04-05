@@ -243,11 +243,14 @@ export default function RoutinesPage() {
   const [executeRoutine, setExecuteRoutine] = useState<Routine | null>(null);
   const [executing, setExecuting] = useState(false);
   const [recordName, setRecordName] = useState('');
+  const [loading, setLoading] = useState(true);
 
-  // Load routines on mount
+  // Load routines on mount (in parallel)
   useEffect(() => {
-    api.getRoutines().then((data) => setRoutines(data.routines)).catch(() => {});
-    api.getRecordingStatus().then((data) => setRecording(data.recording, data.draft)).catch(() => {});
+    Promise.all([
+      api.getRoutines().then((data) => setRoutines(data.routines)).catch(() => {}),
+      api.getRecordingStatus().then((data) => setRecording(data.recording, data.draft)).catch(() => {}),
+    ]).finally(() => setLoading(false));
   }, [setRoutines, setRecording]);
 
   const handleCreate = async () => {
@@ -465,7 +468,12 @@ export default function RoutinesPage() {
       </div>
 
       {/* Routine list */}
-      {routines.length === 0 ? (
+      {loading ? (
+        <div className="bg-zinc-900/50 rounded-xl border border-zinc-800/40 py-16 text-center">
+          <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-xs text-zinc-500">Loading routines...</p>
+        </div>
+      ) : routines.length === 0 ? (
         <div className="bg-zinc-900/50 rounded-xl border border-zinc-800/40 py-16 text-center">
           <p className="text-sm text-zinc-500">No routines yet</p>
           <p className="text-xs text-zinc-600 mt-1">Create a routine above or record one from your actions</p>

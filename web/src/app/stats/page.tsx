@@ -24,25 +24,29 @@ export default function StatsPage() {
 
   useEffect(() => {
     const loadStats = async () => {
-      const allStats: BotStats[] = [];
-      for (const bot of bots) {
-        try {
-          const [tasks, rels] = await Promise.all([
-            api.getBotTasks(bot.name),
-            api.getBotRelationships(bot.name),
-          ]);
-          const total = tasks.completedTasks.length + tasks.failedTasks.length;
-          allStats.push({
-            name: bot.name,
-            personality: bot.personality,
-            completedTasks: tasks.completedTasks.length,
-            failedTasks: tasks.failedTasks.length,
-            successRate: total > 0 ? Math.round((tasks.completedTasks.length / total) * 100) : 0,
-            relationships: Object.keys(rels.relationships).length,
-          });
-        } catch { /* ignore */ }
-      }
-      setStats(allStats);
+      setLoading(true);
+      const results = await Promise.all(
+        bots.map(async (bot) => {
+          try {
+            const [tasks, rels] = await Promise.all([
+              api.getBotTasks(bot.name),
+              api.getBotRelationships(bot.name),
+            ]);
+            const total = tasks.completedTasks.length + tasks.failedTasks.length;
+            return {
+              name: bot.name,
+              personality: bot.personality,
+              completedTasks: tasks.completedTasks.length,
+              failedTasks: tasks.failedTasks.length,
+              successRate: total > 0 ? Math.round((tasks.completedTasks.length / total) * 100) : 0,
+              relationships: Object.keys(rels.relationships).length,
+            } as BotStats;
+          } catch {
+            return null;
+          }
+        }),
+      );
+      setStats(results.filter((r): r is BotStats => r !== null));
       setLoading(false);
     };
     loadStats();

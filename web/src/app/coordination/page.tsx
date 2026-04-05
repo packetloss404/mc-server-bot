@@ -67,6 +67,7 @@ export default function CoordinationPage() {
   const [swarmInput, setSwarmInput] = useState('');
   const [swarmLoading, setSwarmLoading] = useState(false);
   const [swarmFeedback, setSwarmFeedback] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const load = () => {
@@ -76,7 +77,7 @@ export default function CoordinationPage() {
         setGoals(data.blackboard.goals);
         setSwarmGoal(data.blackboard.swarmGoal);
         setReservations(data.blackboard.reservations || []);
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => setLoading(false));
     };
     load();
     if (autoRefresh) {
@@ -157,7 +158,13 @@ export default function CoordinationPage() {
       </div>
 
       {/* Summary Cards */}
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+      {loading ? (
+        <div className="py-12 text-center">
+          <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-3" />
+          <p className="text-xs text-zinc-500">Loading coordination data...</p>
+        </div>
+      ) : null}
+      <div className={`grid grid-cols-2 lg:grid-cols-5 gap-3${loading ? ' opacity-50' : ''}`}>
         <div className="bg-zinc-900/50 rounded-xl border border-zinc-800/40 px-4 py-3">
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Active Tasks</p>
           <p className="text-lg font-bold text-white mt-1">{activeTasks.length}</p>

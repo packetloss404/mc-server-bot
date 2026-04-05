@@ -133,33 +133,43 @@ export interface TerrainData {
   blocks: string[];
 }
 
-// Role / Override types
-export interface RoleAssignment {
+// Commander types
+export interface CommanderPlan {
   id: string;
-  botName: string;
-  role: string;
-  autonomyLevel: string;
-  assignedAt: string;
+  input: string;
+  intent?: string;
+  parsedIntent?: string;
+  confidence: number;
+  requiresConfirmation: boolean;
+  warnings: string[];
+  commands: unknown[];
+  missions: unknown[];
+  createdAt?: string;
 }
 
-export interface OverrideRecord {
-  botName: string;
-  reason: string;
-  commandId: string;
-  setAt: number;
-  expiresAt?: number;
+export interface CommanderResult {
+  success: boolean;
+  commandResults: { success: boolean; command: { id?: string; type: string; targets: string[]; status?: string }; error?: string }[];
+  missionsCreated: { id?: string; title: string; assigneeIds: string[]; status?: string }[];
 }
 
-// Mission types
-export interface Mission {
+export interface CommanderHistoryEntry {
+  planId: string;
+  input: string;
+  plan: CommanderPlan;
+  result?: CommanderResult;
+  status: 'parsed' | 'executed' | 'partial_failure';
+  createdAt: string;
+  executedAt?: string;
+}
+
+export interface CommanderDraft {
   id: string;
-  botName: string;
-  type: string;
-  status: string;
-  description: string;
-  blockedReason?: string;
-  createdAt: number;
-  startedAt?: number;
+  input: string;
+  plan?: CommanderPlan;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 // API functions
@@ -234,15 +244,47 @@ export const api = {
       body: JSON.stringify({ x, y, z }),
     }),
 
-  // Role overrides
-  getRoleAssignments: () =>
-    fetchJSON<{ assignments: RoleAssignment[] }>('/api/roles/assignments').catch(() => ({ assignments: [] })),
-  getBotOverride: (botName: string) =>
-    fetchJSON<{ override: OverrideRecord | null }>(`/api/bots/${botName}/override`).catch(() => ({ override: null })),
-  getAllOverrides: () =>
-    fetchJSON<{ overrides: Record<string, OverrideRecord> }>('/api/roles/overrides').catch(() => ({ overrides: {} })),
-
-  // Missions
-  getMissions: () =>
-    fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
+  // Commander
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }).then((result) => ({
+      plan: {
+        ...result.plan,
+        parsedIntent: result.plan.parsedIntent ?? result.plan.intent ?? 'unknown',
+      },
+    })),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ commands: unknown[]; missions: unknown[] } | { success: boolean; result: CommanderResult }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }).then((raw) => {
+      if ('result' in raw) return raw;
+      return {
+        success: true,
+        result: {
+          success: true,
+          commandResults: [],
+          missionsCreated: [],
+        },
+      };
+    }),
+  getCommanderHistory: (params?: { limit?: number }) => {
+    const query = new URLSearchParams();
+    if (params?.limit) query.set('limit', String(params.limit));
+    const qs = query.toString();
+    return fetchJSON<{ entries: CommanderHistoryEntry[] }>(`/api/commander/history${qs ? '?' + qs : ''}`);
+  },
+  getCommanderDrafts: () =>
+    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts'),
+  saveCommanderDraft: (data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }) =>
+    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 };

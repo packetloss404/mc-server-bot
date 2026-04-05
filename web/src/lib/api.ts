@@ -133,6 +133,63 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// ===================================
+//  CONTROL PLATFORM TYPES
+// ===================================
+
+export type CommandStatus = 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled';
+export type MissionStatus = 'draft' | 'queued' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+
+export interface CommandRecord {
+  id: string;
+  type: string;
+  scope: 'bot' | 'squad' | 'selection';
+  targets: string[];
+  payload: Record<string, unknown>;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  source: string;
+  botName: string;
+  status: CommandStatus;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  result?: Record<string, unknown>;
+  error?: string;
+  params?: Record<string, unknown>;
+  linkedMissionId?: string;
+}
+
+export interface MissionRecord {
+  id: string;
+  type: string;
+  title: string;
+  description?: string;
+  botName: string;
+  assigneeType: 'bot' | 'squad';
+  assigneeIds: string[];
+  status: MissionStatus;
+  priority: 'low' | 'normal' | 'high' | 'urgent';
+  createdAt: number;
+  updatedAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  blockedReason?: string;
+  error?: string;
+  linkedCommandIds?: string[];
+  dependencies?: string[];
+  retryCount?: number;
+}
+
+export interface CommanderHistoryEntry {
+  id: string;
+  nlInput: string;
+  parsedIntent: string;
+  resultingCommandIds: string[];
+  resultingMissionIds: string[];
+  createdAt: string;
+  botName?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -181,10 +238,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ playerName, message }),
     }),
-  queueTask: (botName: string, description: string) =>
+  queueTask: (botName: string, description: string, prepend?: boolean) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ description, prepend }),
     }),
 
   // Bot commands
@@ -204,4 +261,36 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Mission queue management
+  reorderBotMissionQueue: (botName: string, order: string[]) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
+      method: 'PUT',
+      body: JSON.stringify({ order }),
+    }),
+  clearBotMissionQueue: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, { method: 'DELETE' }),
+
+  // Commands & Missions (control platform)
+  getCommands: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ commands: CommandRecord[] }>(`/api/commands${qs ? `?${qs}` : ''}`);
+  },
+  getMissions: (bot?: string) => {
+    const params = new URLSearchParams();
+    if (bot) params.set('bot', bot);
+    const qs = params.toString();
+    return fetchJSON<{ missions: MissionRecord[] }>(`/api/missions${qs ? `?${qs}` : ''}`);
+  },
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+  retryMission: (id: string) =>
+    fetchJSON<{ success: boolean; mission?: MissionRecord }>(`/api/missions/${id}/retry`, { method: 'POST' }),
+  cancelMission: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/missions/${id}/cancel`, { method: 'POST' }),
+  getCommanderHistory: (opts?: { limit?: number }) =>
+    fetchJSON<{ entries: CommanderHistoryEntry[] }>(
+      `/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`,
+    ),
 };

@@ -15,7 +15,6 @@ import { countBlueprintMaterials, generateSimpleHouseBlueprint, getMissingBluepr
 import { placeBlock } from '../actions/placeBlock';
 import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
-import type { RoleManager } from '../control/RoleManager';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -31,7 +30,7 @@ export class VoyagerLoop {
   private criticAgent: CriticAgent;
   private statsTracker: StatsTracker;
   private running = false;
-  private pauseReasons: Set<string> = new Set();
+  private paused = false;
   private loopTimeout: NodeJS.Timeout | null = null;
   private lastExecutionMetrics: {
     attempt: number;
@@ -47,18 +46,11 @@ export class VoyagerLoop {
   private activeLongTermGoal: LongTermGoal | null = null;
   private blackboardManager: BlackboardManager | null = null;
   private activeBlackboardTask: BlackboardTask | null = null;
-  private roleManager: RoleManager | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
   private lastCompletedTask: string | null = null;
   private lastFailedTask: string | null = null;
-  private currentTaskSource: 'player-request' | 'long-term-goal' | 'blackboard' | 'autonomous' = 'autonomous';
-  private interruptedByPlayer = false;
-
-  // Optional callbacks for task lifecycle events
-  onTaskSuccess?: (taskDescription: string) => void;
-  onTaskFailure?: (taskDescription: string) => void;
 
   constructor(
     bot: Bot,
@@ -101,7 +93,7 @@ export class VoyagerLoop {
 
   stop(): void {
     this.running = false;
-    this.pauseReasons.clear();
+    this.paused = false;
     if (this.loopTimeout) {
       clearTimeout(this.loopTimeout);
       this.loopTimeout = null;
@@ -109,58 +101,30 @@ export class VoyagerLoop {
     logger.info({ bot: this.botName }, 'Voyager loop stopped');
   }
 
-  /** Flush all pending debounced writes in owned data managers. */
-  shutdownPersistence(): void {
-    this.statsTracker.shutdown();
-    this.curriculumAgent.shutdown();
-  }
-
   isRunning(): boolean {
     return this.running;
   }
 
   pause(reason = 'paused'): void {
-    if (!this.running) return;
-    const wasEmpty = this.pauseReasons.size === 0;
-    this.pauseReasons.add(reason);
-    if (wasEmpty) {
-      if (this.loopTimeout) {
-        clearTimeout(this.loopTimeout);
-        this.loopTimeout = null;
-      }
-      this.codeExecutor.requestInterrupt(reason);
-      logger.warn({ bot: this.botName, reason, reasons: Array.from(this.pauseReasons), task: this.currentTask }, 'Voyager loop paused');
-    } else {
-      logger.warn({ bot: this.botName, reason, reasons: Array.from(this.pauseReasons) }, 'Voyager loop pause reason added');
+    if (!this.running || this.paused) return;
+    this.paused = true;
+    if (this.loopTimeout) {
+      clearTimeout(this.loopTimeout);
+      this.loopTimeout = null;
     }
+    this.codeExecutor.requestInterrupt(reason);
+    logger.warn({ bot: this.botName, reason, task: this.currentTask }, 'Voyager loop paused');
   }
 
   resume(reason = 'resumed'): void {
-    if (!this.running) return;
-    this.pauseReasons.delete(reason);
-    if (this.pauseReasons.size === 0) {
-      logger.info({ bot: this.botName, reason }, 'Voyager loop resumed (all pause reasons cleared)');
-      this.scheduleNext();
-    } else {
-      logger.info({ bot: this.botName, reason, remaining: Array.from(this.pauseReasons) }, 'Voyager loop pause reason removed, still paused');
-    }
-  }
-
-  /** Force-clear all pause reasons and restart the loop (e.g. player chat override). */
-  forceResume(reason = 'force-resumed'): void {
-    if (!this.running) return;
-    const had = Array.from(this.pauseReasons);
-    this.pauseReasons.clear();
-    logger.info({ bot: this.botName, reason, cleared: had }, 'Voyager loop force-resumed');
+    if (!this.running || !this.paused) return;
+    this.paused = false;
+    logger.info({ bot: this.botName, reason }, 'Voyager loop resumed');
     this.scheduleNext();
   }
 
   isPaused(): boolean {
-    return this.pauseReasons.size > 0;
-  }
-
-  getPauseReasons(): string[] {
-    return Array.from(this.pauseReasons);
+    return this.paused;
   }
 
   /** Get the current task description, or null if idle */
@@ -182,45 +146,61 @@ export class VoyagerLoop {
     return this.playerTaskQueue.map((task) => task.description);
   }
 
-  /** Get queue length */
-  getQueueLength(): number {
-    return this.playerTaskQueue.length;
+  /** Reorder the player task queue to match the given order of descriptions */
+  reorderQueue(orderedDescriptions: string[]): void {
+    const byDesc = new Map<string, Task>();
+    for (const task of this.playerTaskQueue) {
+      byDesc.set(task.description, task);
+    }
+    const reordered: Task[] = [];
+    for (const desc of orderedDescriptions) {
+      const task = byDesc.get(desc);
+      if (task) {
+        reordered.push(task);
+        byDesc.delete(desc);
+      }
+    }
+    // Append any tasks not mentioned in the new order
+    for (const task of byDesc.values()) {
+      reordered.push(task);
+    }
+    this.playerTaskQueue = reordered;
+    logger.info({ bot: this.botName, newOrder: reordered.map(t => t.description) }, 'Task queue reordered');
   }
 
-  /** Get queued tasks with IDs */
-  getQueuedTasksDetailed(): { id: string; description: string; queuedAt: number }[] {
-    return this.playerTaskQueue.map((task, index) => ({
-      id: (task as any)._id || `qt_${index}`,
-      description: task.description,
-      queuedAt: (task as any)._queuedAt || Date.now(),
-    }));
-  }
-
-  /** Remove a task from queue by index */
-  removeQueuedTask(index: number): boolean {
-    if (index < 0 || index >= this.playerTaskQueue.length) return false;
-    this.playerTaskQueue.splice(index, 1);
-    return true;
-  }
-
-  /** Insert a task at the front of the queue (do next) */
-  insertTaskAtFront(description: string, requestedBy: string): void {
-    const keywords = description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-    this.playerTaskQueue.unshift({ description, keywords });
-  }
-
-  /** Reorder queue: move item at fromIndex to toIndex */
-  reorderQueue(fromIndex: number, toIndex: number): boolean {
-    if (fromIndex < 0 || fromIndex >= this.playerTaskQueue.length) return false;
-    if (toIndex < 0 || toIndex >= this.playerTaskQueue.length) return false;
-    const [item] = this.playerTaskQueue.splice(fromIndex, 1);
-    this.playerTaskQueue.splice(toIndex, 0, item);
-    return true;
-  }
-
-  /** Clear all queued tasks */
+  /** Clear the entire player task queue */
   clearQueue(): void {
+    const count = this.playerTaskQueue.length;
     this.playerTaskQueue = [];
+    logger.info({ bot: this.botName, cleared: count }, 'Task queue cleared');
+  }
+
+  /** Queue a player task at the front of the queue (prepend) */
+  queuePlayerTaskFront(description: string, requestedBy: string): void {
+    this.decomposeAndQueueFront(description, requestedBy).catch((err) => {
+      logger.warn({ err: err.message, task: description }, 'Decompose failed, prepending raw task');
+      const keywords = description
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter((w) => w.length > 2);
+      this.playerTaskQueue.unshift({ description, keywords });
+    });
+  }
+
+  private async decomposeAndQueueFront(description: string, requestedBy: string): Promise<void> {
+    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
+    // Insert at front in order (first subtask at index 0)
+    for (let i = subtasks.length - 1; i >= 0; i--) {
+      this.playerTaskQueue.unshift(subtasks[i]);
+    }
+    logger.info({
+      bot: this.botName,
+      goal: description,
+      requestedBy,
+      subtasks: subtasks.map((t) => t.description),
+    }, subtasks.length > 1 ? 'Player goal decomposed and prepended' : 'Player task prepended');
+    this.blackboardManager?.postMessage(this.botName, 'info', `Prepended task: ${description}`);
   }
 
   getLongTermGoal() {
@@ -254,10 +234,6 @@ export class VoyagerLoop {
 
   getBlackboardManager(): BlackboardManager | null {
     return this.blackboardManager;
-  }
-
-  setRoleManager(manager: RoleManager): void {
-    this.roleManager = manager;
   }
 
   /** Returns a short summary of what the bot is currently doing, for chat context. */
@@ -306,45 +282,29 @@ export class VoyagerLoop {
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
-    const interruptIfAutonomous = () => {
-      if (this.currentTaskSource === 'autonomous' || this.currentTaskSource === 'blackboard') {
-        this.interruptedByPlayer = true;
-        this.codeExecutor.requestInterrupt(`player task from ${requestedBy}: ${description}`);
-        logger.info({ bot: this.botName, task: description, requestedBy }, 'Interrupting autonomous task for player request');
-      }
-    };
-
-    // Decompose asynchronously — subtasks get queued when ready, then interrupt if needed
-    this.decomposeAndQueue(description, requestedBy)
-      .then(() => interruptIfAutonomous())
-      .catch((err) => {
-        logger.warn({ err: err.message, task: description }, 'Decompose failed, queuing raw task');
-        const keywords = description
-          .toLowerCase()
-          .replace(/[^a-z0-9\s]/g, '')
-          .split(/\s+/)
-          .filter((w) => w.length > 2);
-        this.playerTaskQueue.push({ description, keywords });
-        interruptIfAutonomous();
-      });
+    // Decompose asynchronously — subtasks get queued when ready
+    this.decomposeAndQueue(description, requestedBy).catch((err) => {
+      logger.warn({ err: err.message, task: description }, 'Decompose failed, queuing raw task');
+      const keywords = description
+        .toLowerCase()
+        .replace(/[^a-z0-9\s]/g, '')
+        .split(/\s+/)
+        .filter((w) => w.length > 2);
+      this.playerTaskQueue.push({ description, keywords });
+    });
   }
 
   private async decomposeAndQueue(description: string, requestedBy: string): Promise<void> {
-    // Don't decompose player chat requests — queue them directly and let the
-    // codegen execution handle prerequisites dynamically. Decomposition was
-    // turning "scout for an island" into "mine logs → craft planks → craft boat"
-    // which defeats the player's intent.
-    const keywords = description
-      .toLowerCase()
-      .replace(/[^a-z0-9\s]/g, '')
-      .split(/\s+/)
-      .filter((w) => w.length > 2);
-    this.playerTaskQueue.push({ description, keywords });
+    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
+    for (const task of subtasks) {
+      this.playerTaskQueue.push(task);
+    }
     logger.info({
       bot: this.botName,
-      task: description,
+      goal: description,
       requestedBy,
-    }, 'Player task queued');
+      subtasks: subtasks.map((t) => t.description),
+    }, subtasks.length > 1 ? 'Player goal decomposed and queued' : 'Player task queued');
     this.blackboardManager?.postMessage(this.botName, 'info', `Queued local task: ${description}`);
   }
 
@@ -387,10 +347,10 @@ export class VoyagerLoop {
   }
 
   private scheduleNext(): void {
-    if (!this.running || this.isPaused()) return;
+    if (!this.running || this.paused) return;
 
     this.loopTimeout = setTimeout(async () => {
-      if (!this.running || this.isPaused()) return;
+      if (!this.running || this.paused) return;
 
       try {
         await this.runOneCycle();
@@ -403,7 +363,7 @@ export class VoyagerLoop {
   }
 
   private async runOneCycle(): Promise<void> {
-    if (this.isPaused()) return;
+    if (this.paused) return;
     if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
       await this.runBuildGoalCycle();
       return;
@@ -413,20 +373,6 @@ export class VoyagerLoop {
     const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
-
-    // Check role policy before falling through to autonomous task generation
-    const hasExplicitTask = !!(goalTask || playerTask || blackboardTask);
-    if (!hasExplicitTask && this.roleManager) {
-      const verdict = this.roleManager.shouldBotAcceptTask(this.botName);
-      if (!verdict.allowed) {
-        logger.info(
-          { bot: this.botName, reason: verdict.reason },
-          'Voyager skipping auto-generated task: role policy denied',
-        );
-        return;
-      }
-    }
-
     const task = goalTask
       || playerTask
       || (blackboardTask ? { description: blackboardTask.description, keywords: blackboardTask.keywords } : null)
@@ -439,23 +385,20 @@ export class VoyagerLoop {
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);
     const plan = buildTaskPlan(task, progression);
     this.currentTask = task.description;
-    this.currentTaskSource = goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous';
-    this.interruptedByPlayer = false;
 
     logger.info({
       bot: this.botName,
       task: task.description,
-      source: this.currentTaskSource,
+      source: goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous',
       plan: plan.steps.map((step) => step.description),
     }, 'Voyager task proposed');
 
     for (const step of plan.steps) {
       const ok = await this.executeTaskStep(step);
       if (!ok) {
-        // If the failure was caused by an instinct pause (damage) or a player task
-        // interrupting an autonomous task, don't treat it as a real failure.
-        if (this.isPaused() || this.interruptedByPlayer) {
-          this.interruptedByPlayer = false;
+        // If the failure was caused by an instinct pause (damage), don't treat it as
+        // a real failure — just bail out so the goal resumes when instinct ends.
+        if (this.paused) {
           this.currentTask = null;
           return;
         }
@@ -573,7 +516,7 @@ export class VoyagerLoop {
       const gatherOk = await this.executeTaskStep({ description: gatherTask.description, keywords: gatherTask.keywords, spec: gatherTask.spec });
       if (!gatherOk) {
         // If paused by instinct (damage), don't mark the build goal as blocked
-        if (this.isPaused()) {
+        if (this.paused) {
           this.currentTask = null;
           return;
         }
@@ -819,7 +762,6 @@ export class VoyagerLoop {
         this.curriculumAgent.updateProgress(task, true);
         this.curriculumAgent.getBlockerMemory().clearTask(task);
         this.lastCompletedTask = task.description;
-        if (this.onTaskSuccess) this.onTaskSuccess(task.description);
         this.blackboardManager?.postMessage(this.botName, 'completion', `Finished ${task.description}.`);
         return true;
       }
@@ -858,7 +800,6 @@ export class VoyagerLoop {
       events: [],
     }, lastError || 'task failed');
     this.lastFailedTask = task.description;
-    if (this.onTaskFailure) this.onTaskFailure(task.description);
     this.blackboardManager?.postMessage(this.botName, 'blocker', `${task.description} failed: ${lastError || 'unknown error'}`);
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;

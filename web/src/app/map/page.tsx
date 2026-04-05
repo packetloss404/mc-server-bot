@@ -5,6 +5,10 @@ import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
+import { MapContextMenu, type MapContextMenuAction } from '@/components/map/MapContextMenu';
+import { MapEntitySidebar } from '@/components/map/MapEntitySidebar';
+import { ZoneEditorDialog } from '@/components/map/ZoneEditorDialog';
+import { MarkerEditor } from '@/components/map/MarkerEditor';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
@@ -50,6 +54,13 @@ export default function MapPage() {
   const kick = () => forceRender((n) => n + 1);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+
+  // Context menu, marker editor, zone editor state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; worldX: number; worldZ: number } | null>(null);
+  const [markerEditorOpen, setMarkerEditorOpen] = useState(false);
+  const [markerEditorPos, setMarkerEditorPos] = useState<{ x: number; z: number } | undefined>();
+  const [zoneEditorOpen, setZoneEditorOpen] = useState(false);
+  const [zoneEditorCenter, setZoneEditorCenter] = useState<{ x: number; z: number } | undefined>();
 
   // Keep refs in sync with zustand
   botsRef.current = bots;
@@ -371,6 +382,46 @@ export default function MapPage() {
     }
   };
 
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const cx = w / 2;
+    const cy = h / 2;
+    const worldX = (mx - cx - offsetRef.current.x) / scaleRef.current;
+    const worldZ = (my - cy - offsetRef.current.y) / scaleRef.current;
+    setContextMenu({ x: e.clientX, y: e.clientY, worldX, worldZ });
+  };
+
+  const contextMenuActions: MapContextMenuAction[] = contextMenu ? [
+    {
+      label: 'Add Marker Here',
+      icon: '+',
+      onClick: () => {
+        setMarkerEditorPos({ x: contextMenu.worldX, z: contextMenu.worldZ });
+        setMarkerEditorOpen(true);
+      },
+    },
+    {
+      label: 'Create Zone Here',
+      icon: '#',
+      onClick: () => {
+        setZoneEditorCenter({ x: contextMenu.worldX, z: contextMenu.worldZ });
+        setZoneEditorOpen(true);
+      },
+    },
+    {
+      label: 'Center View Here',
+      icon: '@',
+      onClick: () => centerOn(contextMenu.worldX, contextMenu.worldZ),
+    },
+  ] : [];
+
   // Zoom toward cursor with normalized sensitivity
   useEffect(() => {
     const container = containerRef.current;
@@ -489,35 +540,13 @@ export default function MapPage() {
       </div>
 
       <div className="flex-1 flex min-h-0">
-        {/* Entity sidebar */}
-        <div className="w-52 border-r border-zinc-800/60 bg-zinc-950/50 overflow-y-auto shrink-0">
-          <div className="p-3">
-            <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-              Entities ({allEntities.length})
-            </p>
-            <div className="space-y-0.5">
-              {allEntities.map((entity) => (
-                <button
-                  key={`${entity.type}-${entity.name}`}
-                  onClick={() => { centerOn(entity.x, entity.z); selectedRef.current = entity.name; kick(); }}
-                  className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors ${
-                    selectedRef.current === entity.name ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                  }`}
-                >
-                  <span className={`w-2.5 h-2.5 shrink-0 ${entity.type === 'player' ? 'rounded-sm' : 'rounded-full'}`} style={{ backgroundColor: entity.color }} />
-                  <div className="min-w-0 flex-1">
-                    <p className="text-[11px] font-medium text-zinc-300 truncate">{entity.name}</p>
-                    <p className="text-[9px] text-zinc-600 font-mono tabular-nums">{Math.round(entity.x)}, {Math.round(entity.z)}</p>
-                  </div>
-                  <span className="text-[9px] text-zinc-600 uppercase shrink-0">
-                    {entity.type === 'bot' ? entity.personality?.slice(0, 3) : 'PLR'}
-                  </span>
-                </button>
-              ))}
-              {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
-            </div>
-          </div>
-        </div>
+        {/* Entity sidebar with markers/zones/routes tabs */}
+        <MapEntitySidebar
+          entities={allEntities}
+          selectedEntity={selectedRef.current}
+          onSelectEntity={(name) => { selectedRef.current = name; kick(); }}
+          onCenterOn={centerOn}
+        />
 
         {/* Canvas */}
         <div
@@ -530,6 +559,7 @@ export default function MapPage() {
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
+            onContextMenu={handleContextMenu}
             className="w-full h-full"
           />
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
@@ -549,6 +579,34 @@ export default function MapPage() {
           </div>
         </div>
       </div>
+
+      {/* Context menu */}
+      {contextMenu && (
+        <MapContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          worldX={contextMenu.worldX}
+          worldZ={contextMenu.worldZ}
+          actions={contextMenuActions}
+          onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {/* Marker editor dialog */}
+      <MarkerEditor
+        open={markerEditorOpen}
+        onClose={() => setMarkerEditorOpen(false)}
+        onCreated={() => { /* marker created, sidebar will refresh on tab switch */ }}
+        defaultPosition={markerEditorPos}
+      />
+
+      {/* Zone editor dialog */}
+      <ZoneEditorDialog
+        open={zoneEditorOpen}
+        onClose={() => setZoneEditorOpen(false)}
+        onCreated={() => { /* zone created, sidebar will refresh on tab switch */ }}
+        defaultCenter={zoneEditorCenter}
+      />
     </div>
   );
 }

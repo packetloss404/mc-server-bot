@@ -133,6 +133,47 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Template types
+export type FieldType = 'string' | 'number' | 'position' | 'string[]' | 'boolean';
+
+export interface TemplateField {
+  name: string;
+  label: string;
+  type: FieldType;
+  description?: string;
+  default?: unknown;
+  required?: boolean;
+  options?: string[];
+}
+
+export interface LoadoutPolicy {
+  requiredItems?: { name: string; count: number }[];
+  optionalItems?: { name: string; count: number }[];
+  equipBestArmor?: boolean;
+}
+
+export interface MissionTemplate {
+  id: string;
+  name: string;
+  description: string;
+  category: 'combat' | 'gathering' | 'crafting' | 'logistics' | 'building';
+  missionType: string;
+  defaultParams: Record<string, unknown>;
+  requiredFields: TemplateField[];
+  optionalFields?: TemplateField[];
+  suggestedBotCount: number;
+  loadoutPolicy?: LoadoutPolicy;
+  builtIn: boolean;
+}
+
+export interface TemplateExecuteResult {
+  success: boolean;
+  template: string;
+  taskDescription: string;
+  loadoutPolicy: LoadoutPolicy | null;
+  results: { bot: string; queued: boolean; error?: string }[];
+}
+
 // API functions
 export const api = {
   // Bots
@@ -185,6 +226,31 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
       body: JSON.stringify({ description }),
+    }),
+
+  // Templates
+  getTemplates: (category?: string) => {
+    const params = category ? `?category=${category}` : '';
+    return fetchJSON<{ templates: MissionTemplate[] }>(`/api/templates${params}`);
+  },
+  getTemplate: (id: string) =>
+    fetchJSON<{ template: MissionTemplate }>(`/api/templates/${id}`),
+  createTemplate: (template: Omit<MissionTemplate, 'builtIn'>) =>
+    fetchJSON<{ template: MissionTemplate }>('/api/templates', {
+      method: 'POST',
+      body: JSON.stringify(template),
+    }),
+  updateTemplate: (id: string, patch: Partial<MissionTemplate>) =>
+    fetchJSON<{ template: MissionTemplate }>(`/api/templates/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    }),
+  deleteTemplate: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/templates/${id}`, { method: 'DELETE' }),
+  executeTemplate: (id: string, params: Record<string, unknown>, assignees: string[], priority?: string) =>
+    fetchJSON<TemplateExecuteResult>(`/api/templates/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ params, assignees, priority }),
     }),
 
   // Bot commands

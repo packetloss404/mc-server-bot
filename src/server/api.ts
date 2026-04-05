@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { TemplateManager } from '../control/TemplateManager';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -39,6 +40,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
+
+  // Template manager
+  const templateManager = new TemplateManager();
 
   // Socket.IO
   const io = new SocketIOServer(httpServer, {
@@ -379,6 +383,139 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
     io.emit('activity', event);
     res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  TEMPLATE ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List all templates (optionally filter by category)
+  app.get('/api/templates', (req: Request, res: Response) => {
+    const category = req.query.category ? String(req.query.category) : undefined;
+    const templates = category
+      ? templateManager.getByCategory(category)
+      : templateManager.getAll();
+    res.json({ templates });
+  });
+
+  // Get single template
+  app.get('/api/templates/:id', (req: Request, res: Response) => {
+    const template = templateManager.getById(req.params.id as string);
+    if (!template) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    res.json({ template });
+  });
+
+  // Create custom template
+  app.post('/api/templates', (req: Request, res: Response) => {
+    const { id, name, description, category, missionType, defaultParams, requiredFields, optionalFields, suggestedBotCount, loadoutPolicy } = req.body;
+    if (!id || !name || !missionType) {
+      res.status(400).json({ error: 'id, name, and missionType are required' });
+      return;
+    }
+    if (templateManager.getById(id)) {
+      res.status(409).json({ error: 'Template with this id already exists' });
+      return;
+    }
+    const template = templateManager.create({
+      id,
+      name,
+      description: description || '',
+      category: category || 'gathering',
+      missionType,
+      defaultParams: defaultParams || {},
+      requiredFields: requiredFields || [],
+      optionalFields: optionalFields || [],
+      suggestedBotCount: suggestedBotCount ?? 1,
+      loadoutPolicy,
+    });
+    res.status(201).json({ template });
+  });
+
+  // Update custom template
+  app.patch('/api/templates/:id', (req: Request, res: Response) => {
+    const updated = templateManager.update(req.params.id as string, req.body);
+    if (!updated) {
+      res.status(404).json({ error: 'Template not found or is built-in' });
+      return;
+    }
+    res.json({ template: updated });
+  });
+
+  // Delete custom template
+  app.delete('/api/templates/:id', (req: Request, res: Response) => {
+    const deleted = templateManager.delete(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Template not found or is built-in' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Create mission from template — fills params, builds task, queues to bot(s)
+  app.post('/api/templates/:id/execute', (req: Request, res: Response) => {
+    const { params, assignees, priority } = req.body;
+    const templateId = req.params.id as string;
+    const template = templateManager.getById(templateId);
+    if (!template) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+
+    // Validate required fields
+    const missing = template.requiredFields
+      .filter((f) => f.required !== false)
+      .filter((f) => !params || params[f.name] === undefined || params[f.name] === '');
+    if (missing.length > 0) {
+      res.status(400).json({
+        error: 'Missing required fields',
+        fields: missing.map((f) => f.name),
+      });
+      return;
+    }
+
+    const botNames: string[] = Array.isArray(assignees) ? assignees : assignees ? [assignees] : [];
+    if (botNames.length === 0) {
+      res.status(400).json({ error: 'At least one assignee (bot name) is required' });
+      return;
+    }
+
+    const taskDesc = templateManager.buildTaskDescription(templateId, params || {});
+    if (!taskDesc) {
+      res.status(500).json({ error: 'Failed to build task description' });
+      return;
+    }
+
+    const results: { bot: string; queued: boolean; error?: string }[] = [];
+    for (const botName of botNames) {
+      const handle = botManager.getWorker(botName);
+      if (!handle) {
+        results.push({ bot: botName, queued: false, error: 'Bot not found' });
+        continue;
+      }
+      handle.sendCommand('queueTask', { description: taskDesc, source: 'template', priority: priority || 'normal' });
+
+      const event = eventLog.push({
+        type: 'bot:task',
+        botName,
+        description: `Template mission: ${template.name} — ${taskDesc}`,
+        metadata: { source: 'template', templateId, priority: priority || 'normal' },
+      });
+      io.emit('bot:task', { bot: botName, task: taskDesc, status: 'queued' });
+      io.emit('activity', event);
+
+      results.push({ bot: botName, queued: true });
+    }
+
+    res.json({
+      success: true,
+      template: template.name,
+      taskDescription: taskDesc,
+      loadoutPolicy: template.loadoutPolicy || null,
+      results,
+    });
   });
 
   return { app, httpServer, io, eventLog };

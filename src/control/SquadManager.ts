@@ -22,7 +22,7 @@ export class SquadManager {
     this.load();
   }
 
-  // ── Persistence ──────────────────────────────────────
+  // -- Persistence --
 
   private load(): void {
     try {
@@ -46,7 +46,6 @@ export class SquadManager {
     }
   }
 
-  /** Schedule a debounced save */
   private save(): void {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
@@ -55,7 +54,6 @@ export class SquadManager {
     }, DEBOUNCE_MS);
   }
 
-  /** Write to disk immediately */
   private saveImmediate(): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
@@ -69,7 +67,6 @@ export class SquadManager {
     }
   }
 
-  /** Flush pending saves and clear timers */
   shutdown(): void {
     this.saveImmediate();
   }
@@ -78,7 +75,7 @@ export class SquadManager {
     this.io.emit(FLEET_EVENTS.SQUAD_UPDATED, this.getSquads());
   }
 
-  // ── CRUD ─────────────────────────────────────────────
+  // -- CRUD --
 
   createSquad(data: {
     name: string;
@@ -93,10 +90,6 @@ export class SquadManager {
       botNames: data.botNames ?? [],
       defaultRole: data.defaultRole,
       homeMarkerId: data.homeMarkerId,
-      // TODO: activeMissionId is defined on SquadRecord but never automatically
-      // set. MissionManager should call updateSquad() to set activeMissionId when
-      // a mission targeting a squad starts, and clear it when the mission completes.
-      // The fleet page now displays it via SquadCard when present.
       createdAt: now,
       updatedAt: now,
     };
@@ -119,7 +112,6 @@ export class SquadManager {
     const existing = this.squads.get(id);
     if (!existing) return null;
 
-    // Prevent overwriting immutable fields
     const { id: _id, createdAt: _ca, ...safeData } = data;
 
     const updated: SquadRecord = {
@@ -145,12 +137,12 @@ export class SquadManager {
     return existed;
   }
 
-  // ── Membership helpers ───────────────────────────────
+  // -- Membership helpers --
 
   addBotToSquad(squadId: string, botName: string): boolean {
     const squad = this.squads.get(squadId);
     if (!squad) return false;
-    if (squad.botNames.includes(botName)) return true; // already a member
+    if (squad.botNames.includes(botName)) return true;
 
     squad.botNames.push(botName);
     squad.updatedAt = Date.now();

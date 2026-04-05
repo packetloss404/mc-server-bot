@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
 
-// ─── Types ───────────────────────────────────────────────────────────
+// -- Types --
 
 export type MissionType =
   | 'patrol'
@@ -24,16 +24,12 @@ export interface TemplateField {
   description?: string;
   default?: unknown;
   required?: boolean;
-  /** For string fields: predefined options the user can pick from */
   options?: string[];
 }
 
 export interface LoadoutPolicy {
-  /** Items the bot should have before starting */
   requiredItems?: { name: string; count: number }[];
-  /** Items that are nice to have but not blocking */
   optionalItems?: { name: string; count: number }[];
-  /** Whether to auto-equip best armor before starting */
   equipBestArmor?: boolean;
 }
 
@@ -48,11 +44,10 @@ export interface MissionTemplate {
   optionalFields?: TemplateField[];
   suggestedBotCount: number;
   loadoutPolicy?: LoadoutPolicy;
-  /** Whether this is a built-in template (cannot be deleted) */
   builtIn: boolean;
 }
 
-// ─── Built-in Templates ──────────────────────────────────────────────
+// -- Built-in Templates --
 
 const BUILT_IN_TEMPLATES: MissionTemplate[] = [
   {
@@ -61,16 +56,10 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Assign bots to patrol a defined area, visiting waypoints in sequence.',
     category: 'combat',
     missionType: 'patrol',
-    defaultParams: {
-      loopForever: true,
-      pauseBetweenPoints: 2,
-    },
+    defaultParams: { loopForever: true, pauseBetweenPoints: 2 },
     requiredFields: [
       { name: 'zoneName', label: 'Zone Name', type: 'string', description: 'Name of the zone or area to patrol' },
-      {
-        name: 'waypoints', label: 'Waypoints', type: 'string',
-        description: 'Comma-separated coordinates: x1,z1;x2,z2;...',
-      },
+      { name: 'waypoints', label: 'Waypoints', type: 'string', description: 'Comma-separated coordinates: x1,z1;x2,z2;...' },
     ],
     optionalFields: [
       { name: 'loopForever', label: 'Loop Forever', type: 'boolean', default: true },
@@ -78,10 +67,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
       { name: 'alertOnHostiles', label: 'Alert on Hostiles', type: 'boolean', default: true },
     ],
     suggestedBotCount: 2,
-    loadoutPolicy: {
-      requiredItems: [{ name: 'iron_sword', count: 1 }],
-      equipBestArmor: true,
-    },
+    loadoutPolicy: { requiredItems: [{ name: 'iron_sword', count: 1 }], equipBestArmor: true },
     builtIn: true,
   },
   {
@@ -90,9 +76,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Send bots to mine or collect specific items from the world.',
     category: 'gathering',
     missionType: 'gather',
-    defaultParams: {
-      returnToBase: true,
-    },
+    defaultParams: { returnToBase: true },
     requiredFields: [
       { name: 'itemName', label: 'Item to Gather', type: 'string', description: 'Minecraft item name (e.g. oak_log, iron_ore)' },
       { name: 'quantity', label: 'Quantity', type: 'number', description: 'How many to collect' },
@@ -103,9 +87,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
       { name: 'basePosition', label: 'Base Position', type: 'position' },
     ],
     suggestedBotCount: 1,
-    loadoutPolicy: {
-      requiredItems: [{ name: 'iron_pickaxe', count: 1 }],
-    },
+    loadoutPolicy: { requiredItems: [{ name: 'iron_pickaxe', count: 1 }] },
     builtIn: true,
   },
   {
@@ -114,9 +96,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Craft a batch of items, gathering missing materials if needed.',
     category: 'crafting',
     missionType: 'craft',
-    defaultParams: {
-      gatherMissing: true,
-    },
+    defaultParams: { gatherMissing: true },
     requiredFields: [
       { name: 'itemName', label: 'Item to Craft', type: 'string', description: 'Minecraft item name to craft' },
       { name: 'quantity', label: 'Quantity', type: 'number', description: 'How many to craft' },
@@ -134,10 +114,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Follow and protect a player, engaging any threats within range.',
     category: 'combat',
     missionType: 'escort',
-    defaultParams: {
-      followDistance: 4,
-      engageHostiles: true,
-    },
+    defaultParams: { followDistance: 4, engageHostiles: true },
     requiredFields: [
       { name: 'playerName', label: 'Player to Escort', type: 'string', description: 'Name of the player to follow' },
     ],
@@ -147,21 +124,16 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
       { name: 'engageRadius', label: 'Engage Radius', type: 'number', default: 8 },
     ],
     suggestedBotCount: 1,
-    loadoutPolicy: {
-      requiredItems: [{ name: 'iron_sword', count: 1 }, { name: 'shield', count: 1 }],
-      equipBestArmor: true,
-    },
+    loadoutPolicy: { requiredItems: [{ name: 'iron_sword', count: 1 }, { name: 'shield', count: 1 }], equipBestArmor: true },
     builtIn: true,
   },
   {
     id: 'supply-run',
     name: 'Supply Run',
-    description: 'Transport items between two locations (e.g. from a mine to a storage base).',
+    description: 'Transport items between two locations.',
     category: 'logistics',
     missionType: 'supply_run',
-    defaultParams: {
-      repeat: true,
-    },
+    defaultParams: { repeat: true },
     requiredFields: [
       { name: 'fromPosition', label: 'Pick-up Location', type: 'position', description: 'Source coordinates (x, y, z)' },
       { name: 'toPosition', label: 'Drop-off Location', type: 'position', description: 'Destination coordinates (x, y, z)' },
@@ -180,11 +152,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Station bots to guard a specific area and engage hostile mobs or players.',
     category: 'combat',
     missionType: 'guard',
-    defaultParams: {
-      radius: 16,
-      engagePlayers: false,
-      engageMobs: true,
-    },
+    defaultParams: { radius: 16, engagePlayers: false, engageMobs: true },
     requiredFields: [
       { name: 'position', label: 'Guard Position', type: 'position', description: 'Center of the guard zone' },
     ],
@@ -194,10 +162,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
       { name: 'engagePlayers', label: 'Engage Players', type: 'boolean', default: false },
     ],
     suggestedBotCount: 2,
-    loadoutPolicy: {
-      requiredItems: [{ name: 'iron_sword', count: 1 }],
-      equipBestArmor: true,
-    },
+    loadoutPolicy: { requiredItems: [{ name: 'iron_sword', count: 1 }], equipBestArmor: true },
     builtIn: true,
   },
   {
@@ -224,9 +189,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
     description: 'Keep a builder bot stocked with materials by ferrying supplies from storage.',
     category: 'logistics',
     missionType: 'resupply',
-    defaultParams: {
-      checkInterval: 30,
-    },
+    defaultParams: { checkInterval: 30 },
     requiredFields: [
       { name: 'targetBot', label: 'Builder Bot', type: 'string', description: 'Name of the bot to resupply' },
       { name: 'storagePosition', label: 'Storage Location', type: 'position', description: 'Where to get materials' },
@@ -241,7 +204,7 @@ const BUILT_IN_TEMPLATES: MissionTemplate[] = [
   },
 ];
 
-// ─── TemplateManager ─────────────────────────────────────────────────
+// -- TemplateManager --
 
 export class TemplateManager {
   private templates: Map<string, MissionTemplate> = new Map();
@@ -283,7 +246,7 @@ export class TemplateManager {
     fs.writeFileSync(this.dataPath, JSON.stringify(custom, null, 2), 'utf-8');
   }
 
-  // ── Public API ──────────────────────────────────────────────────────
+  // -- Public API --
 
   getAll(): MissionTemplate[] {
     return Array.from(this.templates.values());
@@ -307,7 +270,6 @@ export class TemplateManager {
   update(id: string, patch: Partial<Omit<MissionTemplate, 'id' | 'builtIn'>>): MissionTemplate | null {
     const existing = this.templates.get(id);
     if (!existing) return null;
-    // Built-in templates cannot be modified
     if (existing.builtIn) return null;
     const updated = { ...existing, ...patch };
     this.templates.set(id, updated);
@@ -323,10 +285,6 @@ export class TemplateManager {
     return true;
   }
 
-  /**
-   * Build a task description string from a template and filled-in parameters.
-   * This can be sent to a bot via `queueTask`.
-   */
   buildTaskDescription(templateId: string, params: Record<string, unknown>): string | null {
     const template = this.templates.get(templateId);
     if (!template) return null;

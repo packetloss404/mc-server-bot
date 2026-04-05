@@ -16,14 +16,13 @@ export interface OverrideRecord {
   at: number;
 }
 
-/** Structured verdict returned by shouldBotAcceptTask */
 export interface TaskAcceptanceVerdict {
   allowed: boolean;
   reason: string;
 }
 
-const OVERRIDE_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
-const APPROVAL_EXPIRY_MS = 5 * 60 * 1000; // 5 minutes
+const OVERRIDE_EXPIRY_MS = 5 * 60 * 1000;
+const APPROVAL_EXPIRY_MS = 5 * 60 * 1000;
 
 export class RoleManager {
   private assignments: RoleAssignmentRecord[] = [];
@@ -50,28 +49,15 @@ export class RoleManager {
     this.evaluateAutomation();
   }
 
-  // ── Role Policy: Task Acceptance ────────────────────────────
+  // -- Role Policy: Task Acceptance --
 
-  /**
-   * Determine whether a bot should accept an auto-generated task based on its
-   * role assignment and current state.
-   *
-   * Returns a structured verdict with `allowed` (boolean) and `reason` (string).
-   *
-   * Rules:
-   * - Manual-autonomy bots must not auto-generate tasks.
-   * - Overridden bots must not auto-generate tasks (manual override in effect).
-   * - Bots with no assignment are allowed (they act as free agents).
-   */
   shouldBotAcceptTask(botName: string): TaskAcceptanceVerdict {
     const assignment = this.getAssignmentForBot(botName);
 
-    // No assignment means the bot is a free agent — allow
     if (!assignment) {
       return { allowed: true, reason: 'No role assignment; bot operates as free agent' };
     }
 
-    // Manual autonomy: all tasks must come from explicit player/dashboard commands
     if (assignment.autonomyLevel === 'manual') {
       return {
         allowed: false,
@@ -79,7 +65,6 @@ export class RoleManager {
       };
     }
 
-    // If the bot has an active manual override, block auto-generation
     if (this.isOverridden(botName)) {
       const override = this.getOverride(botName);
       return {
@@ -88,7 +73,6 @@ export class RoleManager {
       };
     }
 
-    // Loadout policy warning (non-blocking)
     if (assignment.loadoutPolicy) {
       this.checkLoadoutPolicy(botName, assignment);
     }
@@ -96,10 +80,6 @@ export class RoleManager {
     return { allowed: true, reason: 'Role policy allows task acceptance' };
   }
 
-  /**
-   * Check whether the bot's current state matches its loadout policy.
-   * Logs a warning if there is a mismatch. This is advisory only (non-blocking).
-   */
   private checkLoadoutPolicy(botName: string, assignment: RoleAssignmentRecord): void {
     if (!assignment.loadoutPolicy) return;
 
@@ -107,7 +87,7 @@ export class RoleManager {
     if (requiredItems && requiredItems.length > 0) {
       logger.warn(
         { botName, role: assignment.role, requiredItems },
-        'RoleManager: loadout policy specifies required items — loadout compliance not verified (no inventory access in RoleManager)',
+        'RoleManager: loadout policy specifies required items -- loadout compliance not verified',
       );
     }
 
@@ -115,18 +95,11 @@ export class RoleManager {
     if (forbiddenItems && forbiddenItems.length > 0) {
       logger.warn(
         { botName, role: assignment.role, forbiddenItems },
-        'RoleManager: loadout policy specifies forbidden items — loadout compliance not verified',
+        'RoleManager: loadout policy specifies forbidden items -- loadout compliance not verified',
       );
     }
   }
 
-  /**
-   * Check whether a command dispatch should be allowed for the given bot,
-   * considering the bot's interrupt policy and active mission state.
-   *
-   * Returns a structured verdict. When `allowed` is false the caller should
-   * reject the command unless `force` is set.
-   */
   shouldAllowCommandDispatch(botName: string, force?: boolean): TaskAcceptanceVerdict {
     const assignment = this.getAssignmentForBot(botName);
     if (!assignment || !assignment.interruptPolicy) {
@@ -173,7 +146,7 @@ export class RoleManager {
     }
   }
 
-  // ── Manual Override Tracking ──────────────────────────────
+  // -- Manual Override Tracking --
 
   setOverride(botName: string, reason: string, commandId: string): void {
     this.overrides.set(botName, { reason, commandId, at: Date.now() });
@@ -203,7 +176,6 @@ export class RoleManager {
     return Object.fromEntries(this.overrides);
   }
 
-  /** Clear overrides older than 5 minutes. Call this periodically. */
   checkOverrideTimeouts(): void {
     const now = Date.now();
     let changed = false;
@@ -228,7 +200,7 @@ export class RoleManager {
     }
   }
 
-  // ── Persistence ──────────────────────────────────────────
+  // -- Persistence --
 
   private load(): void {
     try {
@@ -259,7 +231,6 @@ export class RoleManager {
     }
   }
 
-  /** Schedule a debounced save */
   private save(): void {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
@@ -268,7 +239,6 @@ export class RoleManager {
     }, DEBOUNCE_MS);
   }
 
-  /** Write to disk immediately */
   private saveImmediate(): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
@@ -286,7 +256,6 @@ export class RoleManager {
     }
   }
 
-  /** Flush pending saves and clear timers */
   shutdown(): void {
     if (this.overrideCheckInterval) { clearInterval(this.overrideCheckInterval); this.overrideCheckInterval = null; }
     if (this.automationInterval) { clearInterval(this.automationInterval); this.automationInterval = null; }
@@ -506,7 +475,7 @@ export class RoleManager {
     return request;
   }
 
-  // ── CRUD ─────────────────────────────────────────────────
+  // -- CRUD --
 
   createAssignment(data: {
     botName: string;
@@ -518,16 +487,13 @@ export class RoleManager {
     interruptPolicy?: RoleAssignmentRecord['interruptPolicy'];
     loadoutPolicy?: RoleAssignmentRecord['loadoutPolicy'];
   }): RoleAssignmentRecord {
-    // Validate role
     if (!VALID_ROLES.includes(data.role)) {
       throw new Error(`Invalid role: ${data.role}`);
     }
-    // Validate autonomy level
     if (!VALID_AUTONOMY.includes(data.autonomyLevel)) {
       throw new Error(`Invalid autonomy level: ${data.autonomyLevel}`);
     }
 
-    // Replace existing assignment for the same bot
     const existing = this.assignments.findIndex((a) => a.botName === data.botName);
     if (existing !== -1) {
       logger.warn(
@@ -574,16 +540,13 @@ export class RoleManager {
     const idx = this.assignments.findIndex((a) => a.id === id);
     if (idx === -1) return null;
 
-    // Validate role if provided
     if (data.role && !VALID_ROLES.includes(data.role)) {
       throw new Error(`Invalid role: ${data.role}`);
     }
-    // Validate autonomy level if provided
     if (data.autonomyLevel && !VALID_AUTONOMY.includes(data.autonomyLevel)) {
       throw new Error(`Invalid autonomy level: ${data.autonomyLevel}`);
     }
 
-    // Don't allow changing id
     const { id: _ignoreId, ...updateFields } = data;
     this.assignments[idx] = { ...this.assignments[idx], ...updateFields, updatedAt: Date.now() };
 

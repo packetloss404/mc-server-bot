@@ -64,7 +64,7 @@ export class MarkerStore {
     );
   }
 
-  // ── Persistence ──────────────────────────────────────────
+  // -- Persistence --
 
   private load(): void {
     const markers = loadJson<MarkerRecord[]>(this.markersPath, []);
@@ -123,7 +123,7 @@ export class MarkerStore {
     this.saveRoutesImmediate();
   }
 
-  // ── Markers ──────────────────────────────────────────────
+  // -- Markers --
 
   createMarker(data: {
     name: string;
@@ -180,7 +180,7 @@ export class MarkerStore {
     return existed;
   }
 
-  // ── Zones ────────────────────────────────────────────────
+  // -- Zones --
 
   createZone(data: Omit<ZoneRecord, 'id'>): ZoneRecord {
     const zone: ZoneRecord = { id: genId('zne'), ...data };
@@ -220,7 +220,7 @@ export class MarkerStore {
     return existed;
   }
 
-  // ── Routes ───────────────────────────────────────────────
+  // -- Routes --
 
   createRoute(data: Omit<RouteRecord, 'id'>): RouteRecord {
     const route: RouteRecord = { id: genId('rte'), ...data };
@@ -260,7 +260,7 @@ export class MarkerStore {
     return existed;
   }
 
-  // ── Spatial Helpers ──────────────────────────────────────
+  // -- Spatial Helpers --
 
   findNearestMarker(
     position: { x: number; y: number; z: number },

@@ -10,10 +10,8 @@ import {
   COMMAND_EVENTS,
 } from './CommandTypes';
 import { BotManager } from '../bot/BotManager';
-import { BotInstance } from '../bot/BotInstance';
 import { MarkerStore } from './MarkerStore';
 import type { RoleManager } from './RoleManager';
-import { depositAllItems } from '../actions/container';
 import { logger } from '../util/logger';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,9 +34,7 @@ export interface CreateCommandParams {
   source?: CommandSource;
   targets: string[];
   params?: Record<string, any>;
-  /** Alias for params — either field is accepted */
   payload?: Record<string, any>;
-  /** When true, overrides interrupt policy "confirm-if-busy" checks */
   force?: boolean;
 }
 
@@ -51,7 +47,6 @@ interface CommandFilters {
 const DATA_PATH = path.join(process.cwd(), 'data', 'commands.json');
 const MAX_PERSISTED = 500;
 
-/** Command types that involve pathfinder-based movement */
 const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
   'walk_to_coords',
   'move_to_marker',
@@ -60,10 +55,7 @@ const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
   'guard_zone',
 ]);
 
-/** How long a command may stay in 'started' before being auto-failed (ms) */
 const COMMAND_TIMEOUT_MS = 60_000;
-
-/** Interval at which we check for timed-out commands (ms) */
 const TIMEOUT_CHECK_INTERVAL_MS = 10_000;
 
 export class CommandCenter {
@@ -82,15 +74,10 @@ export class CommandCenter {
     this.startTimeoutChecker();
   }
 
-  // ── RoleManager integration ─────────────────────────────
-
   setRoleManager(roleManager: RoleManager): void {
     this.roleManager = roleManager;
   }
 
-  // ── Cleanup ─────────────────────────────────────────────
-
-  /** Stop the timeout checker interval (call on shutdown) */
   destroy(): void {
     if (this.timeoutTimer) {
       clearInterval(this.timeoutTimer);
@@ -98,16 +85,15 @@ export class CommandCenter {
     }
   }
 
-  // ── ID generation ──────────────────────────────────────────
+  // -- ID generation --
 
   private generateId(): string {
     return `cmd_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  // ── Public API ─────────────────────────────────────────────
+  // -- Public API --
 
   createCommand(input: CreateCommandParams): CommandRecord {
-    // Accept either `params` or `payload` for backward compat
     const resolvedParams = input.params ?? input.payload ?? {};
 
     const command: CommandRecord = {
@@ -147,7 +133,7 @@ export class CommandCenter {
       return command;
     }
 
-    // ── Role policy: check interrupt policy before dispatching ──
+    // Role policy: check interrupt policy before dispatching
     if (this.roleManager) {
       const verdict = this.roleManager.shouldAllowCommandDispatch(botName, force);
       if (!verdict.allowed) {
@@ -165,7 +151,6 @@ export class CommandCenter {
       }
     }
 
-    // ── Task 4: Validate bot exists and is connected ──
     const worker = this.botManager.getWorker(botName);
     if (!worker) {
       command.error = { code: 'BOT_NOT_FOUND', message: `Bot "${botName}" not found`, botName };
@@ -173,17 +158,13 @@ export class CommandCenter {
       return command;
     }
 
-    // WorkerHandle wraps a worker thread; cast to any for BotInstance-style access
-    const bot = worker as any;
-
-    // ── Task 3: Concurrent command protection ──
-    // If the bot already has an active (started) command, cancel it first
+    // Cancel any active command for this bot
     await this.cancelActiveCommandForBot(botName, 'superseded');
 
     this.updateStatus(command, 'started');
 
     try {
-      const result = await this.executeHandler(command.type, bot, command.params);
+      const result = this.executeHandler(command.type, worker, command.params);
       command.result = result;
       this.updateStatus(command, 'succeeded');
     } catch (err: any) {
@@ -201,7 +182,6 @@ export class CommandCenter {
   getCommands(filters?: CommandFilters): CommandRecord[] {
     let results = [...this.commands.values()];
 
-    // Newest first
     results.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
     if (filters?.bot) {
@@ -233,7 +213,6 @@ export class CommandCenter {
     const byBot: Record<string, { count: number; succeeded: number; failed: number }> = {};
 
     for (const cmd of all) {
-      // Per-status counters
       if (cmd.status === 'succeeded') totalSucceeded++;
       else if (cmd.status === 'failed') {
         totalFailed++;
@@ -241,14 +220,12 @@ export class CommandCenter {
       }
       else if (cmd.status === 'cancelled') totalCancelled++;
 
-      // Duration
       const duration = this.computeDurationMs(cmd);
       if (duration !== undefined) {
         totalDurationMs += duration;
         durationCount++;
       }
 
-      // By type
       if (!byType[cmd.type]) {
         byType[cmd.type] = { count: 0, succeeded: 0, failed: 0, totalDurationMs: 0, durationCount: 0 };
       }
@@ -261,20 +238,18 @@ export class CommandCenter {
         t.durationCount++;
       }
 
-      // By bot (first target)
-      const botName = cmd.targets?.[0];
-      if (botName) {
-        if (!byBot[botName]) {
-          byBot[botName] = { count: 0, succeeded: 0, failed: 0 };
+      const bn = cmd.targets?.[0];
+      if (bn) {
+        if (!byBot[bn]) {
+          byBot[bn] = { count: 0, succeeded: 0, failed: 0 };
         }
-        const b = byBot[botName];
+        const b = byBot[bn];
         b.count++;
         if (cmd.status === 'succeeded') b.succeeded++;
         else if (cmd.status === 'failed') b.failed++;
       }
     }
 
-    // Build final byType with avgDurationMs
     const byTypeFinal: CommandMetrics['byType'] = {};
     for (const [type, data] of Object.entries(byType)) {
       byTypeFinal[type] = {
@@ -304,7 +279,6 @@ export class CommandCenter {
     return undefined;
   }
 
-  /** Return count of commands in a given status */
   getCountByStatus(status: CommandStatus): number {
     let count = 0;
     for (const cmd of this.commands.values()) {
@@ -313,7 +287,6 @@ export class CommandCenter {
     return count;
   }
 
-  /** Return count of commands that failed within the last N milliseconds */
   getRecentFailedCount(withinMs: number): number {
     const cutoff = new Date(Date.now() - withinMs).toISOString();
     let count = 0;
@@ -330,11 +303,6 @@ export class CommandCenter {
     if (!command) return undefined;
 
     if (command.status === 'queued' || command.status === 'started') {
-      // ── Task 1: Stop pathfinder for movement commands that are in-flight ──
-      if (command.status === 'started' && MOVEMENT_COMMAND_TYPES.has(command.type)) {
-        this.stopPathfinderForTargets(command.targets);
-      }
-
       if (reason) {
         command.error = { code: 'CANCELLED', message: reason };
       }
@@ -342,13 +310,11 @@ export class CommandCenter {
       return command;
     }
 
-    // Already terminal — return as-is
     return command;
   }
 
-  // ── Task 2: Timeout handling ───────────────────────────────
+  // -- Timeout handling --
 
-  /** Check all started commands for timeout. Called on a 10-second interval. */
   checkTimeouts(): void {
     const now = Date.now();
 
@@ -360,11 +326,6 @@ export class CommandCenter {
       const elapsed = now - startedMs;
 
       if (elapsed > COMMAND_TIMEOUT_MS) {
-        // Stop pathfinder if it was a movement command
-        if (MOVEMENT_COMMAND_TYPES.has(command.type)) {
-          this.stopPathfinderForTargets(command.targets);
-        }
-
         command.error = { code: 'TIMEOUT', message: 'Command timed out' };
         this.updateStatus(command, 'failed');
 
@@ -376,7 +337,7 @@ export class CommandCenter {
     }
   }
 
-  // ── Task 3: Cancel any active command for a specific bot ──
+  // -- Cancel active command for a bot --
 
   private async cancelActiveCommandForBot(botName: string, reason: string): Promise<void> {
     for (const command of this.commands.values()) {
@@ -390,23 +351,7 @@ export class CommandCenter {
     }
   }
 
-  // ── Pathfinder stop helper ───────────────────────────────
-
-  private stopPathfinderForTargets(targets: string[]): void {
-    for (const botName of targets) {
-      try {
-        const worker = this.botManager.getWorker(botName) as any;
-        if (worker?.bot) {
-          worker.bot.pathfinder.stop();
-          logger.debug({ botName }, 'Pathfinder stopped for cancelled/timed-out command');
-        }
-      } catch (err: any) {
-        logger.warn({ err, botName }, 'Failed to stop pathfinder');
-      }
-    }
-  }
-
-  // ── Fan-out ────────────────────────────────────────────────
+  // -- Fan-out --
 
   private async dispatchFanOut(parent: CommandRecord, force?: boolean): Promise<CommandRecord> {
     this.updateStatus(parent, 'started');
@@ -452,399 +397,159 @@ export class CommandCenter {
     return parent;
   }
 
-  // ── Command handlers ───────────────────────────────────────
+  // -- Command handlers (dispatch via WorkerHandle.sendCommand) --
 
-  private async executeHandler(
+  private executeHandler(
     type: CommandType,
-    bot: BotInstance,
+    worker: any,
     params: Record<string, any>,
-  ): Promise<Record<string, any>> {
+  ): Record<string, any> {
+    if (!worker || !worker.isAlive()) {
+      throw { code: 'BOT_OFFLINE', message: 'Bot is not connected' } as CommandError;
+    }
+
     switch (type) {
       case 'pause_voyager':
-        return this.handlePauseVoyager(bot);
+        worker.sendCommand('setMode', { pause: true });
+        return { paused: true };
+
       case 'resume_voyager':
-        return this.handleResumeVoyager(bot);
+        worker.sendCommand('setMode', { pause: false });
+        return { resumed: true };
+
       case 'stop_movement':
-        return this.handleStopMovement(bot);
-      case 'follow_player':
-        return this.handleFollowPlayer(bot, params);
-      case 'walk_to_coords':
-        return this.handleWalkToCoords(bot, params);
-      case 'move_to_marker':
-        return this.handleMoveToMarker(bot, params);
-      case 'return_to_base':
-        return this.handleReturnToBase(bot);
-      case 'regroup':
-        return this.handleRegroup(bot, params);
-      case 'guard_zone':
-        return this.handleGuardZone(bot, params);
-      case 'patrol_route':
-        return this.handlePatrolRoute(bot, params);
+        worker.sendCommand('stopMovement', {});
+        return { stopped: true };
+
+      case 'follow_player': {
+        const playerName = params.playerName;
+        if (!playerName) {
+          throw { code: 'MISSING_PARAM', message: 'playerName is required' } as CommandError;
+        }
+        worker.sendCommand('follow', { playerName });
+        return { following: playerName };
+      }
+
+      case 'walk_to_coords': {
+        const { x, y, z } = params;
+        if (x == null || y == null || z == null) {
+          throw { code: 'MISSING_PARAM', message: 'x, y, z coordinates are required' } as CommandError;
+        }
+        worker.sendCommand('walkTo', { x, y, z });
+        return { walkingTo: { x, y, z } };
+      }
+
+      case 'move_to_marker': {
+        if (!this.markerStore) {
+          throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
+        }
+        const markerId = params.markerId;
+        if (!markerId) {
+          throw { code: 'MISSING_PARAM', message: 'markerId is required' } as CommandError;
+        }
+        const marker = this.markerStore.getMarker(markerId);
+        if (!marker) {
+          throw { code: 'MARKER_NOT_FOUND', message: `Marker "${markerId}" not found` } as CommandError;
+        }
+        const { x, y, z } = marker.position;
+        worker.sendCommand('walkTo', { x, y, z });
+        return { movingToMarker: marker.name, position: { x, y, z } };
+      }
+
+      case 'return_to_base': {
+        worker.sendCommand('returnToBase', {});
+        return { returningToBase: true };
+      }
+
+      case 'regroup': {
+        const rallyMarkerId = params.markerId ?? params.rallyMarkerId;
+        if (rallyMarkerId && this.markerStore) {
+          const marker = this.markerStore.getMarker(rallyMarkerId);
+          if (marker) {
+            worker.sendCommand('walkTo', marker.position);
+            return { regroupingAt: marker.name, position: marker.position };
+          }
+        }
+        if (params.x != null && params.y != null && params.z != null) {
+          worker.sendCommand('walkTo', { x: params.x, y: params.y, z: params.z });
+          return { regroupingAt: `coords(${params.x}, ${params.y}, ${params.z})` };
+        }
+        worker.sendCommand('returnToBase', {});
+        return { regroupingAt: 'base' };
+      }
+
+      case 'guard_zone': {
+        if (!this.markerStore) {
+          throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
+        }
+        const zoneId = params.zoneId;
+        if (!zoneId) {
+          throw { code: 'MISSING_PARAM', message: 'zoneId is required' } as CommandError;
+        }
+        const zone = this.markerStore.getZone(zoneId);
+        if (!zone) {
+          throw { code: 'ZONE_NOT_FOUND', message: `Zone "${zoneId}" not found` } as CommandError;
+        }
+        let centerX: number, centerZ: number;
+        if (zone.shape === 'circle' && zone.circle) {
+          centerX = zone.circle.x;
+          centerZ = zone.circle.z;
+        } else if (zone.shape === 'rectangle' && zone.rectangle) {
+          centerX = (zone.rectangle.minX + zone.rectangle.maxX) / 2;
+          centerZ = (zone.rectangle.minZ + zone.rectangle.maxZ) / 2;
+        } else {
+          throw { code: 'INVALID_ZONE', message: `Zone "${zoneId}" has no valid shape data` } as CommandError;
+        }
+        worker.sendCommand('walkTo', { x: centerX, y: 64, z: centerZ });
+        return { guardingZone: zone.name, center: { x: centerX, z: centerZ } };
+      }
+
+      case 'patrol_route': {
+        if (!this.markerStore) {
+          throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
+        }
+        const routeId = params.routeId;
+        if (!routeId) {
+          throw { code: 'MISSING_PARAM', message: 'routeId is required' } as CommandError;
+        }
+        const route = this.markerStore.getRoute(routeId);
+        if (!route) {
+          throw { code: 'ROUTE_NOT_FOUND', message: `Route "${routeId}" not found` } as CommandError;
+        }
+        if (route.waypointIds.length === 0) {
+          throw { code: 'EMPTY_ROUTE', message: `Route "${route.name}" has no waypoints` } as CommandError;
+        }
+        const firstMarker = this.markerStore.getMarker(route.waypointIds[0]);
+        if (!firstMarker) {
+          throw { code: 'WAYPOINT_NOT_FOUND', message: `First waypoint not found` } as CommandError;
+        }
+        worker.sendCommand('walkTo', firstMarker.position);
+        return {
+          patrolling: route.name,
+          currentWaypoint: firstMarker.name,
+          waypointCount: route.waypointIds.length,
+        };
+      }
+
       case 'deposit_inventory':
-        return this.handleDepositInventory(bot);
+        worker.sendCommand('depositInventory', {});
+        return { depositing: true };
+
       case 'equip_best':
-        return this.handleEquipBest(bot);
+        worker.sendCommand('equipBest', {});
+        return { equipping: true };
+
       case 'unstuck':
-        return this.handleUnstuck(bot);
+        worker.sendCommand('unstuck', {});
+        return { unstuck: true };
+
       default:
         throw { code: 'UNKNOWN_COMMAND', message: `Unknown command type: ${type}` };
     }
   }
 
-  private handlePauseVoyager(bot: BotInstance): Record<string, any> {
-    const voyager = bot.getVoyagerLoop();
-    if (!voyager) {
-      throw { code: 'NO_VOYAGER', message: `${bot.name} is not running a voyager loop` } as CommandError;
-    }
-    voyager.pause('dashboard');
-    logger.info({ botName: bot.name }, 'Voyager paused via command');
-    return { paused: true };
-  }
+  // -- Status lifecycle --
 
-  private handleResumeVoyager(bot: BotInstance): Record<string, any> {
-    const voyager = bot.getVoyagerLoop();
-    if (!voyager) {
-      throw { code: 'NO_VOYAGER', message: `${bot.name} is not running a voyager loop` } as CommandError;
-    }
-    voyager.resume('dashboard');
-    logger.info({ botName: bot.name }, 'Voyager resumed via command');
-    return { resumed: true };
-  }
-
-  private handleStopMovement(bot: BotInstance): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    bot.bot.pathfinder.stop();
-    logger.info({ botName: bot.name }, 'Movement stopped via command');
-    return { stopped: true };
-  }
-
-  private handleFollowPlayer(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    const playerName = params.playerName;
-    if (!playerName) {
-      throw { code: 'MISSING_PARAM', message: 'playerName is required' } as CommandError;
-    }
-
-    const target = bot.bot.players[playerName]?.entity;
-    if (!target) {
-      throw { code: 'PLAYER_NOT_FOUND', message: `Player "${playerName}" not found nearby` } as CommandError;
-    }
-
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalFollow(target, 3), true);
-
-    logger.info({ botName: bot.name, playerName }, 'Following player via command');
-    return { following: playerName };
-  }
-
-  private handleWalkToCoords(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-
-    const { x, y, z } = params;
-    if (x == null || y == null || z == null) {
-      throw { code: 'MISSING_PARAM', message: 'x, y, z coordinates are required' } as CommandError;
-    }
-
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 2));
-
-    logger.info({ botName: bot.name, x, y, z }, 'Walking to coordinates via command');
-    return { walkingTo: { x, y, z } };
-  }
-
-  private handleMoveToMarker(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    if (!this.markerStore) {
-      throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
-    }
-
-    const markerId = params.markerId;
-    if (!markerId) {
-      throw { code: 'MISSING_PARAM', message: 'markerId is required' } as CommandError;
-    }
-
-    const marker = this.markerStore.getMarker(markerId);
-    if (!marker) {
-      throw { code: 'MARKER_NOT_FOUND', message: `Marker "${markerId}" not found` } as CommandError;
-    }
-
-    const { x, y, z } = marker.position;
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 2));
-
-    logger.info({ botName: bot.name, markerId, markerName: marker.name, x, y, z }, 'Moving to marker via command');
-    return { movingToMarker: marker.name, position: { x, y, z } };
-  }
-
-  private handleReturnToBase(bot: BotInstance): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    if (!this.markerStore) {
-      throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available — cannot locate base' } as CommandError;
-    }
-
-    const pos = bot.bot.entity.position;
-    const baseMarker = this.markerStore.findNearestMarker({ x: pos.x, y: pos.y, z: pos.z }, 'base');
-    if (!baseMarker) {
-      throw { code: 'NO_BASE', message: 'No base marker found' } as CommandError;
-    }
-
-    const { x, y, z } = baseMarker.position;
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 2));
-
-    logger.info({ botName: bot.name, baseName: baseMarker.name, x, y, z }, 'Returning to base via command');
-    return { returningToBase: baseMarker.name, position: { x, y, z } };
-  }
-
-  private handleRegroup(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-
-    // If a rally marker is specified, use it; otherwise try to find the nearest base
-    const rallyMarkerId = params.markerId ?? params.rallyMarkerId;
-    let targetX: number;
-    let targetY: number;
-    let targetZ: number;
-    let targetName: string;
-
-    if (rallyMarkerId && this.markerStore) {
-      const marker = this.markerStore.getMarker(rallyMarkerId);
-      if (!marker) {
-        throw { code: 'MARKER_NOT_FOUND', message: `Rally marker "${rallyMarkerId}" not found` } as CommandError;
-      }
-      targetX = marker.position.x;
-      targetY = marker.position.y;
-      targetZ = marker.position.z;
-      targetName = marker.name;
-    } else if (params.x != null && params.y != null && params.z != null) {
-      targetX = params.x;
-      targetY = params.y;
-      targetZ = params.z;
-      targetName = `coords(${params.x}, ${params.y}, ${params.z})`;
-    } else if (this.markerStore) {
-      const pos = bot.bot.entity.position;
-      const baseMarker = this.markerStore.findNearestMarker({ x: pos.x, y: pos.y, z: pos.z }, 'base');
-      if (!baseMarker) {
-        throw { code: 'NO_RALLY_POINT', message: 'No rally point or base marker found for regroup' } as CommandError;
-      }
-      targetX = baseMarker.position.x;
-      targetY = baseMarker.position.y;
-      targetZ = baseMarker.position.z;
-      targetName = baseMarker.name;
-    } else {
-      throw { code: 'NO_RALLY_POINT', message: 'No rally point specified and MarkerStore is not available' } as CommandError;
-    }
-
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(targetX, targetY, targetZ, 3));
-
-    logger.info({ botName: bot.name, targetName, x: targetX, y: targetY, z: targetZ }, 'Regrouping via command');
-    return { regroupingAt: targetName, position: { x: targetX, y: targetY, z: targetZ } };
-  }
-
-  private handleGuardZone(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    if (!this.markerStore) {
-      throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
-    }
-
-    const zoneId = params.zoneId;
-    if (!zoneId) {
-      throw { code: 'MISSING_PARAM', message: 'zoneId is required' } as CommandError;
-    }
-
-    const zone = this.markerStore.getZone(zoneId);
-    if (!zone) {
-      throw { code: 'ZONE_NOT_FOUND', message: `Zone "${zoneId}" not found` } as CommandError;
-    }
-
-    let centerX: number;
-    let centerZ: number;
-
-    if (zone.shape === 'circle' && zone.circle) {
-      centerX = zone.circle.x;
-      centerZ = zone.circle.z;
-    } else if (zone.shape === 'rectangle' && zone.rectangle) {
-      const r = zone.rectangle;
-      centerX = (r.minX + r.maxX) / 2;
-      centerZ = (r.minZ + r.maxZ) / 2;
-    } else {
-      throw { code: 'INVALID_ZONE', message: `Zone "${zoneId}" has no valid shape data` } as CommandError;
-    }
-
-    // Use the bot's current Y since zones are 2D
-    const y = bot.bot.entity.position.y;
-
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(centerX, y, centerZ, 2));
-
-    logger.info({ botName: bot.name, zoneId, zoneName: zone.name, centerX, centerZ }, 'Guarding zone via command');
-    return { guardingZone: zone.name, center: { x: centerX, z: centerZ } };
-  }
-
-  private handlePatrolRoute(bot: BotInstance, params: Record<string, any>): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-    if (!this.markerStore) {
-      throw { code: 'NO_MARKER_STORE', message: 'MarkerStore is not available' } as CommandError;
-    }
-
-    const routeId = params.routeId;
-    if (!routeId) {
-      throw { code: 'MISSING_PARAM', message: 'routeId is required' } as CommandError;
-    }
-
-    const route = this.markerStore.getRoute(routeId);
-    if (!route) {
-      throw { code: 'ROUTE_NOT_FOUND', message: `Route "${routeId}" not found` } as CommandError;
-    }
-
-    if (route.waypointIds.length === 0) {
-      throw { code: 'EMPTY_ROUTE', message: `Route "${route.name}" has no waypoints` } as CommandError;
-    }
-
-    // Resolve the first waypoint marker
-    const firstWaypointId = route.waypointIds[0];
-    const firstMarker = this.markerStore.getMarker(firstWaypointId);
-    if (!firstMarker) {
-      throw {
-        code: 'WAYPOINT_NOT_FOUND',
-        message: `First waypoint marker "${firstWaypointId}" not found for route "${route.name}"`,
-      } as CommandError;
-    }
-
-    const { x, y, z } = firstMarker.position;
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 2));
-
-    logger.info(
-      { botName: bot.name, routeId, routeName: route.name, firstWaypoint: firstMarker.name, waypointCount: route.waypointIds.length },
-      'Patrol started — moving to first waypoint',
-    );
-    return {
-      patrolling: route.name,
-      currentWaypoint: firstMarker.name,
-      waypointCount: route.waypointIds.length,
-      note: 'Moving to first waypoint; full patrol loop not yet implemented',
-    };
-  }
-
-  private async handleDepositInventory(bot: BotInstance): Promise<Record<string, any>> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-
-    // Try to find a nearby storage marker to deposit at
-    let position: { x: number; y: number; z: number } | undefined;
-    if (this.markerStore) {
-      const botPos = bot.bot.entity.position;
-      const storageMarker = this.markerStore.findNearestMarker(
-        { x: botPos.x, y: botPos.y, z: botPos.z },
-        'storage',
-      );
-      if (storageMarker) {
-        position = storageMarker.position;
-        logger.info(
-          { botName: bot.name, marker: storageMarker.name, position },
-          'Using storage marker for deposit',
-        );
-      }
-    }
-
-    const result = await depositAllItems(
-      bot.bot,
-      position ? new (require('vec3').Vec3)(position.x, position.y, position.z) : undefined,
-    );
-
-    if (!result.success) {
-      throw { code: 'DEPOSIT_FAILED', message: result.message } as CommandError;
-    }
-
-    logger.info({ botName: bot.name, result: result.message }, 'Deposit inventory completed');
-    return {
-      deposited: true,
-      message: result.message,
-      ...(result.data ?? {}),
-    };
-  }
-
-  private handleEquipBest(bot: BotInstance): Record<string, any> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-
-    const inventory = bot.bot.inventory.items();
-    // Prefer swords, then pickaxes, then axes as general-purpose best equipment
-    const weaponPriority = ['netherite_sword', 'diamond_sword', 'iron_sword', 'stone_sword', 'wooden_sword',
-      'netherite_pickaxe', 'diamond_pickaxe', 'iron_pickaxe', 'stone_pickaxe', 'wooden_pickaxe',
-      'netherite_axe', 'diamond_axe', 'iron_axe', 'stone_axe', 'wooden_axe'];
-
-    let bestItem: any = null;
-    let bestRank = weaponPriority.length;
-
-    for (const item of inventory) {
-      const rank = weaponPriority.indexOf(item.name);
-      if (rank !== -1 && rank < bestRank) {
-        bestRank = rank;
-        bestItem = item;
-      }
-    }
-
-    if (!bestItem) {
-      throw { code: 'NO_EQUIPMENT', message: 'No sword, pickaxe, or axe found in inventory' } as CommandError;
-    }
-
-    // bot.bot.equip returns a promise but we fire-and-forget since the caller awaits executeHandler
-    bot.bot.equip(bestItem, 'hand').catch((err: any) => {
-      logger.warn({ err, botName: bot.name }, 'Failed to equip item');
-    });
-
-    logger.info({ botName: bot.name, item: bestItem.name }, 'Equipping best item via command');
-    return { equipping: bestItem.name, slot: bestItem.slot };
-  }
-
-  private async handleUnstuck(bot: BotInstance): Promise<Record<string, any>> {
-    if (!bot.bot) {
-      throw { code: 'BOT_OFFLINE', message: `${bot.name} is not connected` } as CommandError;
-    }
-
-    // Stop current movement
-    bot.bot.pathfinder.stop();
-
-    // Jump to help dislodge from stuck positions
-    bot.bot.setControlState('jump', true);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    bot.bot.setControlState('jump', false);
-
-    // Small random walk to get unstuck
-    const pos = bot.bot.entity.position;
-    const dx = (Math.random() - 0.5) * 8;
-    const dz = (Math.random() - 0.5) * 8;
-
-    const { goals } = require('mineflayer-pathfinder');
-    bot.bot.pathfinder.setGoal(new goals.GoalNear(pos.x + dx, pos.y, pos.z + dz, 1));
-
-    logger.info({ botName: bot.name, dx, dz }, 'Unstuck attempt via command (jump + random walk)');
-    return { unstuck: true, jumped: true, movedTo: { x: pos.x + dx, z: pos.z + dz } };
-  }
-
-  // ── Status lifecycle ───────────────────────────────────────
-
-  /** Task 6: Structured logging for every lifecycle transition */
   private logLifecycle(command: CommandRecord, message: string): void {
     const durationMs = command.startedAt && command.completedAt
       ? new Date(command.completedAt).getTime() - new Date(command.startedAt).getTime()
@@ -878,7 +583,6 @@ export class CommandCenter {
     this.emitStatus(command, eventKey);
     this.persist();
 
-    // Task 6: Structured log on every status transition
     this.logLifecycle(command, `Command ${status}`);
   }
 
@@ -893,7 +597,7 @@ export class CommandCenter {
     });
   }
 
-  // ── Timeout checker ────────────────────────────────────────
+  // -- Timeout checker --
 
   private startTimeoutChecker(): void {
     this.timeoutTimer = setInterval(() => {
@@ -901,11 +605,10 @@ export class CommandCenter {
     }, TIMEOUT_CHECK_INTERVAL_MS);
   }
 
-  // ── Persistence ────────────────────────────────────────────
+  // -- Persistence --
 
   private persist(): void {
     try {
-      // Keep only the most recent commands
       const all = [...this.commands.values()]
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, MAX_PERSISTED);

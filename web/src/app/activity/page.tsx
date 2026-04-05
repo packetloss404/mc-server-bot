@@ -5,6 +5,7 @@ import { motion } from 'framer-motion';
 import { api, type BotEvent } from '@/lib/api';
 import { EVENT_CONFIG } from '@/lib/constants';
 import { PageHeader } from '@/components/PageHeader';
+import { SkeletonList } from '@/components/SkeletonLoader';
 
 const EVENT_TYPES = [
   'all', 'bot:state', 'bot:task', 'bot:chat', 'bot:spawn',
@@ -16,10 +17,11 @@ export default function ActivityPage() {
   const [filter, setFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     const load = () => {
-      api.getActivity(200).then((data) => setEvents(data.events)).catch(() => {});
+      api.getActivity(200).then((data) => { setEvents(data.events); setLoading(false); }).catch(() => { setLoading(false); });
     };
     load();
     if (autoRefresh) {
@@ -91,6 +93,9 @@ export default function ActivityPage() {
       </div>
 
       {/* Event List */}
+      {loading ? (
+        <SkeletonList count={8} />
+      ) : (
       <div className="bg-zinc-900/50 rounded-xl border border-zinc-800/40 overflow-hidden">
         {filtered.length === 0 ? (
           <div className="py-16 text-center">
@@ -141,6 +146,7 @@ export default function ActivityPage() {
           </div>
         )}
       </div>
+      )}
     </div>
   );
 }

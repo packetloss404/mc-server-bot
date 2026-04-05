@@ -1,11 +1,12 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useBotStore } from '@/lib/store';
 import { api, type BotEvent } from '@/lib/api';
 import { BotCard } from '@/components/BotCard';
 import { EVENT_CONFIG } from '@/lib/constants';
+import { SkeletonStatRow, SkeletonCardGrid } from '@/components/SkeletonLoader';
 import Link from 'next/link';
 
 export default function DashboardPage() {
@@ -14,18 +15,28 @@ export default function DashboardPage() {
   const activityFeed = useBotStore((s) => s.activityFeed);
   const connected = useBotStore((s) => s.connected);
   const world = useBotStore((s) => s.world);
+  const [initialLoading, setInitialLoading] = useState(true);
 
   useEffect(() => {
     api.getActivity(20).then((data) => {
       for (const event of data.events.reverse()) {
         useBotStore.getState().pushEvent(event);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setInitialLoading(false));
   }, []);
 
   const botNames = new Set(bots.map((b) => b.name.toLowerCase()));
   const onlinePlayers = players.filter((p) => p.isOnline && !botNames.has(p.name.toLowerCase()));
   const activeBots = bots.filter((b) => b.state !== 'IDLE' && b.state !== 'DISCONNECTED');
+
+  if (initialLoading && !connected) {
+    return (
+      <div className="p-6 lg:p-8 space-y-8 max-w-[1400px]">
+        <SkeletonStatRow count={4} />
+        <SkeletonCardGrid count={4} />
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 lg:p-8 space-y-8 max-w-[1400px]">

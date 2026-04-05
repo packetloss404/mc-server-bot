@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
 import { useBotStore } from '@/lib/store';
+import { useToast } from '@/components/Toast';
 
 interface Props {
   botName: string;
@@ -21,6 +22,7 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
   const [showFollowInput, setShowFollowInput] = useState(false);
   const [feedback, setFeedback] = useState<{ msg: string; ok: boolean } | null>(null);
   const players = useBotStore((s) => s.playerList).filter((p) => p.isOnline);
+  const { toast } = useToast();
 
   const exec = async (label: string, fn: () => Promise<any>) => {
     setLoading(label);
@@ -28,8 +30,10 @@ export function BotCommandCenter({ botName, state, voyagerPaused, voyagerRunning
     try {
       await fn();
       setFeedback({ msg: `${label} sent`, ok: true });
+      toast(`${label} command sent to ${botName}`, 'success');
     } catch (e: any) {
       setFeedback({ msg: e.message || 'Failed', ok: false });
+      toast(e.message || `${label} failed`, 'error');
     }
     setLoading(null);
     setTimeout(() => setFeedback(null), 3000);
@@ -198,6 +202,7 @@ function CmdButton({
     <button
       onClick={onClick}
       disabled={disabled || loading}
+      title={label}
       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-all border ${
         disabled ? 'opacity-30 cursor-not-allowed' : 'hover:brightness-110'
       }`}

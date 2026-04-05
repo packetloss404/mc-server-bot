@@ -7,6 +7,7 @@ import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 import { PageHeader } from '@/components/PageHeader';
+import { useToast } from '@/components/Toast';
 
 const PERSONALITIES = ['merchant', 'guard', 'elder', 'explorer', 'blacksmith', 'farmer', 'builder'];
 
@@ -20,6 +21,7 @@ export default function ManagePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [taskBot, setTaskBot] = useState<string | null>(null);
   const [taskDesc, setTaskDesc] = useState('');
+  const { toast } = useToast();
 
   const handleCreate = async () => {
     if (!newName.trim()) return;
@@ -29,10 +31,12 @@ export default function ManagePage() {
     try {
       await api.createBot(newName.trim(), newPersonality, newMode);
       setSuccess(`Bot "${newName.trim()}" created successfully`);
+      toast(`Bot "${newName.trim()}" created`, 'success');
       setNewName('');
       setTimeout(() => setSuccess(null), 3000);
     } catch (e: any) {
       setError(e.message);
+      toast(e.message || 'Failed to create bot', 'error');
     }
     setCreating(false);
   };
@@ -42,8 +46,10 @@ export default function ManagePage() {
     setError(null);
     try {
       await api.deleteBot(name);
+      toast(`Bot "${name}" removed`, 'success');
     } catch (e: any) {
       setError(e.message);
+      toast(e.message || 'Failed to remove bot', 'error');
     }
   };
 
@@ -51,8 +57,10 @@ export default function ManagePage() {
     const mode = currentMode === 'codegen' ? 'primitive' : 'codegen';
     try {
       await api.setMode(name, mode);
+      toast(`${name} switched to ${mode} mode`, 'success');
     } catch (e: any) {
       setError(e.message);
+      toast(e.message || 'Failed to switch mode', 'error');
     }
   };
 
@@ -60,10 +68,12 @@ export default function ManagePage() {
     if (!taskDesc.trim()) return;
     try {
       await api.queueTask(botName, taskDesc.trim());
+      toast(`Task queued for ${botName}`, 'success');
       setTaskDesc('');
       setTaskBot(null);
     } catch (e: any) {
       setError(e.message);
+      toast(e.message || 'Failed to queue task', 'error');
     }
   };
 
@@ -222,6 +232,7 @@ export default function ManagePage() {
                     <div className="flex items-center gap-2 shrink-0">
                       <button
                         onClick={() => handleModeToggle(bot.name, bot.mode)}
+                        title={`Switch to ${bot.mode === 'codegen' ? 'primitive' : 'codegen'} mode`}
                         className="text-[10px] font-mono font-medium px-2.5 py-1 rounded-md border transition-colors"
                         style={{
                           color: bot.mode === 'codegen' ? '#10B981' : '#F59E0B',
@@ -243,6 +254,7 @@ export default function ManagePage() {
                       <button
                         onClick={() => handleDelete(bot.name)}
                         className="text-xs text-zinc-600 hover:text-red-400 px-2 py-1 rounded-md hover:bg-zinc-800 transition-colors"
+                        title="Delete bot"
                       >
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                           <polyline points="3 6 5 6 21 6" />

@@ -30,7 +30,6 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     let finished = false;
     const startTime = Date.now();
     let droppedItem: any = null;
-    let finished = false;
 
     const onEntityGone = (entity: any) => {
       if (entity === target) {

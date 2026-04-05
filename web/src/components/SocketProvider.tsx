@@ -14,30 +14,39 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   } = useBotStore();
 
   useEffect(() => {
-    // Initial fetch
-    api.getBots().then((data) => setBots(data.bots)).catch(console.error);
-    api.getWorld().then((data) => setWorld(data)).catch(() => {});
-    api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    // Fetch all data (used on initial load and socket reconnection)
+    const fetchAll = () => {
+      api.getBots().then((data) => setBots(data.bots)).catch(console.error);
+      api.getWorld().then((data) => setWorld(data)).catch(() => {});
+      api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    };
 
-    // Poll bots every 5s as a fallback
+    // Initial fetch
+    fetchAll();
+
+    // Poll bots every 30s as a reconnect-recovery fallback
     const pollInterval = setInterval(() => {
       api.getBots().then((data) => setBots(data.bots)).catch(() => {});
-    }, 5000);
-
-    // Poll world state every 30s
-    const worldInterval = setInterval(() => {
-      api.getWorld().then((data) => setWorld(data)).catch(() => {});
     }, 30000);
 
-    // Poll players every 10s
+    // Poll world state every 60s as fallback
+    const worldInterval = setInterval(() => {
+      api.getWorld().then((data) => setWorld(data)).catch(() => {});
+    }, 60000);
+
+    // Poll players every 60s as fallback
     const playerInterval = setInterval(() => {
       api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
-    }, 10000);
+    }, 60000);
 
-    // Socket.IO
+    // Socket.IO - primary data path
     const socket = getSocket();
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // On reconnect, immediately re-fetch all data to catch anything missed
+      fetchAll();
+    });
     socket.on('disconnect', () => setConnected(false));
 
     socket.on('bot:position', (data: { bot: string; x: number; y: number; z: number }) => {
@@ -86,6 +95,29 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
+    // World time updates from backend (merge with existing world state)
+    socket.on('world:time', (data: { timeOfDay: string; isRaining: boolean }) => {
+      const prev = useBotStore.getState().world;
+      setWorld({
+        timeOfDay: data.timeOfDay ?? prev?.timeOfDay ?? null,
+        timeOfDayTicks: prev?.timeOfDayTicks ?? null,
+        day: prev?.day ?? null,
+        isRaining: data.isRaining ?? prev?.isRaining ?? null,
+        onlineBots: prev?.onlineBots ?? 0,
+      });
+    });
+
+    // Squad and role events - accept payload directly instead of re-fetching.
+    // These are no-ops until the store is extended with squad/role state,
+    // but the handlers are registered so the events are not silently dropped.
+    socket.on('squad:updated', (_data: any) => {
+      // TODO: dispatch to squad store when available
+    });
+
+    socket.on('role:updated', (_data: any) => {
+      // TODO: dispatch to role store when available
+    });
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -103,6 +135,9 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
+      socket.off('world:time');
+      socket.off('squad:updated');
+      socket.off('role:updated');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

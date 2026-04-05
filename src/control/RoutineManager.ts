@@ -4,10 +4,12 @@ import { randomUUID } from 'crypto';
 import { logger } from '../util/logger';
 import { BotManager } from '../bot/BotManager';
 
-// -- Types --
+// ── Types ──────────────────────────────────────────────────────────
 
 export interface RoutineStep {
+  /** 'command' dispatches via WorkerHandle.sendCommand; 'mission' queues a task */
   type: 'command' | 'mission';
+  /** Arbitrary payload – for command: { command, args }, for mission: { description } */
   data: Record<string, any>;
 }
 
@@ -32,9 +34,13 @@ export interface RoutineExecution {
 }
 
 interface RecordingSession {
+  /** Draft routine being recorded */
   draft: Routine;
+  /** Who started the recording (informational) */
   startedBy: string;
 }
+
+// ── Persistence helpers ────────────────────────────────────────────
 
 function ensureDataDir(): string {
   const dir = path.join(process.cwd(), 'data');
@@ -45,6 +51,8 @@ function ensureDataDir(): string {
 }
 
 const ROUTINES_FILE = 'routines.json';
+
+// ── Manager ────────────────────────────────────────────────────────
 
 export class RoutineManager {
   private routines: Map<string, Routine> = new Map();
@@ -61,7 +69,7 @@ export class RoutineManager {
     this.load();
   }
 
-  // -- Persistence --
+  // ── Persistence ────────────────────────────────────────────────
 
   private load(): void {
     try {
@@ -95,7 +103,17 @@ export class RoutineManager {
     }
   }
 
-  // -- CRUD --
+  /** Flush pending debounced writes to disk immediately (call on process exit). */
+  shutdown(): void {
+    if (this.saveTimeout) {
+      clearTimeout(this.saveTimeout);
+      this.saveTimeout = null;
+    }
+    this.saveToDisk();
+    logger.info('Routine manager shut down, routines flushed to disk');
+  }
+
+  // ── CRUD ───────────────────────────────────────────────────────
 
   list(): Routine[] {
     return Array.from(this.routines.values());
@@ -144,7 +162,7 @@ export class RoutineManager {
     return existed;
   }
 
-  // -- Execution --
+  // ── Execution ──────────────────────────────────────────────────
 
   getActiveExecution(): RoutineExecution | null {
     return this.activeExecution;
@@ -186,6 +204,7 @@ export class RoutineManager {
       'Executing routine',
     );
 
+    // Execute steps sequentially
     try {
       for (const step of routine.steps) {
         await this.executeStep(step, bots);
@@ -225,10 +244,11 @@ export class RoutineManager {
       }
     }
 
+    // Small delay between steps to avoid flooding
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 
-  // -- Recording --
+  // ── Recording ──────────────────────────────────────────────────
 
   isRecording(): boolean {
     return this.recording !== null;
@@ -256,6 +276,7 @@ export class RoutineManager {
     return draft;
   }
 
+  /** Called externally whenever a command or mission is dispatched while recording is active */
   captureStep(step: RoutineStep): void {
     if (!this.recording) return;
     this.recording.draft.steps.push(step);

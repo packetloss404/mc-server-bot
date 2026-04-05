@@ -1,4 +1,17 @@
-async function mine3CoalOreAt549(bot) {
-  await moveTo(549, 66, 74, 3, 60);
-  await mineBlock('coal_ore', 3);
+async function mine3CoalOreAt97(bot) {
+  let targetBlock = bot.findBlock({
+    matching: b => ['coal_ore', 'deepslate_coal_ore'].includes(b.name),
+    maxDistance: 32
+  });
+  if (!targetBlock) {
+    targetBlock = await exploreUntil('north', 60, () => {
+      return bot.findBlock({
+        matching: b => ['coal_ore', 'deepslate_coal_ore'].includes(b.name),
+        maxDistance: 32
+      });
+    });
+  }
+  if (targetBlock) {
+    await mineBlock(targetBlock.name, 3);
+  }
 }

@@ -1,4 +1,4 @@
-async function exploreOneHundredBlocksWest(bot) {
+async function explore100BlocksToTheWest(bot) {
   const startX = bot.entity.position.x;
   const targetX = startX - 100;
   await exploreUntil({

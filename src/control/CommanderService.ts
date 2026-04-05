@@ -3,20 +3,21 @@ import path from 'path';
 import { LLMClient } from '../ai/LLMClient';
 import { logger } from '../util/logger';
 
-const DATA_DIR = './data';
+const DATA_DIR = path.join(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'commander-history.json');
 const SAVE_DEBOUNCE_MS = 2000;
 const MAX_HISTORY = 100;
 
+// Confidence threshold below which clarification is required
 const CLARIFICATION_THRESHOLD = 0.5;
 
-// -- Types --
+// ── Types ────────────────────────────────────────────────
 
 export interface ClarificationQuestion {
   id: string;
   question: string;
   options: string[];
-  field: string;
+  field: string; // which part of the plan this clarifies (e.g. "targets", "zone", "action")
 }
 
 export interface CommanderPlanCommand {
@@ -87,7 +88,7 @@ export interface CommanderServiceDeps {
   llmClient: LLMClient | null;
 }
 
-// -- Service --
+// ── Service ──────────────────────────────────────────────
 
 export class CommanderService {
   private llmClient: LLMClient | null;
@@ -96,6 +97,10 @@ export class CommanderService {
   private drafts: CommanderDraft[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
+  // ── Metrics counters ───────────────────────────────────
+  // Intentionally ephemeral: these are session-scoped counters that reset on
+  // restart. They reflect current-session activity, not historical data.
+  // Historical analysis can be derived from the persisted command history.
   private totalParses = 0;
   private successfulParses = 0;
   private failedParses = 0;
@@ -111,15 +116,13 @@ export class CommanderService {
     this.load();
   }
 
-  setLLMClient(client: LLMClient | null): void {
-    this.llmClient = client;
-  }
+  // ── Plan ID generation ──────────────────────────────────
 
   private generateId(prefix = 'plan'): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  // -- History --
+  // ── History ─────────────────────────────────────────────
 
   getHistory(limit = 20): CommanderHistoryEntry[] {
     return this.history.slice(0, limit);
@@ -130,7 +133,7 @@ export class CommanderService {
     this.scheduleSave();
   }
 
-  // -- Drafts --
+  // ── Drafts ──────────────────────────────────────────────
 
   getDrafts(): CommanderDraft[] {
     return [...this.drafts];
@@ -139,6 +142,7 @@ export class CommanderService {
   saveDraft(data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }): CommanderDraft {
     const now = new Date().toISOString();
 
+    // Update existing draft if id provided
     if (data.id) {
       const existing = this.drafts.find((d) => d.id === data.id);
       if (existing) {
@@ -147,10 +151,12 @@ export class CommanderService {
         if (data.notes !== undefined) existing.notes = data.notes;
         existing.updatedAt = now;
         this.scheduleSave();
+        logger.info({ draftId: existing.id }, 'Commander draft updated');
         return existing;
       }
     }
 
+    // Create new draft
     const draft: CommanderDraft = {
       id: this.generateId('draft'),
       input: data.input,
@@ -161,6 +167,7 @@ export class CommanderService {
     };
     this.drafts.push(draft);
     this.scheduleSave();
+    logger.info({ draftId: draft.id }, 'Commander draft saved');
     return draft;
   }
 
@@ -169,10 +176,11 @@ export class CommanderService {
     if (idx === -1) return false;
     this.drafts.splice(idx, 1);
     this.scheduleSave();
+    logger.info({ draftId: id }, 'Commander draft deleted');
     return true;
   }
 
-  // -- Plan storage --
+  // ── Plan storage ────────────────────────────────────────
 
   getPlan(planId: string): CommanderPlan | undefined {
     return this.plans.get(planId);
@@ -182,7 +190,7 @@ export class CommanderService {
     this.plans.set(plan.id, plan);
   }
 
-  // -- Metrics --
+  // ── Metrics ────────────────────────────────────────────
 
   private trackParseMetrics(plan: CommanderPlan): void {
     this.totalParses++;
@@ -198,16 +206,19 @@ export class CommanderService {
       this.clarificationRequestCount++;
     }
 
+    // Track command types from the parsed intent
     if (plan.intent && plan.intent !== 'unknown') {
       this.commandTypeCounts[plan.intent] = (this.commandTypeCounts[plan.intent] || 0) + 1;
     }
 
+    // Track individual command types from the plan
     for (const cmd of plan.commands) {
       if (cmd.type) {
         this.commandTypeCounts[cmd.type] = (this.commandTypeCounts[cmd.type] || 0) + 1;
       }
     }
 
+    // Track mission types from the plan
     for (const mission of plan.missions) {
       if (mission.type) {
         this.missionTypeCounts[mission.type] = (this.missionTypeCounts[mission.type] || 0) + 1;
@@ -218,6 +229,8 @@ export class CommanderService {
   private trackExecutionMetrics(result: CommanderExecuteResult): void {
     this.totalExecutions++;
 
+    // Detect partial failures: some commands/missions present but result arrays
+    // contain items with error indicators
     const hasCommandErrors = result.commands.some(
       (c: any) => c && (c.status === 'failed' || c.error),
     );
@@ -244,7 +257,7 @@ export class CommanderService {
     };
   }
 
-  // -- Suggested commands --
+  // ── Suggested commands ──────────────────────────────────
 
   private static SUGGESTED_COMMANDS = [
     'Send all guards to the village',
@@ -262,7 +275,7 @@ export class CommanderService {
     return shuffled.slice(0, 4);
   }
 
-  // -- Clarification generation --
+  // ── Clarification generation ────────────────────────────
 
   private generateClarificationQuestions(
     input: string,
@@ -272,6 +285,7 @@ export class CommanderService {
     const questions: ClarificationQuestion[] = [];
     const lowerInput = input.toLowerCase();
 
+    // Check for ambiguous bot references
     const vagueBotRefs = ['the bot', 'a bot', 'someone', 'one of them', 'it'];
     const hasVagueBotRef = vagueBotRefs.some((ref) => lowerInput.includes(ref));
     if (hasVagueBotRef) {
@@ -283,6 +297,7 @@ export class CommanderService {
       });
     }
 
+    // Check for ambiguous location references
     const vagueLocRefs = ['over there', 'that place', 'the area', 'nearby', 'somewhere'];
     const hasVagueLocation = vagueLocRefs.some((ref) => lowerInput.includes(ref));
     if (hasVagueLocation) {
@@ -294,6 +309,7 @@ export class CommanderService {
       });
     }
 
+    // Check for ambiguous action when multiple interpretations exist
     const ambiguousPatterns: { pattern: RegExp; question: string; options: string[]; field: string }[] = [
       {
         pattern: /\b(go|move|head)\b/i,
@@ -327,6 +343,7 @@ export class CommanderService {
       }
     }
 
+    // If there are warnings about missing data, add relevant questions
     for (const warning of warnings) {
       if (warning.toLowerCase().includes('zone') || warning.toLowerCase().includes('area')) {
         questions.push({
@@ -346,6 +363,7 @@ export class CommanderService {
       }
     }
 
+    // Very low confidence -- ask the user what they mean generally
     if (confidence < 0.3 && questions.length === 0) {
       questions.push({
         id: this.generateId('cq'),
@@ -364,13 +382,14 @@ export class CommanderService {
     return questions;
   }
 
-  // -- Parse --
+  // ── Parse ──────────────────────────────────────────────
 
   async parse(input: string): Promise<CommanderPlan> {
     const planId = this.generateId();
     const now = new Date().toISOString();
     const trimmedInput = input.trim();
 
+    // Handle empty or very short input
     if (!trimmedInput || trimmedInput.length < 3) {
       const plan: CommanderPlan = {
         id: planId,
@@ -392,6 +411,7 @@ export class CommanderService {
       return plan;
     }
 
+    // Derive intent and confidence heuristically
     let intent = '';
     let confidence = 0;
     const warnings: string[] = [];
@@ -436,6 +456,7 @@ export class CommanderService {
       warnings.push('Could not determine the intended action from the input.');
     }
 
+    // Check for specificity
     const hasNamedBot = /\b(ada|bob|carl|dan|eve|fay)\b/i.test(lowerInput);
     const hasAllBots = /\ball\b/.test(lowerInput);
     const hasRole = /\b(guard|farmer|miner|explorer|blacksmith|merchant)\b/i.test(lowerInput);
@@ -456,6 +477,7 @@ export class CommanderService {
       warnings.push('Consider specifying which bots or roles should be targeted.');
     }
 
+    // Determine if clarification is needed
     const clarificationQuestions = this.generateClarificationQuestions(trimmedInput, confidence, warnings);
     const needsClarification = confidence < CLARIFICATION_THRESHOLD || clarificationQuestions.length > 0;
     const suggestedCommands = confidence < CLARIFICATION_THRESHOLD ? this.getSuggestedCommands() : [];
@@ -487,6 +509,8 @@ export class CommanderService {
     return plan;
   }
 
+  // ── Re-parse with clarification ─────────────────────────
+
   async parseWithClarification(
     originalInput: string,
     clarifications: Record<string, string>,
@@ -501,12 +525,13 @@ export class CommanderService {
     return this.parse(augmentedInput);
   }
 
-  // -- Execute --
+  // ── Execute ──────────────────────────────────────────────
 
   async execute(planId: string): Promise<CommanderExecuteResult | null> {
     const plan = this.plans.get(planId);
     if (!plan) return null;
 
+    // Block execution if clarification is still needed
     if (plan.needsClarification && plan.clarificationQuestions.length > 0) {
       logger.warn({ planId }, 'Cannot execute plan that still requires clarification');
       return null;
@@ -526,7 +551,7 @@ export class CommanderService {
     return result;
   }
 
-  // -- Persistence --
+  // ── Persistence ─────────────────────────────────────────
 
   private load(): void {
     try {
@@ -544,6 +569,7 @@ export class CommanderService {
           this.drafts = data.drafts;
         }
 
+        // Rebuild plans map from history for continuity
         for (const entry of this.history) {
           if (entry.plan?.id) {
             this.plans.set(entry.plan.id, entry.plan);
@@ -586,6 +612,7 @@ export class CommanderService {
     }, SAVE_DEBOUNCE_MS);
   }
 
+  /** Flush pending saves to disk immediately (call on process exit). */
   shutdown(): void {
     if (this.saveTimer) {
       clearTimeout(this.saveTimer);

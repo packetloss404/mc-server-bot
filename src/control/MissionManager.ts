@@ -14,7 +14,7 @@ import {
   MISSION_EVENTS,
 } from './MissionTypes';
 
-const DATA_DIR = './data';
+const DATA_DIR = path.join(process.cwd(), 'data');
 const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 

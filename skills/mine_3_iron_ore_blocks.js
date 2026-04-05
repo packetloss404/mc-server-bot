@@ -1,27 +1,25 @@
 async function mineThreeIronOreBlocks(bot) {
-  const ironOreNames = ['iron_ore', 'deepslate_iron_ore'];
-  const items = bot.inventory.items();
-  const hasGoodPickaxe = items.some(item => ['stone_pickaxe', 'iron_pickaxe', 'diamond_pickaxe', 'netherite_pickaxe'].includes(item.name));
-  if (!hasGoodPickaxe) {
-    const cobble = items.find(i => i.name === 'cobblestone');
-    const sticks = items.find(i => i.name === 'stick');
-    if (!cobble || cobble.count < 3) {
-      await mineBlock('stone', 3);
-    }
-    if (!sticks || sticks.count < 2) {
-      await craftItem('stick', 1);
-    }
-    await craftItem('stone_pickaxe', 1);
+  const pickaxe = bot.inventory.items().find(i => i.name.endsWith('_pickaxe'));
+  if (pickaxe) {
+    await bot.equip(pickaxe, 'hand');
   }
-  const findOre = () => bot.findBlock({
-    matching: block => ironOreNames.includes(block.name),
+  let ironOre = bot.findBlock({
+    matching: b => b.name === 'iron_ore' || b.name === 'deepslate_iron_ore',
     maxDistance: 32
   });
-  let oreBlock = findOre();
-  if (!oreBlock) {
-    oreBlock = await exploreUntil('south', 60, () => findOre());
+  if (!ironOre) {
+    await exploreUntil('north', 60, () => {
+      return bot.findBlock({
+        matching: b => b.name === 'iron_ore' || b.name === 'deepslate_iron_ore',
+        maxDistance: 32
+      });
+    });
+    ironOre = bot.findBlock({
+      matching: b => b.name === 'iron_ore' || b.name === 'deepslate_iron_ore',
+      maxDistance: 32
+    });
   }
-  if (oreBlock) {
-    await mineBlock(oreBlock.name, 3);
+  if (ironOre) {
+    await mineBlock(ironOre.name, 3);
   }
 }

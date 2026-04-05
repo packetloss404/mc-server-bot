@@ -1,14 +1,18 @@
-async function mine1LapisLazuliOre(bot) {
-  const findLapis = () => bot.findBlock({
-    matching: b => ['lapis_ore', 'deepslate_lapis_ore'].includes(b.name),
+async function mineLapisLazuliOre(bot) {
+  let targetBlock = bot.findBlock({
+    matching: block => block.name === 'lapis_ore' || block.name === 'deepslate_lapis_ore',
     maxDistance: 32
   });
-  let lapis = findLapis();
-  if (!lapis) {
-    await exploreUntil(bot, 'south', 60, () => findLapis());
-    lapis = findLapis();
+  if (!targetBlock) {
+    await exploreUntil('south', 60, () => {
+      targetBlock = bot.findBlock({
+        matching: block => block.name === 'lapis_ore' || block.name === 'deepslate_lapis_ore',
+        maxDistance: 32
+      });
+      return !!targetBlock;
+    });
   }
-  if (lapis) {
-    await mineBlock(lapis.name, 1);
+  if (targetBlock) {
+    await mineBlock('lapis_lazuli', 1);
   }
 }

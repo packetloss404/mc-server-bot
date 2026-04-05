@@ -1,7 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type { BotStatus, BotEvent, WorldState, Mission, Zone, Squad } from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +138,24 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// --- Map overlay store for missions, zones, squads ---
+
+interface MapOverlayStore {
+  missions: Mission[];
+  zones: Zone[];
+  squads: Squad[];
+  setMissions: (missions: Mission[]) => void;
+  setZones: (zones: Zone[]) => void;
+  setSquads: (squads: Squad[]) => void;
+}
+
+export const useMapOverlayStore = create<MapOverlayStore>((set) => ({
+  missions: [],
+  zones: [],
+  squads: [],
+  setMissions: (missions) => set({ missions }),
+  setZones: (zones) => set({ zones }),
+  setSquads: (squads) => set({ squads }),
 }));

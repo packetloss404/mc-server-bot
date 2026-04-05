@@ -133,6 +133,42 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Control platform types
+export interface Mission {
+  id: string;
+  type: string; // 'patrol_zone' | 'queue_task' | 'guard' | etc.
+  status: 'pending' | 'active' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  assignee?: string; // bot name
+  params?: {
+    zoneId?: string;
+    [key: string]: any;
+  };
+  label?: string;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  type?: string; // 'guard' | 'farm' | 'build' | etc.
+  shape: 'rect' | 'circle';
+  // For rect zones
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  // For circle zones
+  cx?: number;
+  cz?: number;
+  radius?: number;
+}
+
+export interface Squad {
+  id: string;
+  name: string;
+  members: string[]; // bot names
+  color?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -174,6 +210,18 @@ export const api = {
     if (type) params.set('type', type);
     return fetchJSON<{ events: BotEvent[] }>(`/api/activity?${params}`);
   },
+
+  // Missions
+  getMissions: () =>
+    fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
+
+  // Zones
+  getZones: () =>
+    fetchJSON<{ zones: Zone[] }>('/api/zones').catch(() => ({ zones: [] })),
+
+  // Squads
+  getSquads: () =>
+    fetchJSON<{ squads: Squad[] }>('/api/squads').catch(() => ({ squads: [] })),
 
   // Actions
   sendChat: (botName: string, playerName: string, message: string) =>

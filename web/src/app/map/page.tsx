@@ -1,10 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useMapOverlayStore } from '@/lib/store';
 import { api } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
+import { drawMissionOverlays, drawSquadOverlays } from '@/components/map/mapDrawing';
+import { OverlayToggleButtons, type OverlayToggles } from '@/components/map/MapToolbar';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
@@ -26,6 +28,12 @@ interface MapEntity {
 export default function MapPage() {
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
+  const missions = useMapOverlayStore((s) => s.missions);
+  const zones = useMapOverlayStore((s) => s.zones);
+  const squads = useMapOverlayStore((s) => s.squads);
+  const setMissions = useMapOverlayStore((s) => s.setMissions);
+  const setZones = useMapOverlayStore((s) => s.setZones);
+  const setSquads = useMapOverlayStore((s) => s.setSquads);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -37,6 +45,7 @@ export default function MapPage() {
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
   const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
+  const overlayRef = useRef<OverlayToggles>({ missions: true, squads: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
@@ -44,6 +53,9 @@ export default function MapPage() {
   const terrainCanvas = useRef<OffscreenCanvas | null>(null);
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
+  const missionsRef = useRef(missions);
+  const zonesRef = useRef(zones);
+  const squadsRef = useRef(squads);
 
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
@@ -54,6 +66,9 @@ export default function MapPage() {
   // Keep refs in sync with zustand
   botsRef.current = bots;
   playersRef.current = players;
+  missionsRef.current = missions;
+  zonesRef.current = zones;
+  squadsRef.current = squads;
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -87,6 +102,18 @@ export default function MapPage() {
       setTerrainStatus('error');
     }
   }, []);
+
+  // Fetch overlay data (missions, zones, squads) on mount and periodically
+  useEffect(() => {
+    const fetchOverlays = () => {
+      api.getMissions().then((d) => setMissions(d.missions)).catch(() => {});
+      api.getZones().then((d) => setZones(d.zones)).catch(() => {});
+      api.getSquads().then((d) => setSquads(d.squads)).catch(() => {});
+    };
+    fetchOverlays();
+    const interval = setInterval(fetchOverlays, 15000);
+    return () => clearInterval(interval);
+  }, [setMissions, setZones, setSquads]);
 
   // Track position history
   useEffect(() => {
@@ -298,6 +325,27 @@ export default function MapPage() {
         }
       }
 
+      // --- Overlay layers (missions, squads) ---
+      const overlay = overlayRef.current;
+      const vp = { cx, cy, scale, offsetX: offset.x, offsetY: offset.y };
+
+      // Mission zone overlays
+      if (overlay.missions && missionsRef.current.length > 0 && zonesRef.current.length > 0) {
+        drawMissionOverlays(ctx, vp, missionsRef.current, zonesRef.current);
+      }
+
+      // Squad overlays: build a bot position map from current entities
+      if (overlay.squads && squadsRef.current.length > 0) {
+        const botPosMap = new Map<string, { x: number; z: number }>();
+        for (const e of entities) {
+          if (e.type === 'bot') {
+            botPosMap.set(e.name, { x: e.x, z: e.z });
+            botPosMap.set(e.name.toLowerCase(), { x: e.x, z: e.z });
+          }
+        }
+        drawSquadOverlays(ctx, vp, squadsRef.current, botPosMap);
+      }
+
       // HUD overlays
       if (show.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
@@ -451,6 +499,13 @@ export default function MapPage() {
             <span className="w-px h-4 bg-zinc-800 mx-1" />
             <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
             <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
+            <OverlayToggleButtons
+              toggles={overlayRef.current}
+              onToggle={(key) => {
+                overlayRef.current = { ...overlayRef.current, [key]: !overlayRef.current[key] };
+                kick();
+              }}
+            />
           </div>
           {terrainStatus === 'loading' && (
             <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
@@ -544,6 +599,12 @@ export default function MapPage() {
                   <LegendItem shape="square" color="#7F7F7F" label="Stone" />
                   <LegendItem shape="square" color="#DBCFA0" label="Sand" />
                 </>
+              )}
+              {overlayRef.current.missions && (
+                <LegendItem shape="square" color="#10B981" label="Mission zone" />
+              )}
+              {overlayRef.current.squads && (
+                <LegendItem shape="square" color="#8B5CF6" label="Squad area" />
               )}
             </div>
           </div>

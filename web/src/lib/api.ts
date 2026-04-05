@@ -204,4 +204,72 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Commander — templates, suggestions, routines
+  getCommanderTemplates: (params?: { category?: string; q?: string }) => {
+    const qs = new URLSearchParams();
+    if (params?.category) qs.set('category', params.category);
+    if (params?.q) qs.set('q', params.q);
+    const query = qs.toString();
+    return fetchJSON<{ templates: CommandTemplate[] }>(`/api/commander/templates${query ? `?${query}` : ''}`);
+  },
+  fillTemplate: (templateId: string, values: Record<string, string>) =>
+    fetchJSON<{ text: string }>('/api/commander/templates/fill', {
+      method: 'POST',
+      body: JSON.stringify({ templateId, values }),
+    }),
+  getCommanderSuggestions: () =>
+    fetchJSON<{ suggestions: ContextSuggestion[] }>('/api/commander/suggestions'),
+  getRoutines: () =>
+    fetchJSON<{ routines: SavedRoutine[] }>('/api/commander/routines'),
+  createRoutine: (name: string, description: string, steps: RoutineStep[]) =>
+    fetchJSON<{ routine: SavedRoutine }>('/api/commander/routines', {
+      method: 'POST',
+      body: JSON.stringify({ name, description, steps }),
+    }),
+  deleteRoutine: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/routines/${id}`, { method: 'DELETE' }),
+  expandRoutine: (id: string) =>
+    fetchJSON<{ commands: string[] }>(`/api/commander/routines/${id}/expand`),
 };
+
+// Commander types (mirrored from backend)
+export type PlaceholderType = 'bot' | 'zone' | 'item' | 'number' | 'player' | 'position';
+
+export interface TemplatePlaceholder {
+  key: string;
+  type: PlaceholderType;
+  label: string;
+  default?: string;
+}
+
+export interface CommandTemplate {
+  id: string;
+  category: 'fleet' | 'combat' | 'gathering' | 'building' | 'exploration' | 'utility';
+  name: string;
+  description: string;
+  template: string;
+  placeholders: TemplatePlaceholder[];
+  tags: string[];
+  icon: string;
+}
+
+export interface ContextSuggestion {
+  template: CommandTemplate;
+  reason: string;
+  priority: number;
+}
+
+export interface SavedRoutine {
+  id: string;
+  name: string;
+  description: string;
+  steps: RoutineStep[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoutineStep {
+  templateId: string;
+  values: Record<string, string>;
+}

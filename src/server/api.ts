@@ -7,6 +7,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
 import { logger } from '../util/logger';
+import { CommanderService } from '../control/CommanderService';
 
 export interface APIServerResult {
   app: express.Application;
@@ -379,6 +380,98 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
     io.emit('activity', event);
     res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  COMMANDER — Templates, Suggestions, Routines
+  // ═══════════════════════════════════════
+
+  const commander = new CommanderService(botManager);
+
+  // List all templates (optionally filter by category or search query)
+  app.get('/api/commander/templates', (req: Request, res: Response) => {
+    const { category, q } = req.query;
+    if (q) {
+      res.json({ templates: commander.searchTemplates(String(q)) });
+      return;
+    }
+    if (category) {
+      res.json({ templates: commander.getTemplatesByCategory(String(category)) });
+      return;
+    }
+    res.json({ templates: commander.getTemplates() });
+  });
+
+  // Fill a template with values
+  app.post('/api/commander/templates/fill', (req: Request, res: Response) => {
+    const { templateId, values } = req.body;
+    if (!templateId) {
+      res.status(400).json({ error: 'templateId is required' });
+      return;
+    }
+    const text = commander.fillTemplate(templateId, values || {});
+    if (!text) {
+      res.status(404).json({ error: 'Template not found' });
+      return;
+    }
+    res.json({ text });
+  });
+
+  // Context-aware suggestions based on current fleet state
+  app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
+    res.json({ suggestions: commander.getSuggestions() });
+  });
+
+  // Routines CRUD
+  app.get('/api/commander/routines', (_req: Request, res: Response) => {
+    res.json({ routines: commander.getRoutines() });
+  });
+
+  app.post('/api/commander/routines', (req: Request, res: Response) => {
+    const { name, description, steps } = req.body;
+    if (!name || !steps || !Array.isArray(steps)) {
+      res.status(400).json({ error: 'name and steps[] are required' });
+      return;
+    }
+    const routine = commander.createRoutine(name, description || '', steps);
+    res.status(201).json({ routine });
+  });
+
+  app.get('/api/commander/routines/:id', (req: Request, res: Response) => {
+    const routine = commander.getRoutine(req.params.id as string);
+    if (!routine) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine });
+  });
+
+  app.patch('/api/commander/routines/:id', (req: Request, res: Response) => {
+    const updated = commander.updateRoutine(req.params.id as string, req.body);
+    if (!updated) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ routine: updated });
+  });
+
+  app.delete('/api/commander/routines/:id', (req: Request, res: Response) => {
+    const deleted = commander.deleteRoutine(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Expand a routine into NL command strings
+  app.get('/api/commander/routines/:id/expand', (req: Request, res: Response) => {
+    const commands = commander.expandRoutine(req.params.id as string);
+    if (!commands) {
+      res.status(404).json({ error: 'Routine not found' });
+      return;
+    }
+    res.json({ commands });
   });
 
   return { app, httpServer, io, eventLog };

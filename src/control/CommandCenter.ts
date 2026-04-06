@@ -599,6 +599,8 @@ export class CommandCenter {
       error: command.error,
       result: command.result,
       createdAt: command.createdAt,
+      startedAt: command.startedAt,
+      completedAt: command.completedAt,
     });
   }
 

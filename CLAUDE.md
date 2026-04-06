@@ -68,11 +68,15 @@ curl -s http://127.0.0.1:3001/api/bots
 - `src/actions/` - primitive movement, mining, crafting, combat, container, patrol actions
 - `src/ai/` - LLM client abstraction with Gemini and Anthropic implementations
 - `src/personality/` - affinity, conversation, personality behavior
+- `src/social/` - bot-to-bot messaging and memory
 - `src/server/api.ts` - Express API for bot CRUD, dashboard, and control
 - `src/server/socketEvents.ts` - Socket.IO real-time event broadcasting
 - `src/server/EventLog.ts` - in-memory circular event buffer
+- `src/control/` - fleet control platform (CommandCenter, MissionManager, MarkerStore, SquadManager, RoleManager, CommanderService)
+- `src/build/` - schematic-based build coordination
+- `src/supplychain/` - supply chain templates and coordination
 - `src/worker/` - worker thread handles, IPC channel, and proxies for cross-thread access
-- `src/util/` - logger, sleep, and shared utilities
+- `src/util/` - logger, sleep, atomic file writes, and shared utilities
 - `src/config.ts` - YAML config loader and `Config` interface
 
 ## API Endpoints
@@ -112,6 +116,47 @@ curl -s http://127.0.0.1:3001/api/bots
 - `POST /api/bots/:name/chat` - send chat message to bot (body: `{playerName, message}`)
 - `POST /api/bots/:name/task` - queue a task for bot (body: `{description}`)
 - `POST /api/swarm` - set a swarm directive (body: `{description, requestedBy?}`)
+
+### Metrics
+
+- `GET /api/metrics` - aggregate metrics (bots, tasks, commands, missions, commander, fleet, skills)
+
+### Commander Endpoints
+
+- `GET /api/commander/history` - list commander parse history (query: `limit`)
+- `POST /api/commander/parse` - parse natural language into a plan (body: `{input}`)
+- `POST /api/commander/execute` - execute a parsed plan (body: `{planId}`)
+- `GET /api/commander/drafts` - list saved command drafts
+- `POST /api/commander/drafts` - create or update a draft (body: `{input, plan?, notes?, id?}`)
+- `DELETE /api/commander/drafts/:id` - delete a draft
+- `POST /api/commander/clarify` - re-parse with clarification answers (body: `{originalInput, clarifications}`)
+- `GET /api/commander/suggestions` - get suggested commands
+
+### Build Endpoints
+
+- `GET /api/schematics` - list available schematics
+- `GET /api/builds` - list all build jobs
+- `POST /api/builds` - create a build job (body: `{schematicFile, origin, botNames, options?}`)
+- `GET /api/builds/:id` - get a specific build job
+- `POST /api/builds/:id/cancel` - cancel a build
+- `POST /api/builds/:id/pause` - pause a build
+- `POST /api/builds/:id/resume` - resume a build
+
+### Supply Chain Endpoints
+
+- `GET /api/chains/templates` - list chain templates
+- `GET /api/chains` - list all chains
+- `POST /api/chains` - create a chain (body: `{name, description?, templateId?, stages?, loop?, botAssignments?, chestLocations?}`)
+- `GET /api/chains/:id` - get a specific chain
+- `POST /api/chains/:id/start` - start a chain
+- `POST /api/chains/:id/pause` - pause a chain
+- `POST /api/chains/:id/cancel` - cancel a chain
+- `DELETE /api/chains/:id` - delete a chain
+
+### Terrain Endpoints
+
+- `GET /api/terrain` - scan blocks in a region (query: `x`, `y`, `z`, `radius`)
+- `GET /api/terrain/height` - get terrain height at a column (query: `x`, `z`, `maxY?`, `minY?`)
 
 ### Socket.IO Events (real-time)
 

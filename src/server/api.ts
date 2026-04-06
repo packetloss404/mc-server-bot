@@ -7,6 +7,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
 import { CommanderService } from '../control/CommanderService';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -15,8 +17,8 @@ export interface APIServerResult {
   io: SocketIOServer;
   eventLog: EventLog;
   commanderService: CommanderService;
-  buildCoordinator?: any;
-  chainCoordinator?: any;
+  buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -66,6 +68,10 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
   });
+
+  // ── Build & Supply Chain coordinators ──
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -720,5 +726,225 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ suggestions: commanderService.getSuggestedCommands() });
   });
 
-  return { app, httpServer, io, eventLog, commanderService };
+  // ═══════════════════════════════════════
+  //  BUILD ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List available schematics
+  app.get('/api/schematics', async (_req: Request, res: Response) => {
+    try {
+      const schematics = await buildCoordinator.listSchematics();
+      res.json({ schematics });
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to list schematics');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // List all build jobs
+  app.get('/api/builds', (_req: Request, res: Response) => {
+    res.json({ builds: buildCoordinator.getAllBuildJobs() });
+  });
+
+  // Create a new build job
+  app.post('/api/builds', async (req: Request, res: Response) => {
+    const { schematicFile, origin, botNames, options } = req.body;
+    if (!schematicFile || !origin || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
+      res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' });
+      return;
+    }
+    try {
+      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames, options);
+      res.status(201).json({ build: job });
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to start build');
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Get a specific build job
+  app.get('/api/builds/:id', (req: Request, res: Response) => {
+    const job = buildCoordinator.getBuildJob(req.params.id as string);
+    if (!job) {
+      res.status(404).json({ error: 'Build not found' });
+      return;
+    }
+    res.json({ build: job });
+  });
+
+  // Cancel a build
+  app.post('/api/builds/:id/cancel', (req: Request, res: Response) => {
+    const success = buildCoordinator.cancelBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or already finished' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Pause a build
+  app.post('/api/builds/:id/pause', (req: Request, res: Response) => {
+    const success = buildCoordinator.pauseBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Resume a build
+  app.post('/api/builds/:id/resume', (req: Request, res: Response) => {
+    const success = buildCoordinator.resumeBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not paused' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  SUPPLY CHAIN ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List chain templates
+  app.get('/api/chains/templates', (_req: Request, res: Response) => {
+    res.json({ templates: chainCoordinator.getTemplates() });
+  });
+
+  // List all chains
+  app.get('/api/chains', (_req: Request, res: Response) => {
+    res.json({ chains: chainCoordinator.getAllChains() });
+  });
+
+  // Create a new chain
+  app.post('/api/chains', (req: Request, res: Response) => {
+    const { name, description, templateId, stages, loop, botAssignments, chestLocations } = req.body;
+    if (!name) {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    try {
+      const chain = chainCoordinator.createChain({ name, description, templateId, stages, loop, botAssignments, chestLocations });
+      res.status(201).json({ chain });
+    } catch (err: any) {
+      logger.error({ err }, 'Failed to create chain');
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Get a specific chain
+  app.get('/api/chains/:id', (req: Request, res: Response) => {
+    const chain = chainCoordinator.getChain(req.params.id as string);
+    if (!chain) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
+    }
+    res.json({ chain });
+  });
+
+  // Start a chain
+  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
+    const success = chainCoordinator.startChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or already running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Pause a chain
+  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
+    const success = chainCoordinator.pauseChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or not running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Cancel a chain
+  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
+    const success = chainCoordinator.cancelChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Delete a chain
+  app.delete('/api/chains/:id', (req: Request, res: Response) => {
+    const success = chainCoordinator.deleteChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  TERRAIN ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Scan blocks in a region around a position
+  app.get('/api/terrain', (req: Request, res: Response) => {
+    const x = parseInt(String(req.query.x ?? '0'));
+    const y = parseInt(String(req.query.y ?? '64'));
+    const z = parseInt(String(req.query.z ?? '0'));
+    const radius = Math.min(parseInt(String(req.query.radius ?? '4')), 16);
+
+    // Find a connected bot to probe the world
+    const workers = botManager.getAllWorkers() as any[];
+    const probeWorker = workers.find((w: any) => w.isAlive() && w.bot);
+    if (!probeWorker) {
+      res.status(503).json({ error: 'No connected bot available to scan terrain' });
+      return;
+    }
+    const bot = (probeWorker as any).bot;
+
+    const blocks: Array<{ x: number; y: number; z: number; name: string }> = [];
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dz = -radius; dz <= radius; dz++) {
+          try {
+            const block = bot.blockAt({ x: x + dx, y: y + dy, z: z + dz } as any);
+            if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+              blocks.push({ x: x + dx, y: y + dy, z: z + dz, name: block.name });
+            }
+          } catch { /* out of range */ }
+        }
+      }
+    }
+    res.json({ center: { x, y, z }, radius, blocks, count: blocks.length });
+  });
+
+  // Get terrain height at a specific (x, z) column
+  app.get('/api/terrain/height', (req: Request, res: Response) => {
+    const x = parseInt(String(req.query.x ?? '0'));
+    const z = parseInt(String(req.query.z ?? '0'));
+    const maxY = parseInt(String(req.query.maxY ?? '320'));
+    const minY = parseInt(String(req.query.minY ?? '-64'));
+
+    const workers = botManager.getAllWorkers() as any[];
+    const probeWorker = workers.find((w: any) => w.isAlive() && w.bot);
+    if (!probeWorker) {
+      res.status(503).json({ error: 'No connected bot available to scan terrain' });
+      return;
+    }
+    const bot = (probeWorker as any).bot;
+
+    // Scan downward to find the first solid block
+    for (let y = maxY; y >= minY; y--) {
+      try {
+        const block = bot.blockAt({ x, y, z } as any);
+        if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+          res.json({ x, z, height: y, surfaceBlock: block.name });
+          return;
+        }
+      } catch { /* out of range */ }
+    }
+    res.json({ x, z, height: null, surfaceBlock: null });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService, buildCoordinator, chainCoordinator };
 }

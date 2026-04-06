@@ -424,7 +424,11 @@ export class RoleManager {
   }
 
   private emit(record?: RoleAssignmentRecord): void {
-    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, record ?? null);
+    if (record) {
+      this.io.emit(FLEET_EVENTS.ROLE_UPDATED, { ...record });
+    } else {
+      this.io.emit(FLEET_EVENTS.ROLE_UPDATED, null);
+    }
   }
 
   getApprovalRequests(): RoleApprovalRequestRecord[] {

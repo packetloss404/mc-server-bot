@@ -70,7 +70,7 @@ export class SquadManager {
   }
 
   private emitUpdate(squad: SquadRecord): void {
-    this.io.emit(FLEET_EVENTS.SQUAD_UPDATED, squad);
+    this.io.emit(FLEET_EVENTS.SQUAD_UPDATED, { ...squad });
   }
 
   // -- CRUD --

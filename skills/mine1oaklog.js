@@ -1,29 +1,24 @@
-async function mineOneOakLog(bot) {
-  const targetName = 'oak_log';
-  const targetCount = 1;
-  const getCount = () => {
-    const item = bot.inventory.items().find(i => i.name === targetName);
-    return item ? item.count : 0;
-  };
-  const initialCount = getCount();
-  const findTarget = () => bot.findBlock({
-    matching: b => b.name === targetName,
+async function mine_1_oak_log(bot) {
+  const logName = 'oak_log';
+  const block = bot.findBlock({
+    matching: b => b.name === logName,
     maxDistance: 32
   });
-  let target = findTarget();
-  if (!target) {
-    await exploreUntil("north", 60, () => {
+  if (!block) {
+    await exploreUntil(bot.entity.yaw, 60, () => {
       return bot.findBlock({
-        matching: b => b.name === 'oak_log',
+        matching: b => b.name === logName,
         maxDistance: 32
       });
     });
   }
-  await mineBlock(targetName, targetCount);
-
-  // Check if we actually got the log. If not, try again to handle potential item pick-up delays or failures.
-  const currentCount = getCount();
-  if (currentCount <= initialCount) {
-    await mineBlock(targetName, targetCount);
+  const initialCount = bot.inventory.items().find(i => i.name === logName)?.count || 0;
+  await mineBlock(logName, 1);
+  const finalCount = bot.inventory.items().find(i => i.name === logName)?.count || 0;
+  if (finalCount <= initialCount) {
+    const droppedLog = bot.nearestEntity(e => e.name === 'item' && e.onGround && e.getItemStack().name === logName);
+    if (droppedLog) {
+      await moveTo(droppedLog.position.x, droppedLog.position.y, droppedLog.position.z, 1, 10);
+    }
   }
 }

@@ -1,4 +1,4 @@
-async function craftFourOakStairs(bot) {
+async function craft4OakStairs(bot) {
   const existingStairs = bot.inventory.items().find(i => i.name === 'oak_stairs');
   if (existingStairs && existingStairs.count >= 4) return;
   const planks = bot.inventory.items().find(i => i.name === 'oak_planks');
@@ -13,11 +13,7 @@ async function craftFourOakStairs(bot) {
         maxDistance: 32
       });
       if (!logBlock) {
-        await exploreUntil({
-          x: 1,
-          y: 0,
-          z: 0
-        }, 60, () => bot.findBlock({
+        await exploreUntil(new (require('vec3').Vec3)(1, 0, 0), 60, () => bot.findBlock({
           matching: b => b.name === 'oak_log',
           maxDistance: 32
         }));

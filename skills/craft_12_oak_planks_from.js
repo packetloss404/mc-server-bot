@@ -1,24 +1,18 @@
-async function craftTwelveOakPlanks(bot) {
-  let planks = bot.inventory.items().find(i => i.name === 'oak_planks');
-  let planksCount = planks ? planks.count : 0;
-  let neededPlanks = 12 - planksCount;
-  if (neededPlanks <= 0) return;
-  let neededCrafts = Math.ceil(neededPlanks / 4);
-  let logs = bot.inventory.items().find(i => i.name === 'oak_log');
-  let logCount = logs ? logs.count : 0;
-  if (logCount < neededCrafts) {
-    let targetLog = bot.findBlock({
-      matching: b => b.name === 'oak_log',
-      maxDistance: 32
-    });
-    if (!targetLog) {
-      await exploreUntil(0, 60, () => bot.findBlock({
-        matching: b => b.name === 'oak_log',
-        maxDistance: 32
-      }));
-    }
-    await mineBlock('oak_log', neededCrafts - logCount);
+async function craft12OakPlanks(bot) {
+  const plankName = 'oak_planks';
+  const logName = 'oak_log';
+  const targetCount = 12;
+  const currentPlanks = bot.inventory.items().find(i => i.name === plankName);
+  const currentPlankCount = currentPlanks ? currentPlanks.count : 0;
+  if (currentPlankCount >= targetCount) {
+    return;
   }
-  await moveTo(824, 63, 444, 3, 30);
-  await craftItem('oak_planks', neededCrafts);
+  const neededPlanks = targetCount - currentPlankCount;
+  const neededLogs = Math.ceil(neededPlanks / 4);
+  const currentLogs = bot.inventory.items().find(i => i.name === logName);
+  const currentLogCount = currentLogs ? currentLogs.count : 0;
+  if (currentLogCount < neededLogs) {
+    await mineBlock(bot, logName, neededLogs - currentLogCount);
+  }
+  await craftItem(plankName, targetCount);
 }

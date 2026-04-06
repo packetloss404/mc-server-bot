@@ -3,6 +3,10 @@ import path from 'path';
 import { LLMClient } from '../ai/LLMClient';
 import { logger } from '../util/logger';
 import { atomicWriteJsonSync } from '../util/atomicWrite';
+import type { CommandCenter, CreateCommandParams } from './CommandCenter';
+import type { MissionManager, CreateMissionParams } from './MissionManager';
+import type { CommandType } from './CommandTypes';
+import type { MissionType } from './MissionTypes';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'commander-history.json');
@@ -93,6 +97,8 @@ export interface CommanderServiceDeps {
 
 export class CommanderService {
   private llmClient: LLMClient | null;
+  private commandCenter: CommandCenter | null = null;
+  private missionManager: MissionManager | null = null;
   private plans: Map<string, CommanderPlan> = new Map();
   private history: CommanderHistoryEntry[] = [];
   private drafts: CommanderDraft[] = [];
@@ -112,6 +118,18 @@ export class CommanderService {
   constructor(deps: CommanderServiceDeps) {
     this.llmClient = deps.llmClient;
     this.load();
+  }
+
+  setCommandCenter(cc: CommandCenter): void {
+    this.commandCenter = cc;
+  }
+
+  setMissionManager(mm: MissionManager): void {
+    this.missionManager = mm;
+  }
+
+  setLLMClient(client: LLMClient): void {
+    this.llmClient = client;
   }
 
   // ── Plan ID generation ──────────────────────────────────
@@ -460,6 +478,24 @@ export class CommanderService {
       warnings.push('Consider specifying which bots or roles should be targeted.');
     }
 
+    // ── Resolve targets ──────────────────────────────────
+    const targets = this.resolveTargets(lowerInput, hasNamedBot, hasAllBots, hasRole);
+
+    // ── Parse coordinates if present ─────────────────────
+    const coordPayload: Record<string, unknown> = {};
+    const coordMatch = lowerInput.match(/(-?\d+)\s*[, ]\s*(-?\d+)(?:\s*[, ]\s*(-?\d+))?/);
+    if (coordMatch) {
+      coordPayload.x = parseInt(coordMatch[1], 10);
+      coordPayload.z = parseInt(coordMatch[2], 10);
+      if (coordMatch[3] !== undefined) {
+        coordPayload.y = parseInt(coordMatch[2], 10);
+        coordPayload.z = parseInt(coordMatch[3], 10);
+      }
+    }
+
+    // ── Populate commands and missions based on intent ────
+    this.populateCommandsAndMissions(intent, targets, coordPayload, lowerInput, commands, missions);
+
     const clarificationQuestions = this.generateClarificationQuestions(trimmedInput, confidence, warnings);
     const needsClarification = confidence < CLARIFICATION_THRESHOLD || clarificationQuestions.length > 0;
     const suggestedCommands = confidence < CLARIFICATION_THRESHOLD ? this.getSuggestedCommands() : [];
@@ -491,6 +527,106 @@ export class CommanderService {
     return plan;
   }
 
+  // ── Target resolution ──────────────────────────────────
+
+  private resolveTargets(
+    lowerInput: string,
+    hasNamedBot: boolean,
+    hasAllBots: boolean,
+    hasRole: boolean,
+  ): string[] {
+    if (hasAllBots) {
+      return ['__all__'];
+    }
+
+    const targets: string[] = [];
+
+    if (hasNamedBot) {
+      const nameMatches = lowerInput.match(/\b(ada|bob|carl|dan|eve|fay)\b/gi);
+      if (nameMatches) {
+        for (const m of nameMatches) {
+          const name = m.charAt(0).toUpperCase() + m.slice(1).toLowerCase();
+          if (!targets.includes(name)) targets.push(name);
+        }
+      }
+    }
+
+    if (hasRole && targets.length === 0) {
+      const roleMatch = lowerInput.match(/\b(guard|farmer|miner|explorer|blacksmith|merchant)s?\b/i);
+      if (roleMatch) {
+        targets.push(`__role:${roleMatch[1].toLowerCase()}__`);
+      }
+    }
+
+    return targets;
+  }
+
+  // ── Map intents to commands / missions ─────────────────
+
+  private static INTENT_TO_COMMAND_TYPE: Record<string, CommandType> = {
+    pause_bots: 'pause_voyager',
+    resume_bots: 'resume_voyager',
+    move_bots: 'walk_to_coords',
+    follow_player: 'follow_player',
+    regroup: 'regroup',
+    guard_zone: 'guard_zone',
+    patrol_route: 'patrol_route',
+  };
+
+  private static INTENT_TO_MISSION_TYPE: Record<string, MissionType> = {
+    mine_task: 'queue_task',
+    farm_task: 'queue_task',
+    craft_task: 'craft_items',
+  };
+
+  private populateCommandsAndMissions(
+    intent: string,
+    targets: string[],
+    coordPayload: Record<string, unknown>,
+    lowerInput: string,
+    commands: CommanderPlanCommand[],
+    missions: CommanderPlanMission[],
+  ): void {
+    if (intent === 'unknown' || targets.length === 0) return;
+
+    const commandType = CommanderService.INTENT_TO_COMMAND_TYPE[intent];
+    if (commandType) {
+      const payload: Record<string, unknown> = { ...coordPayload };
+
+      // Extract player name for follow_player
+      if (commandType === 'follow_player') {
+        const followMatch = lowerInput.match(/follow\s+(\w+)/i);
+        if (followMatch && !['me', 'player'].includes(followMatch[1].toLowerCase())) {
+          payload.playerName = followMatch[1];
+        }
+      }
+
+      commands.push({ type: commandType, targets, payload });
+      return;
+    }
+
+    const missionType = CommanderService.INTENT_TO_MISSION_TYPE[intent];
+    if (missionType) {
+      // Build a descriptive title from the intent
+      const titleMap: Record<string, string> = {
+        mine_task: 'Mine resources',
+        farm_task: 'Farm crops',
+        craft_task: 'Craft items',
+      };
+      const title = titleMap[intent] ?? intent;
+
+      // Extract a more specific description from the input
+      const description = lowerInput;
+
+      missions.push({
+        type: missionType,
+        title,
+        description,
+        assigneeIds: targets,
+      });
+    }
+  }
+
   // ── Re-parse with clarification ─────────────────────────
 
   async parseWithClarification(
@@ -519,13 +655,83 @@ export class CommanderService {
     }
 
     const result: CommanderExecuteResult = { commands: [], missions: [] };
+
+    // ── Dispatch commands via CommandCenter ───────────────
+    for (const cmd of plan.commands) {
+      if (this.commandCenter) {
+        try {
+          const scope = cmd.targets.includes('__all__')
+            ? 'all' as const
+            : cmd.targets.length > 1
+              ? 'selection' as const
+              : 'single' as const;
+
+          const createParams: CreateCommandParams = {
+            type: cmd.type as CommandType,
+            scope,
+            source: 'commander',
+            targets: cmd.targets,
+            payload: cmd.payload,
+          };
+
+          const record = this.commandCenter.createCommand(createParams);
+          const dispatched = await this.commandCenter.dispatchCommand(record);
+          result.commands.push(dispatched);
+          logger.info(
+            { planId, commandId: record.id, type: cmd.type, targets: cmd.targets },
+            'Commander dispatched command',
+          );
+        } catch (err: any) {
+          const errorEntry = { type: cmd.type, targets: cmd.targets, error: String(err?.message ?? err) };
+          result.commands.push(errorEntry);
+          logger.error({ planId, cmd, err }, 'Commander failed to dispatch command');
+        }
+      } else {
+        result.commands.push({ type: cmd.type, targets: cmd.targets, status: 'skipped', reason: 'no CommandCenter' });
+        logger.warn({ planId, type: cmd.type }, 'CommandCenter not available, command skipped');
+      }
+    }
+
+    // ── Create missions via MissionManager ───────────────
+    for (const msn of plan.missions) {
+      if (this.missionManager) {
+        try {
+          const createParams: CreateMissionParams = {
+            type: msn.type as MissionType,
+            title: msn.title,
+            description: msn.description,
+            assigneeType: 'bot',
+            assigneeIds: msn.assigneeIds,
+            source: 'commander',
+          };
+
+          const record = this.missionManager.createMission(createParams);
+          result.missions.push(record);
+          logger.info(
+            { planId, missionId: record.id, type: msn.type, assignees: msn.assigneeIds },
+            'Commander created mission',
+          );
+        } catch (err: any) {
+          const errorEntry = { type: msn.type, title: msn.title, error: String(err?.message ?? err) };
+          result.missions.push(errorEntry);
+          logger.error({ planId, msn, err }, 'Commander failed to create mission');
+        }
+      } else {
+        result.missions.push({ type: msn.type, title: msn.title, status: 'skipped', reason: 'no MissionManager' });
+        logger.warn({ planId, type: msn.type }, 'MissionManager not available, mission skipped');
+      }
+    }
+
+    const hasErrors = result.commands.some((c: any) => c?.error || c?.status === 'failed')
+      || result.missions.some((m: any) => m?.error || m?.status === 'failed');
+
     this.trackExecutionMetrics(result);
     this.upsertHistory({
       planId,
       input: plan.input,
       plan,
       result,
-      status: 'executed',
+      status: hasErrors ? 'partial_failure' : 'executed',
       createdAt: plan.createdAt,
       executedAt: new Date().toISOString(),
     });

@@ -540,7 +540,7 @@ export class ChainCoordinator {
 
           this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
           this.io.emit('chain:failed', {
-            chainId: chain.id,
+            id: chain.id,
             name: chain.name,
             error: `Stage ${stageIndex} failed after 3 retries`,
           });

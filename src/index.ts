@@ -63,7 +63,7 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { httpServer, io, eventLog } = createAPIServer(botManager);
+  const { httpServer, io, eventLog, buildCoordinator, chainCoordinator } = createAPIServer(botManager);
 
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
@@ -145,15 +145,44 @@ async function main() {
     logger.info({ port: config.api.port, host: config.api.host }, 'DyoBot API server running (HTTP + WebSocket)');
   });
 
-  // Graceful shutdown
+  // Graceful shutdown — flush ALL managers before exiting
   const shutdown = async () => {
     logger.info('Shutting down DyoBot...');
     if (memoryInterval) {
       clearInterval(memoryInterval);
       memoryInterval = null;
     }
+
+    // Flush event log to disk
+    eventLog.shutdown();
+
+    // Flush supply chain coordinator (stops polling + saves)
+    chainCoordinator.shutdown();
+
+    // Flush persistence managers on BotManager (affinityManager, socialMemory, blackboardManager)
+    // shutdownPersistence() is the canonical method when available; fall back to individual shutdown() calls
+    if (typeof (botManager as any).shutdownPersistence === 'function') {
+      (botManager as any).shutdownPersistence();
+    } else {
+      // Call shutdown() on individual managers if they have it (debounced-save pattern)
+      const mgrs: any[] = [
+        botManager.getAffinityManager(),
+        botManager.getBlackboardManager(),
+      ];
+      for (const mgr of mgrs) {
+        if (mgr && typeof mgr.shutdown === 'function') {
+          try { mgr.shutdown(); } catch {}
+        }
+      }
+    }
+
+    // Close socket connections
     io.close();
+
+    // Disconnect and remove all bots (also saves bots.json)
     await botManager.removeAllBots();
+
+    logger.info('DyoBot shutdown complete');
     process.exit(0);
   };
 

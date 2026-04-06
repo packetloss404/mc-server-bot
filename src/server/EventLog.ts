@@ -42,4 +42,10 @@ export class EventLog {
   getAll(): BotEvent[] {
     return [...this.buffer].reverse();
   }
+
+  /** Flush pending writes to disk (no-op for in-memory-only buffer; exists for API compat). */
+  shutdown(): void {
+    // In-memory circular buffer has nothing to flush.
+    // This method exists so callers can safely call shutdown() on any EventLog variant.
+  }
 }

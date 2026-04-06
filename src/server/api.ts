@@ -3,9 +3,12 @@ import cors from 'cors';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import { Vec3 } from 'vec3';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +16,8 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -57,6 +62,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
   });
+
+  // ── Build coordinator ──
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
+
+  // ── Supply chain coordinator ──
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -381,5 +392,263 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  SCHEMATIC ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List .schem files in schematics/ directory
+  app.get('/api/schematics', async (_req: Request, res: Response) => {
+    try {
+      const schematics = await buildCoordinator.listSchematics();
+      res.json({ schematics });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════
+  //  BUILD ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List all build jobs
+  app.get('/api/builds', (_req: Request, res: Response) => {
+    res.json({ builds: buildCoordinator.getAllBuildJobs() });
+  });
+
+  // Get a specific build job
+  app.get('/api/builds/:id', (req: Request, res: Response) => {
+    const job = buildCoordinator.getBuildJob(req.params.id as string);
+    if (!job) {
+      res.status(404).json({ error: 'Build job not found' });
+      return;
+    }
+    res.json({ build: job });
+  });
+
+  // Start a new build
+  app.post('/api/builds', async (req: Request, res: Response) => {
+    try {
+      const { schematicFile, origin, botNames, options } = req.body;
+
+      if (!schematicFile || !origin || !botNames || !Array.isArray(botNames)) {
+        res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' });
+        return;
+      }
+
+      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames, options);
+
+      const event = eventLog.push({
+        type: 'build:started',
+        botName: botNames.join(', '),
+        description: `Build started: ${schematicFile}`,
+        metadata: { jobId: job.id },
+      });
+      io.emit('activity', event);
+
+      res.status(201).json({ build: job });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Cancel a build
+  app.post('/api/builds/:id/cancel', (req: Request, res: Response) => {
+    const success = buildCoordinator.cancelBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or already finished' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Pause a build
+  app.post('/api/builds/:id/pause', (req: Request, res: Response) => {
+    const success = buildCoordinator.pauseBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Resume a build
+  app.post('/api/builds/:id/resume', (req: Request, res: Response) => {
+    const success = buildCoordinator.resumeBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not paused' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  SUPPLY CHAIN ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // List chain templates
+  app.get('/api/chains/templates', (_req: Request, res: Response) => {
+    res.json({ templates: chainCoordinator.getTemplates() });
+  });
+
+  // List all chains
+  app.get('/api/chains', (_req: Request, res: Response) => {
+    res.json({ chains: chainCoordinator.getAllChains() });
+  });
+
+  // Get a specific chain
+  app.get('/api/chains/:id', (req: Request, res: Response) => {
+    const chain = chainCoordinator.getChain(req.params.id as string);
+    if (!chain) {
+      res.status(404).json({ error: 'Supply chain not found' });
+      return;
+    }
+    res.json({ chain });
+  });
+
+  // Create a new chain
+  app.post('/api/chains', (req: Request, res: Response) => {
+    try {
+      const chain = chainCoordinator.createChain(req.body);
+
+      const event = eventLog.push({
+        type: 'chain:created',
+        botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
+        description: `Supply chain created: ${chain.name}`,
+        metadata: { chainId: chain.id },
+      });
+      io.emit('activity', event);
+
+      res.status(201).json({ chain });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // Start a chain
+  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
+    const success = chainCoordinator.startChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or already running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Pause a chain
+  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
+    const success = chainCoordinator.pauseChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or not running' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Cancel a chain
+  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
+    const success = chainCoordinator.cancelChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Delete a chain
+  app.delete('/api/chains/:id', (req: Request, res: Response) => {
+    const success = chainCoordinator.deleteChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // ═══════════════════════════════════════
+  //  TERRAIN ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Scan blocks around a bot's position
+  app.get('/api/terrain', (req: Request, res: Response) => {
+    try {
+      const botName = req.query.bot ? String(req.query.bot) : undefined;
+      const radius = parseInt(String(req.query.radius ?? '8'), 10);
+
+      if (!botName) {
+        res.status(400).json({ error: 'bot query parameter is required' });
+        return;
+      }
+
+      const handle = botManager.getWorker(botName) as any;
+      if (!handle) {
+        res.status(404).json({ error: 'Bot not found' });
+        return;
+      }
+
+      const detailed = handle.getCachedDetailedStatus();
+      const pos = detailed?.position || handle.getCachedStatus()?.position;
+      if (!pos) {
+        res.status(400).json({ error: 'Bot position not available' });
+        return;
+      }
+
+      // Use the bot's mineflayer instance if available via worker
+      // Since we use worker threads, we read from cached detailed status
+      // and report block info from the bot's position
+      const clampedRadius = Math.min(radius, 16);
+      const blocks: Array<{ x: number; y: number; z: number; name: string }> = [];
+
+      // We cannot directly access mineflayer from the main thread (worker architecture),
+      // so return the bot's position and nearby entity/block info from cached state
+      res.json({
+        bot: botName,
+        center: pos,
+        radius: clampedRadius,
+        blocks,
+        note: 'Block scanning requires direct bot access; use /api/terrain/height for ground-level queries via bot commands',
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Get ground height at coordinates (uses first available bot to probe)
+  app.get('/api/terrain/height', (req: Request, res: Response) => {
+    try {
+      const x = parseInt(String(req.query.x ?? ''), 10);
+      const z = parseInt(String(req.query.z ?? ''), 10);
+
+      if (isNaN(x) || isNaN(z)) {
+        res.status(400).json({ error: 'x and z query parameters are required (integers)' });
+        return;
+      }
+
+      // Find a connected bot to probe terrain
+      const workers = botManager.getAllWorkers();
+      const probeBot = workers.find((w) => w.isAlive());
+
+      if (!probeBot) {
+        res.status(503).json({ error: 'No connected bots available to probe terrain' });
+        return;
+      }
+
+      // Since bots run in worker threads, we send a command and return a best-effort estimate
+      // based on the bot's known position. For real height queries, the dashboard can
+      // ask the bot to navigate to the location.
+      const status = probeBot.getCachedDetailedStatus();
+      const botPos = status?.position;
+
+      res.json({
+        x,
+        z,
+        estimatedHeight: botPos ? Math.round(botPos.y) : null,
+        probeBotName: probeBot.botName,
+        note: 'Height is estimated from probe bot position; exact height requires the bot to be near the target coordinates',
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };
 }

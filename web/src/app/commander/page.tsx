@@ -17,6 +17,30 @@ interface HistoryEntry {
   timestamp: number;
 }
 
+/**
+ * Normalise the raw API execute response into a CommanderResult with the
+ * convenience arrays the UI expects (commandResults, missionsCreated).
+ */
+function normalizeResult(raw: any): CommanderResult {
+  const commands: CommanderResult['commands'] = Array.isArray(raw?.commands) ? raw.commands : [];
+  const missions: CommanderResult['missions'] = Array.isArray(raw?.missions) ? raw.missions : [];
+
+  // Build commandResults (backwards-compat for UI)
+  const commandResults = commands.map((c: any) => ({
+    command: { type: c.type ?? 'unknown', targets: Array.isArray(c.targets) ? c.targets : [] },
+    success: c.status !== 'failed',
+    error: c.error,
+  }));
+
+  // Build missionsCreated (backwards-compat for UI)
+  const missionsCreated = missions.map((m: any) => ({
+    title: m.title ?? m.type ?? 'unknown',
+    assigneeIds: Array.isArray(m.assigneeIds) ? m.assigneeIds : [],
+  }));
+
+  return { commands, missions, commandResults, missionsCreated };
+}
+
 export default function CommanderPage() {
   const [input, setInput] = useState('');
   const [parsing, setParsing] = useState(false);
@@ -38,22 +62,25 @@ export default function CommanderPage() {
     Promise.all([
       api.getCommanderHistory({ limit: 20 }).then((data) => {
         if (cancelled) return;
-        setHistory(data.entries.map((entry) => ({
-          input: entry.input,
-          plan: entry.plan,
-          result: entry.result ?? null,
+        // API returns { entries: [...] } or { history: [...] } -- handle both
+        const entries = Array.isArray(data?.entries) ? data.entries
+          : Array.isArray(data?.history) ? data.history
+          : [];
+        setHistory(entries.map((entry: any) => ({
+          input: entry.input ?? '',
+          plan: entry.plan ?? { id: '', input: '', intent: 'unknown', confidence: 0, warnings: [], requiresConfirmation: false, commands: [], missions: [], clarificationQuestions: [], needsClarification: false, suggestedCommands: [], createdAt: '' },
+          result: entry.result ? normalizeResult(entry.result) : null,
           timestamp: entry.executedAt ? Date.parse(entry.executedAt) : Date.parse(entry.createdAt),
         })));
       }).catch(() => {}),
       api.getCommanderDrafts().then((data) => {
         if (cancelled) return;
-        setDrafts(data.drafts);
+        setDrafts(Array.isArray(data?.drafts) ? data.drafts : []);
       }).catch(() => {}),
       api.getCommanderSuggestions().then((data) => {
         if (cancelled) return;
-        // Suggestions may be string[] or ContextSuggestion[]
-        const raw = data.suggestions;
-        if (raw.length > 0 && typeof raw[0] === 'string') {
+        const raw = data?.suggestions;
+        if (Array.isArray(raw) && raw.length > 0 && typeof raw[0] === 'string') {
           setSuggestions(raw as string[]);
         }
       }).catch(() => {}),
@@ -65,7 +92,7 @@ export default function CommanderPage() {
     };
   }, []);
 
-  // Save draft to API (debounced via the backend's debounced write)
+  // Save draft to API
   const saveDraftToApi = useCallback(async (text: string) => {
     if (!text.trim()) return;
     try {
@@ -101,7 +128,11 @@ export default function CommanderPage() {
     setResult(null);
     try {
       const data = await api.parseCommanderInput(input.trim());
-      setPlan(data.plan);
+      if (data?.plan) {
+        setPlan(data.plan);
+      } else {
+        setError('No plan returned from parse');
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to parse command');
     }
@@ -110,17 +141,26 @@ export default function CommanderPage() {
 
   const handleExecute = useCallback(async () => {
     if (!plan || executing) return;
+    // Validate planId before calling execute
+    if (!plan.id) {
+      setError('Plan has no ID -- cannot execute. Try parsing again.');
+      return;
+    }
     setExecuting(true);
     setError(null);
     try {
       const data = await api.executeCommanderPlan(plan.id);
-      setResult(data.result);
+      const normalized = normalizeResult(data?.result ?? data);
+      setResult(normalized);
       // Refresh history from API
       api.getCommanderHistory({ limit: 20 }).then((historyData) => {
-        setHistory(historyData.entries.map((entry) => ({
-          input: entry.input,
-          plan: entry.plan,
-          result: entry.result ?? null,
+        const entries = Array.isArray(historyData?.entries) ? historyData.entries
+          : Array.isArray(historyData?.history) ? historyData.history
+          : [];
+        setHistory(entries.map((entry: any) => ({
+          input: entry.input ?? '',
+          plan: entry.plan ?? { id: '', input: '', intent: 'unknown', confidence: 0, warnings: [], requiresConfirmation: false, commands: [], missions: [], clarificationQuestions: [], needsClarification: false, suggestedCommands: [], createdAt: '' },
+          result: entry.result ? normalizeResult(entry.result) : null,
           timestamp: entry.executedAt ? Date.parse(entry.executedAt) : Date.parse(entry.createdAt),
         })));
       }).catch(() => {});
@@ -138,7 +178,9 @@ export default function CommanderPage() {
     setError(null);
     try {
       const data = await api.clarifyCommanderInput(input.trim(), clarificationAnswers);
-      setPlan(data.plan);
+      if (data?.plan) {
+        setPlan(data.plan);
+      }
       setClarificationAnswers({});
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Clarification failed');
@@ -264,9 +306,43 @@ export default function CommanderPage() {
             Intent: {plan.parsedIntent ?? plan.intent ?? 'unknown'}
           </p>
           <p className="text-xs text-zinc-500">
-            Confidence: {Math.round(plan.confidence * 100)}%
+            Confidence: {Math.round((plan.confidence ?? 0) * 100)}%
           </p>
-          {plan.warnings.length > 0 && (
+
+          {/* Show generated commands/missions */}
+          {(plan.commands?.length > 0 || plan.missions?.length > 0) && (
+            <div className="space-y-2 border-t border-zinc-800/50 pt-2">
+              {plan.commands?.length > 0 && (
+                <div>
+                  <p className="text-[10px] text-zinc-600 mb-1">Commands ({plan.commands.length})</p>
+                  {plan.commands.map((cmd, i) => (
+                    <div key={i} className="text-xs text-emerald-300 px-3 py-1.5 rounded-lg bg-emerald-500/10 border border-emerald-500/20 mb-1">
+                      {cmd.type} - targets: {cmd.targets.join(', ')}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {plan.missions?.length > 0 && (
+                <div>
+                  <p className="text-[10px] text-zinc-600 mb-1">Missions ({plan.missions.length})</p>
+                  {plan.missions.map((msn, i) => (
+                    <div key={i} className="text-xs text-violet-300 px-3 py-1.5 rounded-lg bg-violet-500/10 border border-violet-500/20 mb-1">
+                      {msn.title} - {msn.assigneeIds.join(', ')}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Empty plan warning */}
+          {(!plan.commands || plan.commands.length === 0) && (!plan.missions || plan.missions.length === 0) && plan.intent !== '' && (
+            <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2">
+              No commands or missions generated. The input may be too ambiguous.
+            </div>
+          )}
+
+          {plan.warnings && plan.warnings.length > 0 && (
             <div className="text-xs text-amber-400 space-y-1">
               {plan.warnings.map((w, i) => (
                 <p key={i}>{w}</p>
@@ -328,7 +404,7 @@ export default function CommanderPage() {
           <div className="flex items-center gap-2 pt-2">
             <button
               onClick={handleExecute}
-              disabled={executing || (plan.needsClarification && plan.clarificationQuestions.length > 0)}
+              disabled={executing || !plan.id || (plan.needsClarification && (plan.clarificationQuestions?.length ?? 0) > 0)}
               className="px-4 py-2 rounded-lg text-sm font-semibold bg-emerald-600 hover:bg-emerald-500 text-white transition-colors disabled:opacity-40"
             >
               {executing ? 'Executing...' : 'Execute'}
@@ -347,7 +423,7 @@ export default function CommanderPage() {
       {result && !plan && (
         <div className="bg-zinc-900/80 border border-zinc-800 rounded-xl p-5 space-y-3">
           <h3 className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider">Execution Results</h3>
-          {result.commandResults.length > 0 && (
+          {result.commandResults && result.commandResults.length > 0 && (
             <div className="space-y-1.5">
               {result.commandResults.map((cr, i) => (
                 <div
@@ -365,7 +441,7 @@ export default function CommanderPage() {
               ))}
             </div>
           )}
-          {result.missionsCreated.length > 0 && (
+          {result.missionsCreated && result.missionsCreated.length > 0 && (
             <div className="space-y-1.5">
               <p className="text-xs text-zinc-400">Missions created: {result.missionsCreated.length}</p>
               {result.missionsCreated.map((m, i) => (
@@ -374,6 +450,9 @@ export default function CommanderPage() {
                 </div>
               ))}
             </div>
+          )}
+          {(!result.commandResults || result.commandResults.length === 0) && (!result.missionsCreated || result.missionsCreated.length === 0) && (
+            <p className="text-xs text-zinc-500">No commands or missions were executed (plan may have been empty).</p>
           )}
           <button onClick={() => setResult(null)} className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors">
             Dismiss
@@ -422,9 +501,9 @@ export default function CommanderPage() {
           <div className="space-y-2">
             {history.map((entry, i) => {
               const expanded = expandedHistory === i;
-              const succeeded = entry.result?.commandResults.filter((c) => c.success).length ?? 0;
-              const failed = entry.result?.commandResults.filter((c) => !c.success).length ?? 0;
-              const missions = entry.result?.missionsCreated.length ?? 0;
+              const succeeded = entry.result?.commandResults?.filter((c) => c.success).length ?? 0;
+              const failed = entry.result?.commandResults?.filter((c) => !c.success).length ?? 0;
+              const missions = entry.result?.missionsCreated?.length ?? 0;
 
               return (
                 <div
@@ -465,11 +544,11 @@ export default function CommanderPage() {
                     <div className="border-t border-zinc-800/50 px-4 py-3 space-y-3">
                       <div>
                         <p className="text-[10px] text-zinc-600 mb-1">Intent</p>
-                        <p className="text-xs text-zinc-400">{entry.plan.parsedIntent ?? entry.plan.intent}</p>
+                        <p className="text-xs text-zinc-400">{entry.plan?.parsedIntent ?? entry.plan?.intent ?? 'unknown'}</p>
                       </div>
                       <div>
                         <p className="text-[10px] text-zinc-600 mb-1">Confidence</p>
-                        <p className="text-xs text-zinc-400">{Math.round(entry.plan.confidence * 100)}%</p>
+                        <p className="text-xs text-zinc-400">{Math.round((entry.plan?.confidence ?? 0) * 100)}%</p>
                       </div>
                       <div className="flex items-center gap-2 pt-2 border-t border-zinc-800/50">
                         <button

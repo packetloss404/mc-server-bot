@@ -3,12 +3,10 @@ import cors from 'cors';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
-import { Vec3 } from 'vec3';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
-import { BuildCoordinator } from '../build/BuildCoordinator';
-import { ChainCoordinator } from '../supplychain/ChainCoordinator';
+import { CommanderService } from '../control/CommanderService';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -16,8 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
-  buildCoordinator: BuildCoordinator;
-  chainCoordinator: ChainCoordinator;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -45,6 +42,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
 
+  // ── Commander service (persisted to data/commander-history.json) ──
+  const commanderService = new CommanderService({
+    llmClient: null, // LLM wired later if available
+  });
+
   // Socket.IO
   const io = new SocketIOServer(httpServer, {
     cors: {
@@ -62,12 +64,6 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       logger.info({ socketId: socket.id }, 'Dashboard client disconnected');
     });
   });
-
-  // ── Build coordinator ──
-  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
-
-  // ── Supply chain coordinator ──
-  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -393,262 +389,334 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // ═══════════════════════════════════════
-  //  SCHEMATIC ENDPOINTS
+  //  METRICS ENDPOINT
   // ═══════════════════════════════════════
 
-  // List .schem files in schematics/ directory
-  app.get('/api/schematics', async (_req: Request, res: Response) => {
+  app.get('/api/metrics', (_req: Request, res: Response) => {
     try {
-      const schematics = await buildCoordinator.listSchematics();
-      res.json({ schematics });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  BUILD ENDPOINTS
-  // ═══════════════════════════════════════
-
-  // List all build jobs
-  app.get('/api/builds', (_req: Request, res: Response) => {
-    res.json({ builds: buildCoordinator.getAllBuildJobs() });
-  });
-
-  // Get a specific build job
-  app.get('/api/builds/:id', (req: Request, res: Response) => {
-    const job = buildCoordinator.getBuildJob(req.params.id as string);
-    if (!job) {
-      res.status(404).json({ error: 'Build job not found' });
-      return;
-    }
-    res.json({ build: job });
-  });
-
-  // Start a new build
-  app.post('/api/builds', async (req: Request, res: Response) => {
-    try {
-      const { schematicFile, origin, botNames, options } = req.body;
-
-      if (!schematicFile || !origin || !botNames || !Array.isArray(botNames)) {
-        res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' });
-        return;
-      }
-
-      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames, options);
-
-      const event = eventLog.push({
-        type: 'build:started',
-        botName: botNames.join(', '),
-        description: `Build started: ${schematicFile}`,
-        metadata: { jobId: job.id },
-      });
-      io.emit('activity', event);
-
-      res.status(201).json({ build: job });
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Cancel a build
-  app.post('/api/builds/:id/cancel', (req: Request, res: Response) => {
-    const success = buildCoordinator.cancelBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or already finished' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Pause a build
-  app.post('/api/builds/:id/pause', (req: Request, res: Response) => {
-    const success = buildCoordinator.pauseBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or not running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Resume a build
-  app.post('/api/builds/:id/resume', (req: Request, res: Response) => {
-    const success = buildCoordinator.resumeBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or not paused' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // ═══════════════════════════════════════
-  //  SUPPLY CHAIN ENDPOINTS
-  // ═══════════════════════════════════════
-
-  // List chain templates
-  app.get('/api/chains/templates', (_req: Request, res: Response) => {
-    res.json({ templates: chainCoordinator.getTemplates() });
-  });
-
-  // List all chains
-  app.get('/api/chains', (_req: Request, res: Response) => {
-    res.json({ chains: chainCoordinator.getAllChains() });
-  });
-
-  // Get a specific chain
-  app.get('/api/chains/:id', (req: Request, res: Response) => {
-    const chain = chainCoordinator.getChain(req.params.id as string);
-    if (!chain) {
-      res.status(404).json({ error: 'Supply chain not found' });
-      return;
-    }
-    res.json({ chain });
-  });
-
-  // Create a new chain
-  app.post('/api/chains', (req: Request, res: Response) => {
-    try {
-      const chain = chainCoordinator.createChain(req.body);
-
-      const event = eventLog.push({
-        type: 'chain:created',
-        botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
-        description: `Supply chain created: ${chain.name}`,
-        metadata: { chainId: chain.id },
-      });
-      io.emit('activity', event);
-
-      res.status(201).json({ chain });
-    } catch (err: any) {
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Start a chain
-  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
-    const success = chainCoordinator.startChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or already running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Pause a chain
-  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
-    const success = chainCoordinator.pauseChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or not running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Cancel a chain
-  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
-    const success = chainCoordinator.cancelChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Delete a chain
-  app.delete('/api/chains/:id', (req: Request, res: Response) => {
-    const success = chainCoordinator.deleteChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // ═══════════════════════════════════════
-  //  TERRAIN ENDPOINTS
-  // ═══════════════════════════════════════
-
-  // Scan blocks around a bot's position
-  app.get('/api/terrain', (req: Request, res: Response) => {
-    try {
-      const botName = req.query.bot ? String(req.query.bot) : undefined;
-      const radius = parseInt(String(req.query.radius ?? '8'), 10);
-
-      if (!botName) {
-        res.status(400).json({ error: 'bot query parameter is required' });
-        return;
-      }
-
-      const handle = botManager.getWorker(botName) as any;
-      if (!handle) {
-        res.status(404).json({ error: 'Bot not found' });
-        return;
-      }
-
-      const detailed = handle.getCachedDetailedStatus();
-      const pos = detailed?.position || handle.getCachedStatus()?.position;
-      if (!pos) {
-        res.status(400).json({ error: 'Bot position not available' });
-        return;
-      }
-
-      // Use the bot's mineflayer instance if available via worker
-      // Since we use worker threads, we read from cached detailed status
-      // and report block info from the bot's position
-      const clampedRadius = Math.min(radius, 16);
-      const blocks: Array<{ x: number; y: number; z: number; name: string }> = [];
-
-      // We cannot directly access mineflayer from the main thread (worker architecture),
-      // so return the bot's position and nearby entity/block info from cached state
-      res.json({
-        bot: botName,
-        center: pos,
-        radius: clampedRadius,
-        blocks,
-        note: 'Block scanning requires direct bot access; use /api/terrain/height for ground-level queries via bot commands',
-      });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Get ground height at coordinates (uses first available bot to probe)
-  app.get('/api/terrain/height', (req: Request, res: Response) => {
-    try {
-      const x = parseInt(String(req.query.x ?? ''), 10);
-      const z = parseInt(String(req.query.z ?? ''), 10);
-
-      if (isNaN(x) || isNaN(z)) {
-        res.status(400).json({ error: 'x and z query parameters are required (integers)' });
-        return;
-      }
-
-      // Find a connected bot to probe terrain
       const workers = botManager.getAllWorkers();
-      const probeBot = workers.find((w) => w.isAlive());
+      const statuses = botManager.getAllBotStatuses();
 
-      if (!probeBot) {
-        res.status(503).json({ error: 'No connected bots available to probe terrain' });
-        return;
+      // ── Bot overview ──
+      const totalBots = workers.length;
+      const aliveBots = workers.filter((w) => w.isAlive()).length;
+      const idleBots = statuses.filter((s: any) => s.state === 'IDLE').length;
+      const workingBots = statuses.filter((s: any) => s.state === 'EXECUTING_TASK').length;
+
+      // ── Bot states breakdown ──
+      const stateBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const state = (s as any).state || 'UNKNOWN';
+        stateBreakdown[state] = (stateBreakdown[state] || 0) + 1;
       }
 
-      // Since bots run in worker threads, we send a command and return a best-effort estimate
-      // based on the bot's known position. For real height queries, the dashboard can
-      // ask the bot to navigate to the location.
-      const status = probeBot.getCachedDetailedStatus();
-      const botPos = status?.position;
+      // ── Personality breakdown ──
+      const personalityBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const p = (s as any).personality || 'unknown';
+        personalityBreakdown[p] = (personalityBreakdown[p] || 0) + 1;
+      }
+
+      // ── Task metrics (from detailed statuses) ──
+      let totalCompleted = 0;
+      let totalFailed = 0;
+      let totalQueued = 0;
+      let activeTasks = 0;
+      const botTaskStats: Array<{ name: string; personality: string; completed: number; failed: number; queued: number; currentTask: string | null }> = [];
+
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        const name = w.botName;
+        const personality = w.personality;
+        const completed = detailed?.voyager?.completedTasks?.length || 0;
+        const failed = detailed?.voyager?.failedTasks?.length || 0;
+        const queued = detailed?.voyager?.queuedTaskCount || 0;
+        const currentTask = detailed?.voyager?.currentTask || null;
+
+        totalCompleted += completed;
+        totalFailed += failed;
+        totalQueued += queued;
+        if (currentTask) activeTasks++;
+
+        botTaskStats.push({ name, personality, completed, failed, queued, currentTask });
+      }
+
+      const totalTasks = totalCompleted + totalFailed;
+      const taskSuccessRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 0;
+
+      // ── Command metrics (from persisted data if available) ──
+      // CommandStatus values: 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled'
+      let commandMetrics = { total: 0, succeeded: 0, failed: 0, pending: 0, cancelled: 0, successRate: 0 };
+      try {
+        const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+        if (fs.existsSync(cmdPath)) {
+          const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+          const commands = Array.isArray(cmdData) ? cmdData : (cmdData.commands || []);
+          commandMetrics.total = commands.length;
+          commandMetrics.succeeded = commands.filter((c: any) => c.status === 'succeeded').length;
+          commandMetrics.failed = commands.filter((c: any) => c.status === 'failed').length;
+          commandMetrics.pending = commands.filter((c: any) => c.status === 'queued' || c.status === 'started').length;
+          commandMetrics.cancelled = commands.filter((c: any) => c.status === 'cancelled').length;
+          commandMetrics.successRate = commandMetrics.total > 0
+            ? Math.round((commandMetrics.succeeded / commandMetrics.total) * 100) : 0;
+        }
+      } catch { /* ignore */ }
+
+      // ── Mission metrics (from persisted data if available) ──
+      let missionMetrics = { total: 0, active: 0, completed: 0, failed: 0, paused: 0, completionRate: 0, byType: {} as Record<string, number> };
+      try {
+        const msnPath = path.join(process.cwd(), 'data', 'missions.json');
+        if (fs.existsSync(msnPath)) {
+          const msnData = JSON.parse(fs.readFileSync(msnPath, 'utf-8'));
+          const missions = Array.isArray(msnData) ? msnData : (msnData.missions || []);
+          missionMetrics.total = missions.length;
+          missionMetrics.active = missions.filter((m: any) => m.status === 'running').length;
+          missionMetrics.completed = missions.filter((m: any) => m.status === 'completed').length;
+          missionMetrics.failed = missions.filter((m: any) => m.status === 'failed').length;
+          missionMetrics.paused = missions.filter((m: any) => m.status === 'paused').length;
+          missionMetrics.completionRate = missionMetrics.total > 0
+            ? Math.round((missionMetrics.completed / missionMetrics.total) * 100) : 0;
+          for (const m of missions) {
+            const t = m.type || 'unknown';
+            missionMetrics.byType[t] = (missionMetrics.byType[t] || 0) + 1;
+          }
+        }
+      } catch { /* ignore */ }
+
+      // ── Commander metrics ──
+      let commanderMetrics = { parseCount: 0, avgConfidence: 0, failureRate: 0 };
+      try {
+        const csMetrics = commanderService.getMetrics();
+        commanderMetrics.parseCount = csMetrics.totalParses;
+        commanderMetrics.avgConfidence = csMetrics.averageConfidence
+          ? Math.round(csMetrics.averageConfidence * 100)
+          : 0;
+        commanderMetrics.failureRate = csMetrics.totalParses > 0
+          ? Math.round((csMetrics.failedParses / csMetrics.totalParses) * 100)
+          : 0;
+      } catch {
+        // Fallback: read from persisted data
+        try {
+          const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+          if (fs.existsSync(cmdPath)) {
+            const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+            const commands = Array.isArray(cmdData) ? cmdData : (cmdData.commands || []);
+            const parsed = commands.filter((c: any) => c.source === 'commander' || c.parsedPlan);
+            commanderMetrics.parseCount = parsed.length;
+            const confidences = parsed.map((c: any) => c.confidence ?? c.parsedPlan?.confidence).filter((c: any) => typeof c === 'number');
+            commanderMetrics.avgConfidence = confidences.length > 0
+              ? Math.round(confidences.reduce((a: number, b: number) => a + b, 0) / confidences.length) : 0;
+            const cmdFailed = parsed.filter((c: any) => c.status === 'failed').length;
+            commanderMetrics.failureRate = parsed.length > 0
+              ? Math.round((cmdFailed / parsed.length) * 100) : 0;
+          }
+        } catch { /* ignore */ }
+      }
+
+      // ── Fleet metrics ──
+      // RoleAssignmentRecord fields: id, botName, role, autonomyLevel, ...
+      // SquadRecord fields: id, name, botNames, ...
+      // Overrides are tracked separately in RoleManager (in-memory), not on the assignment record.
+      let fleetMetrics = { botsByRole: {} as Record<string, number>, overrideCount: 0, activeSquads: 0, totalSquads: 0 };
+      try {
+        const rolesPath = path.join(process.cwd(), 'data', 'roles.json');
+        if (fs.existsSync(rolesPath)) {
+          const rolesData = JSON.parse(fs.readFileSync(rolesPath, 'utf-8'));
+          const assignments = Array.isArray(rolesData) ? rolesData : (rolesData.assignments || []);
+          for (const a of assignments) {
+            const role = a.role || 'unassigned';
+            fleetMetrics.botsByRole[role] = (fleetMetrics.botsByRole[role] || 0) + 1;
+            // Note: manualOverride is not a field on RoleAssignmentRecord;
+            // overrides are tracked in-memory by RoleManager.
+          }
+        }
+      } catch { /* ignore */ }
+      try {
+        const squadsPath = path.join(process.cwd(), 'data', 'squads.json');
+        if (fs.existsSync(squadsPath)) {
+          const squadsData = JSON.parse(fs.readFileSync(squadsPath, 'utf-8'));
+          // File may be a raw array or { squads: [...] }
+          const squads = Array.isArray(squadsData) ? squadsData : (squadsData.squads || []);
+          fleetMetrics.totalSquads = squads.length;
+          // SquadRecord uses botNames, not members
+          fleetMetrics.activeSquads = squads.filter((s: any) => (s.botNames || s.members || []).length > 0).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Skill metrics ──
+      let skillCount = 0;
+      try {
+        const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+        if (fs.existsSync(indexPath)) {
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+          skillCount = Object.keys(index).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Health summary ──
+      const healthStats: Array<{ name: string; health: number; food: number }> = [];
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        if (detailed) {
+          healthStats.push({
+            name: w.botName,
+            health: detailed.health ?? 20,
+            food: detailed.food ?? 20,
+          });
+        }
+      }
 
       res.json({
-        x,
-        z,
-        estimatedHeight: botPos ? Math.round(botPos.y) : null,
-        probeBotName: probeBot.botName,
-        note: 'Height is estimated from probe bot position; exact height requires the bot to be near the target coordinates',
+        timestamp: Date.now(),
+        bots: {
+          total: totalBots,
+          alive: aliveBots,
+          idle: idleBots,
+          working: workingBots,
+          stateBreakdown,
+          personalityBreakdown,
+          healthStats,
+        },
+        tasks: {
+          totalCompleted,
+          totalFailed,
+          totalQueued,
+          activeTasks,
+          successRate: taskSuccessRate,
+          botTaskStats,
+        },
+        commands: commandMetrics,
+        missions: missionMetrics,
+        commander: commanderMetrics,
+        fleet: fleetMetrics,
+        skills: { count: skillCount },
       });
+    } catch (err) {
+      logger.error({ err }, 'Failed to gather metrics');
+      res.status(500).json({ error: 'Failed to gather metrics' });
+    }
+  });
+
+  // ═══════════════════════════════════════
+  //  COMMANDER ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Commander history (persisted)
+  app.get('/api/commander/history', (req: Request, res: Response) => {
+    const limit = Number(req.query.limit ?? 20);
+    res.json({ entries: commanderService.getHistory(Number.isFinite(limit) ? limit : 20) });
+  });
+
+  // Commander parse (NL -> plan)
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    const { input } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parse(input.trim());
+      const event = eventLog.push({
+        type: 'commander:parse',
+        botName: 'system',
+        description: `Commander parsed input: ${input.trim().slice(0, 80)}`,
+        metadata: { planId: plan.id, confidence: plan.confidence, warnings: plan.warnings.length },
+      });
+      io.emit('activity', event);
+      res.json({ plan });
     } catch (err: any) {
+      logger.error({ err }, 'Commander parse failed');
       res.status(500).json({ error: err.message });
     }
   });
 
-  return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };
+  // Commander execute plan
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    const { planId } = req.body;
+    if (!planId) {
+      res.status(400).json({ error: 'planId is required' });
+      return;
+    }
+    const plan = commanderService.getPlan(planId);
+    if (!plan) {
+      res.status(404).json({ error: 'Plan not found' });
+      return;
+    }
+    try {
+      const result = await commanderService.execute(planId);
+      if (result) {
+        const event = eventLog.push({
+          type: 'commander:execute',
+          botName: 'system',
+          description: `Commander executed plan ${planId}`,
+          metadata: { planId, commands: result.commands.length, missions: result.missions.length },
+        });
+        io.emit('activity', event);
+      }
+      res.json({ result });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander execute failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander drafts -- list
+  app.get('/api/commander/drafts', (_req: Request, res: Response) => {
+    res.json({ drafts: commanderService.getDrafts() });
+  });
+
+  // Commander drafts -- create or update
+  app.post('/api/commander/drafts', (req: Request, res: Response) => {
+    const { input, plan, notes, id } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    const draft = commanderService.saveDraft({ input: input.trim(), plan, notes, id });
+    res.status(201).json({ draft });
+  });
+
+  // Commander drafts -- delete
+  app.delete('/api/commander/drafts/:id', (req: Request, res: Response) => {
+    const deleted = commanderService.deleteDraft(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Draft not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Commander clarify (re-parse with answered clarification questions)
+  app.post('/api/commander/clarify', async (req: Request, res: Response) => {
+    const { originalInput, clarifications } = req.body;
+    if (!originalInput || typeof originalInput !== 'string') {
+      res.status(400).json({ error: 'originalInput string is required' });
+      return;
+    }
+    if (!clarifications || typeof clarifications !== 'object') {
+      res.status(400).json({ error: 'clarifications object is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parseWithClarification(originalInput.trim(), clarifications);
+      const event = eventLog.push({
+        type: 'commander:clarify',
+        botName: 'system',
+        description: `Commander re-parsed with clarification: "${originalInput.trim().slice(0, 60)}"`,
+        metadata: { planId: plan.id, intent: plan.intent, confidence: plan.confidence },
+      });
+      io.emit('activity', event);
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander clarify failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander suggestions
+  app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
+    res.json({ suggestions: commanderService.getSuggestedCommands() });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService };
 }

@@ -11,7 +11,7 @@ const MAX_HISTORY = 100;
 // Confidence threshold below which clarification is required
 const CLARIFICATION_THRESHOLD = 0.5;
 
-// -- Types --
+// ── Types ────────────────────────────────────────────────
 
 export interface ClarificationQuestion {
   id: string;
@@ -88,16 +88,32 @@ export interface CommanderServiceDeps {
   llmClient: LLMClient | null;
 }
 
-// -- Service --
+/** Minimal interface for dispatching commands (avoids circular imports). */
+export interface CommandDispatcher {
+  createCommand(params: { type: string; targets: string[]; params?: Record<string, any>; source?: string }): any;
+  dispatchCommand(command: any, force?: boolean): Promise<any>;
+}
+
+/** Minimal interface for creating missions (avoids circular imports). */
+export interface MissionCreator {
+  createMission(params: { type: string; title: string; description?: string; assigneeType: 'bot' | 'squad'; assigneeIds: string[]; priority?: string; source?: string }): any;
+}
+
+// ── Service ──────────────────────────────────────────────
 
 export class CommanderService {
   private llmClient: LLMClient | null;
+  private commandCenter: CommandDispatcher | null = null;
+  private missionManager: MissionCreator | null = null;
   private plans: Map<string, CommanderPlan> = new Map();
   private history: CommanderHistoryEntry[] = [];
   private drafts: CommanderDraft[] = [];
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
-  // -- Metrics counters --
+  // ── Metrics counters ───────────────────────────────────
+  // Intentionally ephemeral: these are session-scoped counters that reset on
+  // restart. They reflect current-session activity, not historical data.
+  // Historical analysis can be derived from the persisted command history.
   private totalParses = 0;
   private successfulParses = 0;
   private failedParses = 0;
@@ -113,13 +129,33 @@ export class CommanderService {
     this.load();
   }
 
-  // -- Plan ID generation --
+  // ── Wiring setters ──────────────────────────────────────
+
+  /** Wire in an LLM client for better intent extraction. */
+  setLLMClient(client: LLMClient): void {
+    this.llmClient = client;
+    logger.info('CommanderService: LLM client wired');
+  }
+
+  /** Wire in the CommandCenter for dispatching commands during execute(). */
+  setCommandCenter(cc: CommandDispatcher): void {
+    this.commandCenter = cc;
+    logger.info('CommanderService: CommandCenter wired');
+  }
+
+  /** Wire in the MissionManager for creating missions during execute(). */
+  setMissionManager(mm: MissionCreator): void {
+    this.missionManager = mm;
+    logger.info('CommanderService: MissionManager wired');
+  }
+
+  // ── Plan ID generation ──────────────────────────────────
 
   private generateId(prefix = 'plan'): string {
     return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  // -- History --
+  // ── History ─────────────────────────────────────────────
 
   getHistory(limit = 20): CommanderHistoryEntry[] {
     return this.history.slice(0, limit);
@@ -130,7 +166,7 @@ export class CommanderService {
     this.scheduleSave();
   }
 
-  // -- Drafts --
+  // ── Drafts ──────────────────────────────────────────────
 
   getDrafts(): CommanderDraft[] {
     return [...this.drafts];
@@ -139,6 +175,7 @@ export class CommanderService {
   saveDraft(data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }): CommanderDraft {
     const now = new Date().toISOString();
 
+    // Update existing draft if id provided
     if (data.id) {
       const existing = this.drafts.find((d) => d.id === data.id);
       if (existing) {
@@ -152,6 +189,7 @@ export class CommanderService {
       }
     }
 
+    // Create new draft
     const draft: CommanderDraft = {
       id: this.generateId('draft'),
       input: data.input,
@@ -175,7 +213,7 @@ export class CommanderService {
     return true;
   }
 
-  // -- Plan storage --
+  // ── Plan storage ────────────────────────────────────────
 
   getPlan(planId: string): CommanderPlan | undefined {
     return this.plans.get(planId);
@@ -185,7 +223,7 @@ export class CommanderService {
     this.plans.set(plan.id, plan);
   }
 
-  // -- Metrics --
+  // ── Metrics ────────────────────────────────────────────
 
   private trackParseMetrics(plan: CommanderPlan): void {
     this.totalParses++;
@@ -201,16 +239,19 @@ export class CommanderService {
       this.clarificationRequestCount++;
     }
 
+    // Track command types from the parsed intent
     if (plan.intent && plan.intent !== 'unknown') {
       this.commandTypeCounts[plan.intent] = (this.commandTypeCounts[plan.intent] || 0) + 1;
     }
 
+    // Track individual command types from the plan
     for (const cmd of plan.commands) {
       if (cmd.type) {
         this.commandTypeCounts[cmd.type] = (this.commandTypeCounts[cmd.type] || 0) + 1;
       }
     }
 
+    // Track mission types from the plan
     for (const mission of plan.missions) {
       if (mission.type) {
         this.missionTypeCounts[mission.type] = (this.missionTypeCounts[mission.type] || 0) + 1;
@@ -221,6 +262,8 @@ export class CommanderService {
   private trackExecutionMetrics(result: CommanderExecuteResult): void {
     this.totalExecutions++;
 
+    // Detect partial failures: some commands/missions present but result arrays
+    // contain items with error indicators
     const hasCommandErrors = result.commands.some(
       (c: any) => c && (c.status === 'failed' || c.error),
     );
@@ -247,7 +290,7 @@ export class CommanderService {
     };
   }
 
-  // -- Suggested commands --
+  // ── Suggested commands ──────────────────────────────────
 
   private static SUGGESTED_COMMANDS = [
     'Send all guards to the village',
@@ -265,7 +308,7 @@ export class CommanderService {
     return shuffled.slice(0, 4);
   }
 
-  // -- Clarification generation --
+  // ── Clarification generation ────────────────────────────
 
   private generateClarificationQuestions(
     input: string,
@@ -275,6 +318,7 @@ export class CommanderService {
     const questions: ClarificationQuestion[] = [];
     const lowerInput = input.toLowerCase();
 
+    // Check for ambiguous bot references
     const vagueBotRefs = ['the bot', 'a bot', 'someone', 'one of them', 'it'];
     const hasVagueBotRef = vagueBotRefs.some((ref) => lowerInput.includes(ref));
     if (hasVagueBotRef) {
@@ -286,6 +330,7 @@ export class CommanderService {
       });
     }
 
+    // Check for ambiguous location references
     const vagueLocRefs = ['over there', 'that place', 'the area', 'nearby', 'somewhere'];
     const hasVagueLocation = vagueLocRefs.some((ref) => lowerInput.includes(ref));
     if (hasVagueLocation) {
@@ -297,6 +342,7 @@ export class CommanderService {
       });
     }
 
+    // Check for ambiguous action when multiple interpretations exist
     const ambiguousPatterns: { pattern: RegExp; question: string; options: string[]; field: string }[] = [
       {
         pattern: /\b(go|move|head)\b/i,
@@ -330,6 +376,7 @@ export class CommanderService {
       }
     }
 
+    // If there are warnings about missing data, add relevant questions
     for (const warning of warnings) {
       if (warning.toLowerCase().includes('zone') || warning.toLowerCase().includes('area')) {
         questions.push({
@@ -349,6 +396,7 @@ export class CommanderService {
       }
     }
 
+    // Very low confidence -- ask the user what they mean generally
     if (confidence < 0.3 && questions.length === 0) {
       questions.push({
         id: this.generateId('cq'),
@@ -367,13 +415,136 @@ export class CommanderService {
     return questions;
   }
 
-  // -- Parse --
+  // ── LLM-based parsing ────────────────────────────────────
+
+  private async llmParse(input: string): Promise<{ intent: string; confidence: number; targets: string[]; params: Record<string, unknown> } | null> {
+    if (!this.llmClient) return null;
+
+    try {
+      const systemPrompt = `You are a Minecraft bot fleet commander parser. Given a natural language command, extract structured intent.
+Respond ONLY with valid JSON, no markdown. Schema:
+{ "intent": string, "confidence": number 0-1, "targets": string[], "params": {} }
+Valid intents: pause_bots, resume_bots, move_bots, mine_task, farm_task, guard_zone, patrol_route, craft_task, follow_player, regroup, unknown.
+Targets are bot names or role names (e.g. ["Ada"], ["all"], ["guards"]).`;
+
+      const resp = await this.llmClient.generate(systemPrompt, input, 256);
+      const text = resp.text.trim();
+      // Strip markdown fences if present
+      const jsonStr = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
+      const parsed = JSON.parse(jsonStr);
+      if (parsed && typeof parsed.intent === 'string' && typeof parsed.confidence === 'number') {
+        return {
+          intent: parsed.intent,
+          confidence: Math.max(0, Math.min(1, parsed.confidence)),
+          targets: Array.isArray(parsed.targets) ? parsed.targets : [],
+          params: parsed.params && typeof parsed.params === 'object' ? parsed.params : {},
+        };
+      }
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'LLM parse failed, falling back to regex');
+    }
+    return null;
+  }
+
+  // ── Target extraction helpers ────────────────────────────
+
+  private extractTargets(input: string): string[] {
+    const lowerInput = input.toLowerCase();
+    const targets: string[] = [];
+
+    // Check for named bots
+    const botNames = ['ada', 'bob', 'carl', 'dan', 'eve', 'fay'];
+    for (const name of botNames) {
+      const regex = new RegExp(`\\b${name}\\b`, 'i');
+      const match = input.match(regex);
+      if (match) {
+        // Preserve original casing from input
+        targets.push(match[0]);
+      }
+    }
+
+    // Check for role-based targeting
+    const roles = ['guard', 'farmer', 'miner', 'explorer', 'blacksmith', 'merchant'];
+    for (const role of roles) {
+      if (new RegExp(`\\b${role}s?\\b`, 'i').test(lowerInput)) {
+        targets.push(`role:${role}`);
+      }
+    }
+
+    // Check for "all" keyword
+    if (/\ball\b/.test(lowerInput) && targets.length === 0) {
+      targets.push('all');
+    }
+
+    return targets;
+  }
+
+  // ── Intent to command/mission mapping ───────────────────
+
+  private static INTENT_TO_COMMAND_TYPE: Record<string, string> = {
+    pause_bots: 'pause_voyager',
+    resume_bots: 'resume_voyager',
+    move_bots: 'walk_to_coords',
+    guard_zone: 'guard_zone',
+    patrol_route: 'patrol_route',
+    follow_player: 'follow_player',
+    regroup: 'regroup',
+  };
+
+  private static INTENT_TO_MISSION_TYPE: Record<string, string> = {
+    mine_task: 'queue_task',
+    farm_task: 'queue_task',
+    craft_task: 'craft_items',
+  };
+
+  private generateCommandsAndMissions(
+    intent: string,
+    targets: string[],
+    input: string,
+  ): { commands: CommanderPlanCommand[]; missions: CommanderPlanMission[] } {
+    const commands: CommanderPlanCommand[] = [];
+    const missions: CommanderPlanMission[] = [];
+
+    // If no targets were identified, use a placeholder so the plan is still actionable
+    const effectiveTargets = targets.length > 0 ? targets : ['all'];
+
+    const cmdType = CommanderService.INTENT_TO_COMMAND_TYPE[intent];
+    const msnType = CommanderService.INTENT_TO_MISSION_TYPE[intent];
+
+    if (cmdType) {
+      commands.push({
+        type: cmdType,
+        targets: effectiveTargets,
+        payload: {},
+      });
+    } else if (msnType) {
+      missions.push({
+        type: msnType,
+        title: `${intent}: ${input.slice(0, 60)}`,
+        description: input,
+        assigneeIds: effectiveTargets,
+      });
+    } else if (intent !== 'unknown') {
+      // Fallback: generate a generic queue_task mission for recognized but unmapped intents
+      missions.push({
+        type: 'queue_task',
+        title: `${intent}: ${input.slice(0, 60)}`,
+        description: input,
+        assigneeIds: effectiveTargets,
+      });
+    }
+
+    return { commands, missions };
+  }
+
+  // ── Parse ──────────────────────────────────────────────
 
   async parse(input: string): Promise<CommanderPlan> {
     const planId = this.generateId();
     const now = new Date().toISOString();
     const trimmedInput = input.trim();
 
+    // Handle empty or very short input
     if (!trimmedInput || trimmedInput.length < 3) {
       const plan: CommanderPlan = {
         id: planId,
@@ -395,54 +566,68 @@ export class CommanderService {
       return plan;
     }
 
+    // Derive intent and confidence -- try LLM first, fall back to regex
     let intent = '';
     let confidence = 0;
+    let targets: string[] = [];
     const warnings: string[] = [];
-    const commands: CommanderPlanCommand[] = [];
-    const missions: CommanderPlanMission[] = [];
 
-    const lowerInput = trimmedInput.toLowerCase();
+    const llmResult = await this.llmParse(trimmedInput);
 
-    if (/\b(pause|stop|halt)\b/.test(lowerInput)) {
-      intent = 'pause_bots';
-      confidence = 0.7;
-    } else if (/\b(resume|unpause|continue)\b/.test(lowerInput)) {
-      intent = 'resume_bots';
-      confidence = 0.7;
-    } else if (/\b(move|go|walk|send|head)\b/.test(lowerInput)) {
-      intent = 'move_bots';
-      confidence = 0.5;
-    } else if (/\b(mine|dig|excavate)\b/.test(lowerInput)) {
-      intent = 'mine_task';
-      confidence = 0.55;
-    } else if (/\b(farm|harvest|plant)\b/.test(lowerInput)) {
-      intent = 'farm_task';
-      confidence = 0.55;
-    } else if (/\b(guard|protect|defend)\b/.test(lowerInput)) {
-      intent = 'guard_zone';
-      confidence = 0.5;
-    } else if (/\b(patrol|scout|explore)\b/.test(lowerInput)) {
-      intent = 'patrol_route';
-      confidence = 0.5;
-    } else if (/\b(craft|build|make)\b/.test(lowerInput)) {
-      intent = 'craft_task';
-      confidence = 0.45;
-    } else if (/\b(follow|accompany)\b/.test(lowerInput)) {
-      intent = 'follow_player';
-      confidence = 0.6;
-    } else if (/\b(regroup|gather|rally)\b/.test(lowerInput)) {
-      intent = 'regroup';
-      confidence = 0.6;
+    if (llmResult) {
+      intent = llmResult.intent;
+      confidence = llmResult.confidence;
+      targets = llmResult.targets;
+      logger.info({ intent, confidence, targets }, 'Commander: LLM parse succeeded');
     } else {
-      intent = 'unknown';
-      confidence = 0.15;
-      warnings.push('Could not determine the intended action from the input.');
+      // Regex fallback (original heuristic logic)
+      const lowerInput = trimmedInput.toLowerCase();
+
+      if (/\b(pause|stop|halt)\b/.test(lowerInput)) {
+        intent = 'pause_bots';
+        confidence = 0.7;
+      } else if (/\b(resume|unpause|continue)\b/.test(lowerInput)) {
+        intent = 'resume_bots';
+        confidence = 0.7;
+      } else if (/\b(move|go|walk|send|head)\b/.test(lowerInput)) {
+        intent = 'move_bots';
+        confidence = 0.5;
+      } else if (/\b(mine|dig|excavate)\b/.test(lowerInput)) {
+        intent = 'mine_task';
+        confidence = 0.55;
+      } else if (/\b(farm|harvest|plant)\b/.test(lowerInput)) {
+        intent = 'farm_task';
+        confidence = 0.55;
+      } else if (/\b(guard|protect|defend)\b/.test(lowerInput)) {
+        intent = 'guard_zone';
+        confidence = 0.5;
+      } else if (/\b(patrol|scout|explore)\b/.test(lowerInput)) {
+        intent = 'patrol_route';
+        confidence = 0.5;
+      } else if (/\b(craft|build|make)\b/.test(lowerInput)) {
+        intent = 'craft_task';
+        confidence = 0.45;
+      } else if (/\b(follow|accompany)\b/.test(lowerInput)) {
+        intent = 'follow_player';
+        confidence = 0.6;
+      } else if (/\b(regroup|gather|rally)\b/.test(lowerInput)) {
+        intent = 'regroup';
+        confidence = 0.6;
+      } else {
+        intent = 'unknown';
+        confidence = 0.15;
+        warnings.push('Could not determine the intended action from the input.');
+      }
+
+      // Extract targets from input when using regex fallback
+      targets = this.extractTargets(trimmedInput);
     }
 
-    const hasNamedBot = /\b(ada|bob|carl|dan|eve|fay)\b/i.test(lowerInput);
-    const hasAllBots = /\ball\b/.test(lowerInput);
-    const hasRole = /\b(guard|farmer|miner|explorer|blacksmith|merchant)\b/i.test(lowerInput);
-    const hasCoords = /\b-?\d+\s*,?\s*-?\d+\b/.test(lowerInput);
+    // Check for specificity
+    const hasNamedBot = targets.some((t) => !t.startsWith('role:') && t !== 'all');
+    const hasAllBots = targets.includes('all');
+    const hasRole = targets.some((t) => t.startsWith('role:'));
+    const hasCoords = /\b-?\d+\s*,?\s*-?\d+\b/.test(trimmedInput.toLowerCase());
 
     if (hasNamedBot || hasAllBots || hasRole) {
       confidence = Math.min(1, confidence + 0.15);
@@ -459,6 +644,10 @@ export class CommanderService {
       warnings.push('Consider specifying which bots or roles should be targeted.');
     }
 
+    // Generate concrete commands and missions based on intent and targets
+    const { commands, missions } = this.generateCommandsAndMissions(intent, targets, trimmedInput);
+
+    // Determine if clarification is needed
     const clarificationQuestions = this.generateClarificationQuestions(trimmedInput, confidence, warnings);
     const needsClarification = confidence < CLARIFICATION_THRESHOLD || clarificationQuestions.length > 0;
     const suggestedCommands = confidence < CLARIFICATION_THRESHOLD ? this.getSuggestedCommands() : [];
@@ -490,7 +679,7 @@ export class CommanderService {
     return plan;
   }
 
-  // -- Re-parse with clarification --
+  // ── Re-parse with clarification ─────────────────────────
 
   async parseWithClarification(
     originalInput: string,
@@ -506,32 +695,88 @@ export class CommanderService {
     return this.parse(augmentedInput);
   }
 
-  // -- Execute --
+  // ── Execute ──────────────────────────────────────────────
 
   async execute(planId: string): Promise<CommanderExecuteResult | null> {
     const plan = this.plans.get(planId);
     if (!plan) return null;
 
+    // Block execution if clarification is still needed
     if (plan.needsClarification && plan.clarificationQuestions.length > 0) {
       logger.warn({ planId }, 'Cannot execute plan that still requires clarification');
       return null;
     }
 
-    const result: CommanderExecuteResult = { commands: [], missions: [] };
+    const commandResults: unknown[] = [];
+    const missionResults: unknown[] = [];
+
+    // Dispatch each command through CommandCenter if available
+    for (const cmd of plan.commands) {
+      if (this.commandCenter) {
+        try {
+          const created = this.commandCenter.createCommand({
+            type: cmd.type,
+            targets: cmd.targets,
+            params: cmd.payload,
+            source: 'commander',
+          });
+          const dispatched = await this.commandCenter.dispatchCommand(created);
+          commandResults.push({ id: dispatched.id, type: cmd.type, targets: cmd.targets, status: dispatched.status });
+        } catch (err: any) {
+          logger.error({ err: err.message, cmdType: cmd.type }, 'Commander: command dispatch failed');
+          commandResults.push({ type: cmd.type, targets: cmd.targets, status: 'failed', error: err.message });
+        }
+      } else {
+        // No CommandCenter wired -- record as accepted but not dispatched
+        commandResults.push({ type: cmd.type, targets: cmd.targets, status: 'accepted', note: 'CommandCenter not wired' });
+        logger.info({ cmdType: cmd.type, targets: cmd.targets }, 'Commander: command recorded (no CommandCenter)');
+      }
+    }
+
+    // Create each mission through MissionManager if available
+    for (const msn of plan.missions) {
+      if (this.missionManager) {
+        try {
+          const created = this.missionManager.createMission({
+            type: msn.type,
+            title: msn.title,
+            description: msn.description,
+            assigneeType: 'bot',
+            assigneeIds: msn.assigneeIds,
+            priority: 'normal',
+            source: 'commander',
+          });
+          missionResults.push({ id: created.id, type: msn.type, title: msn.title, status: created.status });
+        } catch (err: any) {
+          logger.error({ err: err.message, msnType: msn.type }, 'Commander: mission creation failed');
+          missionResults.push({ type: msn.type, title: msn.title, status: 'failed', error: err.message });
+        }
+      } else {
+        // No MissionManager wired -- record as accepted but not dispatched
+        missionResults.push({ type: msn.type, title: msn.title, assigneeIds: msn.assigneeIds, status: 'accepted', note: 'MissionManager not wired' });
+        logger.info({ msnType: msn.type, title: msn.title }, 'Commander: mission recorded (no MissionManager)');
+      }
+    }
+
+    const result: CommanderExecuteResult = { commands: commandResults, missions: missionResults };
     this.trackExecutionMetrics(result);
+
+    const hasErrors = commandResults.some((c: any) => c.status === 'failed') ||
+                      missionResults.some((m: any) => m.status === 'failed');
+
     this.upsertHistory({
       planId,
       input: plan.input,
       plan,
       result,
-      status: 'executed',
+      status: hasErrors ? 'partial_failure' : 'executed',
       createdAt: plan.createdAt,
       executedAt: new Date().toISOString(),
     });
     return result;
   }
 
-  // -- Persistence --
+  // ── Persistence ─────────────────────────────────────────
 
   private load(): void {
     try {
@@ -549,6 +794,7 @@ export class CommanderService {
           this.drafts = data.drafts;
         }
 
+        // Rebuild plans map from history for continuity
         for (const entry of this.history) {
           if (entry.plan?.id) {
             this.plans.set(entry.plan.id, entry.plan);

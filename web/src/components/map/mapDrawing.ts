@@ -4,6 +4,57 @@
 
 export type MapMode = 'navigate' | 'draw-zone' | 'draw-route';
 
+/** Terrain loading radius in blocks from center */
+export const TERRAIN_RADIUS = 64;
+/** Terrain sampling step size in blocks */
+export const TERRAIN_STEP = 1;
+
+/**
+ * Draw a schematic footprint outline on the map canvas.
+ * @param mode - 'placed' for solid green outline, 'preview' for dashed amber
+ */
+export function drawSchematicFootprint(
+  ctx: CanvasRenderingContext2D,
+  worldX: number,
+  worldZ: number,
+  sizeX: number,
+  sizeZ: number,
+  scale: number,
+  offsetX: number,
+  offsetZ: number,
+  canvasW: number,
+  canvasH: number,
+  mode: 'placed' | 'preview' = 'preview',
+): void {
+  const cx = canvasW / 2;
+  const cz = canvasH / 2;
+  const sx = cx + (worldX - offsetX) * scale;
+  const sz = cz + (worldZ - offsetZ) * scale;
+  const sw = sizeX * scale;
+  const sh = sizeZ * scale;
+
+  ctx.save();
+  if (mode === 'placed') {
+    ctx.strokeStyle = '#22c55e';
+    ctx.fillStyle = 'rgba(34,197,94,0.12)';
+    ctx.setLineDash([]);
+  } else {
+    ctx.strokeStyle = '#f59e0b';
+    ctx.fillStyle = 'rgba(245,158,11,0.10)';
+    ctx.setLineDash([6, 4]);
+  }
+  ctx.lineWidth = 2;
+  ctx.fillRect(sx, sz, sw, sh);
+  ctx.strokeRect(sx, sz, sw, sh);
+
+  // Label
+  ctx.setLineDash([]);
+  ctx.font = '10px system-ui, sans-serif';
+  ctx.fillStyle = mode === 'placed' ? '#22c55e' : '#f59e0b';
+  ctx.fillText(`${sizeX}×${sizeZ}`, sx + 2, sz - 4);
+  ctx.restore();
+}
+
 export interface RouteWaypoint {
   /** World X coordinate */
   x: number;

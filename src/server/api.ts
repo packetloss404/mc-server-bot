@@ -6,6 +6,7 @@ import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { CommanderService } from '../control/CommanderService';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -13,6 +14,7 @@ export interface APIServerResult {
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
+  commanderService: CommanderService;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {
@@ -39,6 +41,11 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
+
+  // ── Commander service (persisted to data/commander-history.json) ──
+  const commanderService = new CommanderService({
+    llmClient: null, // LLM wired later if available
+  });
 
   // Socket.IO
   const io = new SocketIOServer(httpServer, {
@@ -381,5 +388,335 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ success: true });
   });
 
-  return { app, httpServer, io, eventLog };
+  // ═══════════════════════════════════════
+  //  METRICS ENDPOINT
+  // ═══════════════════════════════════════
+
+  app.get('/api/metrics', (_req: Request, res: Response) => {
+    try {
+      const workers = botManager.getAllWorkers();
+      const statuses = botManager.getAllBotStatuses();
+
+      // ── Bot overview ──
+      const totalBots = workers.length;
+      const aliveBots = workers.filter((w) => w.isAlive()).length;
+      const idleBots = statuses.filter((s: any) => s.state === 'IDLE').length;
+      const workingBots = statuses.filter((s: any) => s.state === 'EXECUTING_TASK').length;
+
+      // ── Bot states breakdown ──
+      const stateBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const state = (s as any).state || 'UNKNOWN';
+        stateBreakdown[state] = (stateBreakdown[state] || 0) + 1;
+      }
+
+      // ── Personality breakdown ──
+      const personalityBreakdown: Record<string, number> = {};
+      for (const s of statuses) {
+        const p = (s as any).personality || 'unknown';
+        personalityBreakdown[p] = (personalityBreakdown[p] || 0) + 1;
+      }
+
+      // ── Task metrics (from detailed statuses) ──
+      let totalCompleted = 0;
+      let totalFailed = 0;
+      let totalQueued = 0;
+      let activeTasks = 0;
+      const botTaskStats: Array<{ name: string; personality: string; completed: number; failed: number; queued: number; currentTask: string | null }> = [];
+
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        const name = w.botName;
+        const personality = w.personality;
+        const completed = detailed?.voyager?.completedTasks?.length || 0;
+        const failed = detailed?.voyager?.failedTasks?.length || 0;
+        const queued = detailed?.voyager?.queuedTaskCount || 0;
+        const currentTask = detailed?.voyager?.currentTask || null;
+
+        totalCompleted += completed;
+        totalFailed += failed;
+        totalQueued += queued;
+        if (currentTask) activeTasks++;
+
+        botTaskStats.push({ name, personality, completed, failed, queued, currentTask });
+      }
+
+      const totalTasks = totalCompleted + totalFailed;
+      const taskSuccessRate = totalTasks > 0 ? Math.round((totalCompleted / totalTasks) * 100) : 0;
+
+      // ── Command metrics (from persisted data if available) ──
+      // CommandStatus values: 'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled'
+      let commandMetrics = { total: 0, succeeded: 0, failed: 0, pending: 0, cancelled: 0, successRate: 0 };
+      try {
+        const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+        if (fs.existsSync(cmdPath)) {
+          const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+          const commands = Array.isArray(cmdData) ? cmdData : (cmdData.commands || []);
+          commandMetrics.total = commands.length;
+          commandMetrics.succeeded = commands.filter((c: any) => c.status === 'succeeded').length;
+          commandMetrics.failed = commands.filter((c: any) => c.status === 'failed').length;
+          commandMetrics.pending = commands.filter((c: any) => c.status === 'queued' || c.status === 'started').length;
+          commandMetrics.cancelled = commands.filter((c: any) => c.status === 'cancelled').length;
+          commandMetrics.successRate = commandMetrics.total > 0
+            ? Math.round((commandMetrics.succeeded / commandMetrics.total) * 100) : 0;
+        }
+      } catch { /* ignore */ }
+
+      // ── Mission metrics (from persisted data if available) ──
+      let missionMetrics = { total: 0, active: 0, completed: 0, failed: 0, paused: 0, completionRate: 0, byType: {} as Record<string, number> };
+      try {
+        const msnPath = path.join(process.cwd(), 'data', 'missions.json');
+        if (fs.existsSync(msnPath)) {
+          const msnData = JSON.parse(fs.readFileSync(msnPath, 'utf-8'));
+          const missions = Array.isArray(msnData) ? msnData : (msnData.missions || []);
+          missionMetrics.total = missions.length;
+          missionMetrics.active = missions.filter((m: any) => m.status === 'running').length;
+          missionMetrics.completed = missions.filter((m: any) => m.status === 'completed').length;
+          missionMetrics.failed = missions.filter((m: any) => m.status === 'failed').length;
+          missionMetrics.paused = missions.filter((m: any) => m.status === 'paused').length;
+          missionMetrics.completionRate = missionMetrics.total > 0
+            ? Math.round((missionMetrics.completed / missionMetrics.total) * 100) : 0;
+          for (const m of missions) {
+            const t = m.type || 'unknown';
+            missionMetrics.byType[t] = (missionMetrics.byType[t] || 0) + 1;
+          }
+        }
+      } catch { /* ignore */ }
+
+      // ── Commander metrics ──
+      let commanderMetrics = { parseCount: 0, avgConfidence: 0, failureRate: 0 };
+      try {
+        const csMetrics = commanderService.getMetrics();
+        commanderMetrics.parseCount = csMetrics.totalParses;
+        commanderMetrics.avgConfidence = csMetrics.averageConfidence
+          ? Math.round(csMetrics.averageConfidence * 100)
+          : 0;
+        commanderMetrics.failureRate = csMetrics.totalParses > 0
+          ? Math.round((csMetrics.failedParses / csMetrics.totalParses) * 100)
+          : 0;
+      } catch {
+        // Fallback: read from persisted data
+        try {
+          const cmdPath = path.join(process.cwd(), 'data', 'commands.json');
+          if (fs.existsSync(cmdPath)) {
+            const cmdData = JSON.parse(fs.readFileSync(cmdPath, 'utf-8'));
+            const commands = Array.isArray(cmdData) ? cmdData : (cmdData.commands || []);
+            const parsed = commands.filter((c: any) => c.source === 'commander' || c.parsedPlan);
+            commanderMetrics.parseCount = parsed.length;
+            const confidences = parsed.map((c: any) => c.confidence ?? c.parsedPlan?.confidence).filter((c: any) => typeof c === 'number');
+            commanderMetrics.avgConfidence = confidences.length > 0
+              ? Math.round(confidences.reduce((a: number, b: number) => a + b, 0) / confidences.length) : 0;
+            const cmdFailed = parsed.filter((c: any) => c.status === 'failed').length;
+            commanderMetrics.failureRate = parsed.length > 0
+              ? Math.round((cmdFailed / parsed.length) * 100) : 0;
+          }
+        } catch { /* ignore */ }
+      }
+
+      // ── Fleet metrics ──
+      // RoleAssignmentRecord fields: id, botName, role, autonomyLevel, ...
+      // SquadRecord fields: id, name, botNames, ...
+      // Overrides are tracked separately in RoleManager (in-memory), not on the assignment record.
+      let fleetMetrics = { botsByRole: {} as Record<string, number>, overrideCount: 0, activeSquads: 0, totalSquads: 0 };
+      try {
+        const rolesPath = path.join(process.cwd(), 'data', 'roles.json');
+        if (fs.existsSync(rolesPath)) {
+          const rolesData = JSON.parse(fs.readFileSync(rolesPath, 'utf-8'));
+          const assignments = Array.isArray(rolesData) ? rolesData : (rolesData.assignments || []);
+          for (const a of assignments) {
+            const role = a.role || 'unassigned';
+            fleetMetrics.botsByRole[role] = (fleetMetrics.botsByRole[role] || 0) + 1;
+            // Note: manualOverride is not a field on RoleAssignmentRecord;
+            // overrides are tracked in-memory by RoleManager.
+          }
+        }
+      } catch { /* ignore */ }
+      try {
+        const squadsPath = path.join(process.cwd(), 'data', 'squads.json');
+        if (fs.existsSync(squadsPath)) {
+          const squadsData = JSON.parse(fs.readFileSync(squadsPath, 'utf-8'));
+          // File may be a raw array or { squads: [...] }
+          const squads = Array.isArray(squadsData) ? squadsData : (squadsData.squads || []);
+          fleetMetrics.totalSquads = squads.length;
+          // SquadRecord uses botNames, not members
+          fleetMetrics.activeSquads = squads.filter((s: any) => (s.botNames || s.members || []).length > 0).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Skill metrics ──
+      let skillCount = 0;
+      try {
+        const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+        if (fs.existsSync(indexPath)) {
+          const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+          skillCount = Object.keys(index).length;
+        }
+      } catch { /* ignore */ }
+
+      // ── Health summary ──
+      const healthStats: Array<{ name: string; health: number; food: number }> = [];
+      for (const w of workers) {
+        const detailed = w.getCachedDetailedStatus();
+        if (detailed) {
+          healthStats.push({
+            name: w.botName,
+            health: detailed.health ?? 20,
+            food: detailed.food ?? 20,
+          });
+        }
+      }
+
+      res.json({
+        timestamp: Date.now(),
+        bots: {
+          total: totalBots,
+          alive: aliveBots,
+          idle: idleBots,
+          working: workingBots,
+          stateBreakdown,
+          personalityBreakdown,
+          healthStats,
+        },
+        tasks: {
+          totalCompleted,
+          totalFailed,
+          totalQueued,
+          activeTasks,
+          successRate: taskSuccessRate,
+          botTaskStats,
+        },
+        commands: commandMetrics,
+        missions: missionMetrics,
+        commander: commanderMetrics,
+        fleet: fleetMetrics,
+        skills: { count: skillCount },
+      });
+    } catch (err) {
+      logger.error({ err }, 'Failed to gather metrics');
+      res.status(500).json({ error: 'Failed to gather metrics' });
+    }
+  });
+
+  // ═══════════════════════════════════════
+  //  COMMANDER ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Commander history (persisted)
+  app.get('/api/commander/history', (req: Request, res: Response) => {
+    const limit = Number(req.query.limit ?? 20);
+    res.json({ entries: commanderService.getHistory(Number.isFinite(limit) ? limit : 20) });
+  });
+
+  // Commander parse (NL -> plan)
+  app.post('/api/commander/parse', async (req: Request, res: Response) => {
+    const { input } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parse(input.trim());
+      const event = eventLog.push({
+        type: 'commander:parse',
+        botName: 'system',
+        description: `Commander parsed input: ${input.trim().slice(0, 80)}`,
+        metadata: { planId: plan.id, confidence: plan.confidence, warnings: plan.warnings.length },
+      });
+      io.emit('activity', event);
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander parse failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander execute plan
+  app.post('/api/commander/execute', async (req: Request, res: Response) => {
+    const { planId } = req.body;
+    if (!planId) {
+      res.status(400).json({ error: 'planId is required' });
+      return;
+    }
+    const plan = commanderService.getPlan(planId);
+    if (!plan) {
+      res.status(404).json({ error: 'Plan not found' });
+      return;
+    }
+    try {
+      const result = await commanderService.execute(planId);
+      if (result) {
+        const event = eventLog.push({
+          type: 'commander:execute',
+          botName: 'system',
+          description: `Commander executed plan ${planId}`,
+          metadata: { planId, commands: result.commands.length, missions: result.missions.length },
+        });
+        io.emit('activity', event);
+      }
+      res.json({ result });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander execute failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander drafts -- list
+  app.get('/api/commander/drafts', (_req: Request, res: Response) => {
+    res.json({ drafts: commanderService.getDrafts() });
+  });
+
+  // Commander drafts -- create or update
+  app.post('/api/commander/drafts', (req: Request, res: Response) => {
+    const { input, plan, notes, id } = req.body;
+    if (!input || typeof input !== 'string' || !input.trim()) {
+      res.status(400).json({ error: 'input is required' });
+      return;
+    }
+    const draft = commanderService.saveDraft({ input: input.trim(), plan, notes, id });
+    res.status(201).json({ draft });
+  });
+
+  // Commander drafts -- delete
+  app.delete('/api/commander/drafts/:id', (req: Request, res: Response) => {
+    const deleted = commanderService.deleteDraft(req.params.id as string);
+    if (!deleted) {
+      res.status(404).json({ error: 'Draft not found' });
+      return;
+    }
+    res.json({ success: true });
+  });
+
+  // Commander clarify (re-parse with answered clarification questions)
+  app.post('/api/commander/clarify', async (req: Request, res: Response) => {
+    const { originalInput, clarifications } = req.body;
+    if (!originalInput || typeof originalInput !== 'string') {
+      res.status(400).json({ error: 'originalInput string is required' });
+      return;
+    }
+    if (!clarifications || typeof clarifications !== 'object') {
+      res.status(400).json({ error: 'clarifications object is required' });
+      return;
+    }
+    try {
+      const plan = await commanderService.parseWithClarification(originalInput.trim(), clarifications);
+      const event = eventLog.push({
+        type: 'commander:clarify',
+        botName: 'system',
+        description: `Commander re-parsed with clarification: "${originalInput.trim().slice(0, 60)}"`,
+        metadata: { planId: plan.id, intent: plan.intent, confidence: plan.confidence },
+      });
+      io.emit('activity', event);
+      res.json({ plan });
+    } catch (err: any) {
+      logger.error({ err }, 'Commander clarify failed');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Commander suggestions
+  app.get('/api/commander/suggestions', (_req: Request, res: Response) => {
+    res.json({ suggestions: commanderService.getSuggestedCommands() });
+  });
+
+  return { app, httpServer, io, eventLog, commanderService };
 }

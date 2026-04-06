@@ -204,4 +204,61 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Commander
+  parseCommanderInput: (input: string) =>
+    fetchJSON<any>('/api/commander/parse', { method: 'POST', body: JSON.stringify({ input }) }),
+  clarifyCommanderInput: (originalInput: string, clarifications: Record<string, string>) =>
+    fetchJSON<any>('/api/commander/clarify', { method: 'POST', body: JSON.stringify({ originalInput, clarifications }) }),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<any>('/api/commander/execute', { method: 'POST', body: JSON.stringify({ planId }) }),
+  getCommanderHistory: (opts?: { limit?: number }) =>
+    fetchJSON<any>(`/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`).catch(() => ({ entries: [] })),
+  getCommanderDrafts: () => fetchJSON<any>('/api/commander/drafts').catch(() => ({ drafts: [] })),
+  saveCommanderDraft: (draft: any) =>
+    fetchJSON<any>('/api/commander/drafts', { method: 'POST', body: JSON.stringify(draft) }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<any>(`/api/commander/drafts/${id}`, { method: 'DELETE' }),
+  getCommanderSuggestions: () => fetchJSON<any>('/api/commander/suggestions').catch(() => ({ suggestions: [] })),
 };
+
+// ── Commander types (used by the commander page) ──
+
+export interface CommanderPlan {
+  id: string;
+  input: string;
+  intent: string;
+  parsedIntent?: string;
+  confidence: number;
+  warnings: string[];
+  requiresConfirmation: boolean;
+  commands: Array<{ type: string; targets: string[]; payload: Record<string, unknown> }>;
+  missions: Array<{ type: string; title: string; description?: string; assigneeIds: string[] }>;
+  clarificationQuestions: ClarificationQuestion[];
+  needsClarification: boolean;
+  suggestedCommands: string[];
+  createdAt: string;
+}
+
+export interface ClarificationQuestion {
+  id: string;
+  question: string;
+  options: string[];
+  field: string;
+}
+
+export interface CommanderResult {
+  commands: Array<{ type: string; targets: string[]; status: string; error?: string; id?: string }>;
+  missions: Array<{ type: string; title: string; assigneeIds?: string[]; status: string; error?: string; id?: string }>;
+  commandResults: Array<{ command: { type: string; targets: string[] }; success: boolean; error?: string }>;
+  missionsCreated: Array<{ title: string; assigneeIds: string[] }>;
+}
+
+export interface CommanderDraft {
+  id: string;
+  input: string;
+  plan?: CommanderPlan;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
+}

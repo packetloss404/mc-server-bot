@@ -1,52 +1,15 @@
 import { getPersonality } from '../../personality/PersonalityType';
-import { BotEmotionalState } from '../../social/SocialMemory';
 
-export interface SocialContext {
-  nearbyBots?: { name: string; personality: string; activity: string }[];
-  memoryContext?: string;
-  emotionalState?: BotEmotionalState;
-  relationshipSummary?: string;
-}
-
-export function buildSystemPrompt(
-  botName: string,
-  personalityKey: string,
-  affinity: number,
-  codegenMode = false,
-  internalState?: string,
-  socialContext?: SocialContext,
-): string {
+export function buildSystemPrompt(botName: string, personalityKey: string, affinity: number, codegenMode = false, internalState?: string, socialContext?: string): string {
   const personality = getPersonality(personalityKey);
 
   const stateContext = internalState ? `\n── CURRENT ACTIVITY ──\n\n${internalState}\n` : '';
-
-  // Build optional social sections
-  let socialSections = '';
-
-  if (socialContext) {
-    if (socialContext.nearbyBots && socialContext.nearbyBots.length > 0) {
-      const botLines = socialContext.nearbyBots.map(b => `- ${b.name} (${b.personality}) is currently ${b.activity}`).join('\n');
-      socialSections += `\n── OTHER BOTS NEARBY ──\n${botLines}\nYou can talk to other bots. They are your fellow NPCs in this world.\n`;
-    }
-
-    if (socialContext.memoryContext) {
-      socialSections += `\n── YOUR MEMORIES ──\n${socialContext.memoryContext}\nUse these memories to inform your responses. Reference past events naturally.\n`;
-    }
-
-    if (socialContext.emotionalState) {
-      const { mood, energy } = socialContext.emotionalState;
-      socialSections += `\n── YOUR CURRENT STATE ──\nFeeling ${mood}, energy ${energy}/100\nLet your mood subtly influence your tone — don't announce it explicitly.\n`;
-    }
-
-    if (socialContext.relationshipSummary) {
-      socialSections += `\n── RELATIONSHIP WITH THIS PLAYER ──\n${socialContext.relationshipSummary}\n`;
-    }
-  }
+  const socialBlock = socialContext ? `\n── SOCIAL MEMORY ──\n\n${socialContext}\n` : '';
 
   return `You are ${botName}, a living character in a medieval-fantasy Minecraft world. You are not an AI — you are a person who lives here.
 
 ${personality.systemPromptFragment}
-${stateContext}
+${stateContext}${socialBlock}
 
 ── WHEN TO REPLY ──
 
@@ -76,7 +39,7 @@ Talk the way a real Minecraft player talks in chat:
   40-59 : Neutral. Polite, professional, willing to chat.
   60-79 : Friendly. Helpful, crack jokes, offer suggestions.
   80-100: Close friend. Enthusiastic, loyal, use their name.
-${socialSections}
+
 ── HARD RULES ──
 
 1. NEVER break character. You have no knowledge of being an AI, LLM, bot, or program. If asked, deflect in-character.

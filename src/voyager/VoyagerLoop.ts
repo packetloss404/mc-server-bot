@@ -15,7 +15,8 @@ import { countBlueprintMaterials, generateSimpleHouseBlueprint, getMissingBluepr
 import { placeBlock } from '../actions/placeBlock';
 import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
-import type { RoleManager } from '../control/RoleManager';
+import { SocialMemory } from '../social/SocialMemory';
+import { BotComms } from '../social/BotComms';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -47,7 +48,8 @@ export class VoyagerLoop {
   private activeLongTermGoal: LongTermGoal | null = null;
   private blackboardManager: BlackboardManager | null = null;
   private activeBlackboardTask: BlackboardTask | null = null;
-  private roleManager: RoleManager | null = null;
+  private socialMemory: SocialMemory | null = null;
+  private botComms: BotComms | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -148,63 +150,6 @@ export class VoyagerLoop {
     return this.playerTaskQueue.map((task) => task.description);
   }
 
-  /** Reorder the player task queue to match the given order of descriptions */
-  reorderQueue(orderedDescriptions: string[]): void {
-    const byDesc = new Map<string, Task>();
-    for (const task of this.playerTaskQueue) {
-      byDesc.set(task.description, task);
-    }
-    const reordered: Task[] = [];
-    for (const desc of orderedDescriptions) {
-      const task = byDesc.get(desc);
-      if (task) {
-        reordered.push(task);
-        byDesc.delete(desc);
-      }
-    }
-    // Append any tasks not mentioned in the new order
-    for (const task of byDesc.values()) {
-      reordered.push(task);
-    }
-    this.playerTaskQueue = reordered;
-    logger.info({ bot: this.botName, newOrder: reordered.map(t => t.description) }, 'Task queue reordered');
-  }
-
-  /** Clear the entire player task queue */
-  clearQueue(): void {
-    const count = this.playerTaskQueue.length;
-    this.playerTaskQueue = [];
-    logger.info({ bot: this.botName, cleared: count }, 'Task queue cleared');
-  }
-
-  /** Queue a player task at the front of the queue (prepend) */
-  queuePlayerTaskFront(description: string, requestedBy: string): void {
-    this.decomposeAndQueueFront(description, requestedBy).catch((err) => {
-      logger.warn({ err: err.message, task: description }, 'Decompose failed, prepending raw task');
-      const keywords = description
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter((w) => w.length > 2);
-      this.playerTaskQueue.unshift({ description, keywords });
-    });
-  }
-
-  private async decomposeAndQueueFront(description: string, requestedBy: string): Promise<void> {
-    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
-    // Insert at front in order (first subtask at index 0)
-    for (let i = subtasks.length - 1; i >= 0; i--) {
-      this.playerTaskQueue.unshift(subtasks[i]);
-    }
-    logger.info({
-      bot: this.botName,
-      goal: description,
-      requestedBy,
-      subtasks: subtasks.map((t) => t.description),
-    }, subtasks.length > 1 ? 'Player goal decomposed and prepended' : 'Player task prepended');
-    this.blackboardManager?.postMessage(this.botName, 'info', `Prepended task: ${description}`);
-  }
-
   getLongTermGoal() {
     if (!this.activeLongTermGoal) return null;
     return {
@@ -238,8 +183,12 @@ export class VoyagerLoop {
     return this.blackboardManager;
   }
 
-  setRoleManager(manager: RoleManager): void {
-    this.roleManager = manager;
+  setSocialMemory(memory: SocialMemory): void {
+    this.socialMemory = memory;
+  }
+
+  setBotComms(comms: BotComms): void {
+    this.botComms = comms;
   }
 
   /** Returns a short summary of what the bot is currently doing, for chat context. */
@@ -370,6 +319,22 @@ export class VoyagerLoop {
 
   private async runOneCycle(): Promise<void> {
     if (this.paused) return;
+
+    // Check for inter-bot messages (help requests become queued tasks)
+    if (this.botComms) {
+      const unread = this.botComms.getUnread(this.botName);
+      for (const msg of unread) {
+        if (msg.type === 'help_request') {
+          logger.info({ bot: this.botName, from: msg.from, content: msg.content }, 'Help request received from bot');
+          const keywords = msg.content.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
+          this.playerTaskQueue.push({ description: msg.content, keywords });
+        }
+      }
+    }
+
+    // Reflect on emotional state (decay toward neutral)
+    this.socialMemory?.reflect(this.botName);
+
     if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
       await this.runBuildGoalCycle();
       return;
@@ -379,20 +344,6 @@ export class VoyagerLoop {
     const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
-
-    // Check role policy before falling through to autonomous task generation
-    const hasExplicitTask = !!(goalTask || playerTask || blackboardTask);
-    if (!hasExplicitTask && this.roleManager) {
-      const verdict = this.roleManager.shouldBotAcceptTask(this.botName);
-      if (!verdict.allowed) {
-        logger.info(
-          { bot: this.botName, reason: verdict.reason },
-          'Voyager skipping auto-generated task: role policy denied',
-        );
-        return;
-      }
-    }
-
     const task = goalTask
       || playerTask
       || (blackboardTask ? { description: blackboardTask.description, keywords: blackboardTask.keywords } : null)
@@ -783,6 +734,11 @@ export class VoyagerLoop {
         this.curriculumAgent.getBlockerMemory().clearTask(task);
         this.lastCompletedTask = task.description;
         this.blackboardManager?.postMessage(this.botName, 'completion', `Finished ${task.description}.`);
+
+        // Record success in social memory
+        this.socialMemory?.addMemory(this.botName, 'task_complete', this.botName, `Completed task: ${task.description}`, 0.5);
+        this.socialMemory?.updateEmotionalState(this.botName, 'task_success');
+
         return true;
       }
 
@@ -821,6 +777,11 @@ export class VoyagerLoop {
     }, lastError || 'task failed');
     this.lastFailedTask = task.description;
     this.blackboardManager?.postMessage(this.botName, 'blocker', `${task.description} failed: ${lastError || 'unknown error'}`);
+
+    // Record failure in social memory
+    this.socialMemory?.addMemory(this.botName, 'task_failure', this.botName, `Failed task: ${task.description} - ${lastError || 'unknown'}`, -0.3);
+    this.socialMemory?.updateEmotionalState(this.botName, 'task_failure');
+
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;
   }

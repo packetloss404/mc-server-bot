@@ -1,3 +1,4 @@
+import path from 'path';
 import mineflayer, { Bot } from 'mineflayer';
 import { pathfinder, Movements } from 'mineflayer-pathfinder';
 import { plugin as collectBlock } from 'mineflayer-collectblock';
@@ -17,6 +18,8 @@ import { StatsTracker } from '../voyager/StatsTracker';
 import { renderObservation } from '../voyager/Observation';
 import { PERSONALITIES } from '../personality/PersonalityType';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import { SocialMemory } from '../social/SocialMemory';
+import { BotComms } from '../social/BotComms';
 
 export interface BotOptions {
   name: string;
@@ -54,6 +57,8 @@ export class BotInstance {
   private blackboardManager: BlackboardManager;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private chatCooldowns: Map<string, number> = new Map();
+  private socialMemory: SocialMemory;
+  private botComms: BotComms;
   private voyagerLoop: VoyagerLoop | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
   private instinctResumeTimeout: NodeJS.Timeout | null = null;
@@ -78,6 +83,9 @@ export class BotInstance {
     this.conversationManager = options.conversationManager;
     this.blackboardManager = options.blackboardManager;
     this.onSwarmDirective = options.onSwarmDirective;
+    this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
+    this.botComms = BotComms.getInstance();
+    this.botComms.registerBot(this.name);
   }
 
   async connect(skipQueue = false): Promise<void> {
@@ -209,6 +217,14 @@ export class BotInstance {
 
     this.bot.on('entityHurt', (entity: any, source: any) => {
       if (!this.bot || !entity || entity.id !== this.bot.entity.id) return;
+
+      // Track player hits for affinity and social memory
+      if (source?.type === 'player' && source.username) {
+        this.affinityManager.onHit(this.name, source.username);
+        this.socialMemory.addMemory(this.name, 'combat', source.username, `${source.username} attacked me`, -0.5);
+        this.socialMemory.updateEmotionalState(this.name, 'combat_loss');
+      }
+
       this.triggerAttackInstinct(source || this.findLikelyThreat(), 'entity-hurt');
     });
 
@@ -629,18 +645,32 @@ export class BotInstance {
     try {
       logger.info({ bot: this.name, player: playerName, message }, 'Chat received');
 
-      // Update sentiment and affinity
+      // Update sentiment, affinity, and social memory
       const sentiment = analyzeSentiment(message);
       if (sentiment === 'POSITIVE') {
         this.affinityManager.onPositiveChat(this.name, playerName);
+        this.socialMemory.updateEmotionalState(this.name, 'positive_chat');
       } else if (sentiment === 'NEGATIVE') {
         this.affinityManager.onNegativeSentiment(this.name, playerName);
+        this.socialMemory.updateEmotionalState(this.name, 'negative_chat');
       }
+
+      // Record chat interaction in social memory
+      this.socialMemory.addMemory(
+        this.name,
+        'chat',
+        playerName,
+        `${playerName} said: "${message.slice(0, 100)}"`,
+        sentiment === 'POSITIVE' ? 0.3 : sentiment === 'NEGATIVE' ? -0.3 : 0
+      );
 
       const affinity = await this.affinityManager.get(this.name, playerName);
       const isCodegen = this.mode === BotMode.CODEGEN;
       const internalState = this.voyagerLoop?.getInternalState();
-      const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen, internalState);
+
+      // Build social context from memory for LLM prompt
+      const socialContext = this.socialMemory.buildMemoryContext(this.name, playerName);
+      const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen, internalState, socialContext);
 
       // Build conversation history (current message appended by buildContentsArray)
       const contents = await this.conversationManager.buildContentsArray(this.name, playerName, message);
@@ -680,13 +710,18 @@ export class BotInstance {
         'Chat response sent'
       );
 
-      // Queue task in Voyager loop if extracted
-      if (goalDescription && this.voyagerLoop) {
-        logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
-        this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
-      } else if (taskDescription && this.voyagerLoop) {
-        logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
-        this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
+      // Queue task in Voyager loop if extracted (check hostility first)
+      if ((goalDescription || taskDescription) && this.voyagerLoop) {
+        if (this.affinityManager.isHostile(this.name, playerName)) {
+          logger.warn({ bot: this.name, player: playerName }, 'Refusing task from hostile player');
+          this.sendLongChat(`I don't feel like helping you right now.`);
+        } else if (goalDescription) {
+          logger.info({ bot: this.name, player: playerName, goal: goalDescription }, 'Long-term goal extracted from chat');
+          this.voyagerLoop.queueLongTermGoal(goalDescription, playerName);
+        } else if (taskDescription) {
+          logger.info({ bot: this.name, player: playerName, task: taskDescription }, 'Task extracted from chat');
+          this.voyagerLoop.queuePlayerTask(taskDescription, playerName);
+        }
       }
     } catch (err: any) {
       logger.error({ bot: this.name, player: playerName, err: err.message }, 'Chat response failed');
@@ -769,6 +804,8 @@ export class BotInstance {
       this.llmClient
     );
     this.voyagerLoop.setBlackboardManager(this.blackboardManager);
+    this.voyagerLoop.setSocialMemory(this.socialMemory);
+    this.voyagerLoop.setBotComms(this.botComms);
     this.voyagerLoop.start();
   }
 
@@ -1077,6 +1114,7 @@ export class BotInstance {
   async disconnect(): Promise<void> {
     this.destroyed = true;
     this.stopAmbientBehaviors();
+    this.botComms.unregisterBot(this.name);
 
     if (this.bot) {
       this.bot.quit();

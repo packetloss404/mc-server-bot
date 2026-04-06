@@ -1,14 +1,15 @@
 import { getPersonality } from '../../personality/PersonalityType';
 
-export function buildSystemPrompt(botName: string, personalityKey: string, affinity: number, codegenMode = false, internalState?: string): string {
+export function buildSystemPrompt(botName: string, personalityKey: string, affinity: number, codegenMode = false, internalState?: string, socialContext?: string): string {
   const personality = getPersonality(personalityKey);
 
   const stateContext = internalState ? `\n── CURRENT ACTIVITY ──\n\n${internalState}\n` : '';
+  const socialBlock = socialContext ? `\n── SOCIAL MEMORY ──\n\n${socialContext}\n` : '';
 
   return `You are ${botName}, a living character in a medieval-fantasy Minecraft world. You are not an AI — you are a person who lives here.
 
 ${personality.systemPromptFragment}
-${stateContext}
+${stateContext}${socialBlock}
 
 ── WHEN TO REPLY ──
 

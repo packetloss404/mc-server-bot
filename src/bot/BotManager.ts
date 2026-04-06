@@ -3,7 +3,10 @@ import path from 'path';
 import { BotMode } from './BotState';
 import { Config } from '../config';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import { LLMClient } from '../ai/LLMClient';
+
+const DEBOUNCE_MS = 1_000;
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
@@ -25,6 +28,7 @@ export class BotManager {
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
   private nextStaggerAt = 0;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -166,19 +170,32 @@ export class BotManager {
   }
 
   private saveBots(): void {
-    const data: SavedBot[] = this.getAllWorkers().map((w) => ({
-      name: w.botName,
-      personality: w.personality,
-      mode: w.mode,
-      spawnLocation: w.getCachedStatus()?.position || w.spawnLocation || undefined,
-    }));
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.saveBotsImmediate();
+    }, DEBOUNCE_MS);
+  }
 
-    const dir = path.dirname(this.dataPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+  private saveBotsImmediate(): void {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    try {
+      const data: SavedBot[] = this.getAllWorkers().map((w) => ({
+        name: w.botName,
+        personality: w.personality,
+        mode: w.mode,
+        spawnLocation: w.getCachedStatus()?.position || w.spawnLocation || undefined,
+      }));
+
+      atomicWriteJsonSync(this.dataPath, { bots: data });
+    } catch (err) {
+      logger.error({ err }, 'Failed to save bots');
     }
+  }
 
-    fs.writeFileSync(this.dataPath, JSON.stringify({ bots: data }, null, 2));
+  /** Flush any pending debounced writes to disk immediately. */
+  flush(): void {
+    this.saveBotsImmediate();
   }
 
   async loadSavedBots(): Promise<void> {

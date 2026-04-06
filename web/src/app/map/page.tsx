@@ -2,9 +2,22 @@
 
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useBotStore } from '@/lib/store';
+import { useMapOverlayStore } from '@/lib/mapStore';
 import { api } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
+import {
+  worldToScreen,
+  screenToWorld,
+  drawMarkers,
+  drawZones,
+  drawRoutes,
+  drawZonePreview,
+  drawRoutePreview,
+  drawMissionOverlays,
+  drawSquadOverlays,
+} from '@/lib/mapDrawing';
+import { MapToolbar, ZoneEditorDialog, RouteNameDialog, MapContextMenu } from '@/components/map';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
@@ -29,6 +42,29 @@ export default function MapPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Map overlay store data
+  const markers = useMapOverlayStore((s) => s.markers);
+  const zones = useMapOverlayStore((s) => s.zones);
+  const routes = useMapOverlayStore((s) => s.routes);
+  const missions = useMapOverlayStore((s) => s.missions);
+  const squads = useMapOverlayStore((s) => s.squads);
+  const activeTool = useMapOverlayStore((s) => s.activeTool);
+  const zoneDrawStart = useMapOverlayStore((s) => s.zoneDrawStart);
+  const zoneDrawEnd = useMapOverlayStore((s) => s.zoneDrawEnd);
+  const routeWaypoints = useMapOverlayStore((s) => s.routeWaypoints);
+  const setZoneDrawStart = useMapOverlayStore((s) => s.setZoneDrawStart);
+  const setZoneDrawEnd = useMapOverlayStore((s) => s.setZoneDrawEnd);
+  const openZoneDialog = useMapOverlayStore((s) => s.openZoneDialog);
+  const addRouteWaypoint = useMapOverlayStore((s) => s.addRouteWaypoint);
+  const openRouteDialog = useMapOverlayStore((s) => s.openRouteDialog);
+  const openContextMenu = useMapOverlayStore((s) => s.openContextMenu);
+  const closeContextMenu = useMapOverlayStore((s) => s.closeContextMenu);
+  const setMarkers = useMapOverlayStore((s) => s.setMarkers);
+  const setZones = useMapOverlayStore((s) => s.setZones);
+  const setRoutes = useMapOverlayStore((s) => s.setRoutes);
+  const setMissions = useMapOverlayStore((s) => s.setMissions);
+  const setSquads = useMapOverlayStore((s) => s.setSquads);
+
   // Use refs for all values the draw loop needs — avoids effect restarts
   const offsetRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(3);
@@ -36,7 +72,7 @@ export default function MapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true });
+  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true, zones: true, routes: true, markers: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
   const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
@@ -45,15 +81,57 @@ export default function MapPage() {
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
 
+  // Refs for overlay data (avoids draw loop restarts)
+  const markersRef = useRef(markers);
+  const zonesRef = useRef(zones);
+  const routesRef = useRef(routes);
+  const missionsRef = useRef(missions);
+  const squadsRef = useRef(squads);
+  const activeToolRef = useRef(activeTool);
+  const zoneDrawStartRef = useRef(zoneDrawStart);
+  const zoneDrawEndRef = useRef(zoneDrawEnd);
+  const routeWaypointsRef = useRef(routeWaypoints);
+
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
   const kick = () => forceRender((n) => n + 1);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
-  // Keep refs in sync with zustand
+  // Keep refs in sync
   botsRef.current = bots;
   playersRef.current = players;
+  markersRef.current = markers;
+  zonesRef.current = zones;
+  routesRef.current = routes;
+  missionsRef.current = missions;
+  squadsRef.current = squads;
+  activeToolRef.current = activeTool;
+  zoneDrawStartRef.current = zoneDrawStart;
+  zoneDrawEndRef.current = zoneDrawEnd;
+  routeWaypointsRef.current = routeWaypoints;
+
+  // Fetch overlay data on mount
+  useEffect(() => {
+    const load = async () => {
+      const [markersRes, zonesRes, routesRes, missionsRes, squadsRes] = await Promise.all([
+        api.getMarkers().catch(() => ({ markers: [] })),
+        api.getZones().catch(() => ({ zones: [] })),
+        api.getRoutes().catch(() => ({ routes: [] })),
+        api.getMissions().catch(() => ({ missions: [] })),
+        api.getSquads().catch(() => ({ squads: [] })),
+      ]);
+      setMarkers(markersRes.markers);
+      setZones(zonesRes.zones);
+      setRoutes(routesRes.routes);
+      setMissions(missionsRes.missions);
+      setSquads(squadsRes.squads);
+    };
+    load();
+    // Refresh overlay data periodically
+    const interval = setInterval(load, 30000);
+    return () => clearInterval(interval);
+  }, [setMarkers, setZones, setRoutes, setMissions, setSquads]);
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -163,10 +241,7 @@ export default function MapPage() {
       if (show.terrain && terrainCanvas.current && terrainMeta.current) {
         const tm = terrainMeta.current;
         const tc = terrainCanvas.current;
-        const worldLeft = tm.cx - tm.radius;
-        const worldTop = tm.cz - tm.radius;
-        const screenX = cx + worldLeft * scale + offset.x;
-        const screenY = cy + worldTop * scale + offset.y;
+        const { sx: screenX, sy: screenY } = worldToScreen(tm.cx - tm.radius, tm.cz - tm.radius, cx, cy, scale, offset);
         const screenW = tc.width * TERRAIN_STEP * scale;
         const screenH = tc.height * TERRAIN_STEP * scale;
         ctx.imageSmoothingEnabled = false;
@@ -189,8 +264,7 @@ export default function MapPage() {
             ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
           }
 
-          const originX = cx + offset.x;
-          const originY = cy + offset.y;
+          const { sx: originX, sy: originY } = worldToScreen(0, 0, cx, cy, scale, offset);
           ctx.strokeStyle = hasTerrain ? '#00000050' : '#ffffff20';
           ctx.lineWidth = 1.5;
           if (originX >= 0 && originX <= w) {
@@ -204,14 +278,28 @@ export default function MapPage() {
 
       // Origin label
       if (show.coords) {
-        const ox = cx + offset.x;
-        const oy = cy + offset.y;
+        const { sx: ox, sy: oy } = worldToScreen(0, 0, cx, cy, scale, offset);
         if (ox >= 0 && ox <= w && oy >= 0 && oy <= h) {
           ctx.fillStyle = '#ffffff40';
           ctx.font = '10px monospace';
           ctx.textAlign = 'left';
           ctx.fillText('0, 0', ox + 4, oy - 4);
         }
+      }
+
+      // ── Draw saved zones ──
+      if (show.zones) {
+        drawZones(ctx, zonesRef.current, cx, cy, scale, offset);
+      }
+
+      // ── Draw saved routes ──
+      if (show.routes) {
+        drawRoutes(ctx, routesRef.current, cx, cy, scale, offset);
+      }
+
+      // ── Draw saved markers ──
+      if (show.markers) {
+        drawMarkers(ctx, markersRef.current, cx, cy, scale, offset);
       }
 
       // Collect entities
@@ -243,8 +331,10 @@ export default function MapPage() {
               ctx.beginPath();
               ctx.strokeStyle = entity.color + alpha;
               ctx.lineWidth = entity.type === 'player' ? 1.5 : 2;
-              ctx.moveTo(cx + trail[i - 1].x * scale + offset.x, cy + trail[i - 1].z * scale + offset.y);
-              ctx.lineTo(cx + trail[i].x * scale + offset.x, cy + trail[i].z * scale + offset.y);
+              const prev = worldToScreen(trail[i - 1].x, trail[i - 1].z, cx, cy, scale, offset);
+              const cur = worldToScreen(trail[i].x, trail[i].z, cx, cy, scale, offset);
+              ctx.moveTo(prev.sx, prev.sy);
+              ctx.lineTo(cur.sx, cur.sy);
               ctx.stroke();
             }
           }
@@ -253,8 +343,7 @@ export default function MapPage() {
 
       // Entity markers
       for (const entity of entities) {
-        const sx = cx + entity.x * scale + offset.x;
-        const sy = cy + entity.z * scale + offset.y;
+        const { sx, sy } = worldToScreen(entity.x, entity.z, cx, cy, scale, offset);
         if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
 
         const isHovered = hovered === entity.name;
@@ -298,6 +387,31 @@ export default function MapPage() {
         }
       }
 
+      // ── Mission overlays ──
+      const botPositions = new Map<string, { x: number; z: number }>();
+      for (const bot of bots) {
+        if (bot.position) {
+          botPositions.set(bot.name.toLowerCase(), { x: bot.position.x, z: bot.position.z });
+        }
+      }
+      drawMissionOverlays(ctx, missionsRef.current, cx, cy, scale, offset, botPositions);
+
+      // ── Squad overlays ──
+      drawSquadOverlays(ctx, squadsRef.current, cx, cy, scale, offset, botPositions);
+
+      // ── Zone draw preview ──
+      const zds = zoneDrawStartRef.current;
+      const zde = zoneDrawEndRef.current;
+      if (zds && zde) {
+        drawZonePreview(ctx, zds, zde, cx, cy, scale, offset);
+      }
+
+      // ── Route draw preview ──
+      const rwp = routeWaypointsRef.current;
+      if (rwp.length > 0) {
+        drawRoutePreview(ctx, rwp, cx, cy, scale, offset);
+      }
+
       // HUD overlays
       if (show.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
@@ -308,6 +422,24 @@ export default function MapPage() {
       ctx.fillStyle = '#ffffff60'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
       ctx.fillText(`${scale.toFixed(1)}x`, w - 12, h - 14);
 
+      // Tool hint
+      const tool = activeToolRef.current;
+      if (tool !== 'select') {
+        const hints: Record<string, string> = {
+          'draw-zone': 'Click and drag to draw zone',
+          'draw-route': 'Click to add waypoints, double-click to finish',
+          'place-marker': 'Right-click to place a marker',
+        };
+        const hint = hints[tool] || '';
+        ctx.fillStyle = '#00000090';
+        const tw = ctx.measureText(hint).width + 20;
+        ctx.fillRect(cx - tw / 2, 8, tw, 22);
+        ctx.fillStyle = '#ffffffB0';
+        ctx.font = '11px system-ui, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(hint, cx, 23);
+      }
+
       animFrame = requestAnimationFrame(draw);
     };
 
@@ -317,12 +449,37 @@ export default function MapPage() {
 
   // Input handlers — all mutate refs directly, no state updates during drag/hover
   const handleMouseDown = (e: React.MouseEvent) => {
+    // Close context menu on any click
+    closeContextMenu();
+
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const cx = w / 2;
+    const cy = h / 2;
+    const tool = activeToolRef.current;
 
+    // Zone drawing mode: start drag
+    if (tool === 'draw-zone') {
+      const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+      setZoneDrawStart({ x: wx, z: wz });
+      setZoneDrawEnd({ x: wx, z: wz });
+      return;
+    }
+
+    // Route drawing mode: place waypoint on click
+    if (tool === 'draw-route') {
+      const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+      addRouteWaypoint({ x: Math.round(wx), y: 64, z: Math.round(wz) });
+      kick();
+      return;
+    }
+
+    // Select tool: check entity clicks
     for (const [name, pos] of entityPositions.current) {
       const dx = mx - pos.sx;
       const dy = my - pos.sy;
@@ -338,16 +495,27 @@ export default function MapPage() {
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (draggingRef.current) {
-      offsetRef.current = { x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y };
-      return;
-    }
-
     const canvas = canvasRef.current;
     if (!canvas) return;
     const rect = canvas.getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
+    const w = rect.width;
+    const h = rect.height;
+    const cx = w / 2;
+    const cy = h / 2;
+
+    // Zone drawing: update preview
+    if (activeToolRef.current === 'draw-zone' && zoneDrawStartRef.current) {
+      const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+      setZoneDrawEnd({ x: wx, z: wz });
+      return;
+    }
+
+    if (draggingRef.current) {
+      offsetRef.current = { x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y };
+      return;
+    }
 
     let found: string | null = null;
     for (const [name, pos] of entityPositions.current) {
@@ -359,6 +527,27 @@ export default function MapPage() {
   };
 
   const handleMouseUp = () => {
+    // Zone drawing: finish and open dialog
+    if (activeToolRef.current === 'draw-zone' && zoneDrawStartRef.current && zoneDrawEndRef.current) {
+      const start = zoneDrawStartRef.current;
+      const end = zoneDrawEndRef.current;
+      const dx = Math.abs(end.x - start.x);
+      const dz = Math.abs(end.z - start.z);
+      if (dx > 2 && dz > 2) {
+        openZoneDialog({
+          x1: Math.round(Math.min(start.x, end.x)),
+          z1: Math.round(Math.min(start.z, end.z)),
+          x2: Math.round(Math.max(start.x, end.x)),
+          z2: Math.round(Math.max(start.z, end.z)),
+        });
+      } else {
+        // Too small, cancel
+        setZoneDrawStart(null);
+        setZoneDrawEnd(null);
+      }
+      return;
+    }
+
     if (draggingRef.current) {
       draggingRef.current = false;
       // Trigger terrain reload check after drag ends
@@ -369,6 +558,49 @@ export default function MapPage() {
       }
       kick();
     }
+  };
+
+  const handleDoubleClick = (e: React.MouseEvent) => {
+    // Route drawing: finish on double-click
+    if (activeToolRef.current === 'draw-route' && routeWaypointsRef.current.length >= 2) {
+      openRouteDialog();
+      return;
+    }
+  };
+
+  const handleContextMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    const my = e.clientY - rect.top;
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+
+    // Place marker tool: directly place on right-click
+    if (activeToolRef.current === 'place-marker') {
+      const name = prompt('Marker name:');
+      if (name?.trim()) {
+        api.createMarker({
+          name: name.trim(),
+          x: Math.round(wx),
+          y: 64,
+          z: Math.round(wz),
+        }).then((result) => {
+          useMapOverlayStore.getState().addMarker(result.marker);
+        }).catch(() => {});
+      }
+      return;
+    }
+
+    openContextMenu({
+      screenX: mx,
+      screenY: my,
+      worldX: wx,
+      worldZ: wz,
+    });
   };
 
   // Zoom toward cursor with normalized sensitivity
@@ -437,6 +669,16 @@ export default function MapPage() {
   const show = showRef.current;
   const toggleShow = (key: keyof typeof show) => { showRef.current = { ...show, [key]: !show[key] }; kick(); };
 
+  // Cursor style based on tool
+  const getCursorClass = () => {
+    if (draggingRef.current) return 'cursor-grabbing';
+    if (activeTool === 'draw-zone') return 'cursor-crosshair';
+    if (activeTool === 'draw-route') return 'cursor-crosshair';
+    if (activeTool === 'place-marker') return 'cursor-crosshair';
+    if (hoveredRef.current) return 'cursor-pointer';
+    return 'cursor-grab';
+  };
+
   return (
     <div className="h-screen flex flex-col">
       {/* Toolbar */}
@@ -451,6 +693,10 @@ export default function MapPage() {
             <span className="w-px h-4 bg-zinc-800 mx-1" />
             <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
             <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
+            <span className="w-px h-4 bg-zinc-800 mx-1" />
+            <ToggleBtn active={show.zones} onClick={() => toggleShow('zones')} label="Zones" color="#8B5CF6" />
+            <ToggleBtn active={show.routes} onClick={() => toggleShow('routes')} label="Routes" color="#F59E0B" />
+            <ToggleBtn active={show.markers} onClick={() => toggleShow('markers')} label="Markers" color="#FFFFFF" />
           </div>
           {terrainStatus === 'loading' && (
             <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
@@ -460,7 +706,9 @@ export default function MapPage() {
           )}
           {terrainStatus === 'error' && <span className="text-[10px] text-red-400/70">Terrain unavailable</span>}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-3">
+          <MapToolbar />
+          <span className="w-px h-4 bg-zinc-800" />
           <button
             onClick={() => {
               terrainMeta.current = null;
@@ -516,13 +764,90 @@ export default function MapPage() {
               ))}
               {allEntities.length === 0 && <p className="text-[11px] text-zinc-600 text-center py-4">No entities with positions</p>}
             </div>
+
+            {/* Zones list */}
+            {zones.length > 0 && (
+              <>
+                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 mt-4">
+                  Zones ({zones.length})
+                </p>
+                <div className="space-y-0.5">
+                  {zones.map((zone) => (
+                    <button
+                      key={zone.id}
+                      onClick={() => { centerOn((zone.x1 + zone.x2) / 2, (zone.z1 + zone.z2) / 2); kick(); }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <span className="w-2.5 h-2.5 shrink-0 rounded-sm" style={{ backgroundColor: zone.color || '#8B5CF6' }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-zinc-300 truncate">{zone.name}</p>
+                        <p className="text-[9px] text-zinc-600 uppercase">{zone.type}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Routes list */}
+            {routes.length > 0 && (
+              <>
+                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 mt-4">
+                  Routes ({routes.length})
+                </p>
+                <div className="space-y-0.5">
+                  {routes.map((route) => (
+                    <button
+                      key={route.id}
+                      onClick={() => {
+                        if (route.waypoints.length > 0) {
+                          centerOn(route.waypoints[0].x, route.waypoints[0].z);
+                          kick();
+                        }
+                      }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <span className="w-2.5 h-2.5 shrink-0 rounded-full" style={{ backgroundColor: route.color || '#F59E0B' }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-zinc-300 truncate">{route.name}</p>
+                        <p className="text-[9px] text-zinc-600">{route.waypoints.length} pts{route.loop ? ' (loop)' : ''}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+
+            {/* Markers list */}
+            {markers.length > 0 && (
+              <>
+                <p className="text-[10px] font-semibold text-zinc-500 uppercase tracking-wider mb-2 mt-4">
+                  Markers ({markers.length})
+                </p>
+                <div className="space-y-0.5">
+                  {markers.map((marker) => (
+                    <button
+                      key={marker.id}
+                      onClick={() => { centerOn(marker.x, marker.z); kick(); }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <span className="w-2.5 h-2.5 shrink-0 rotate-45" style={{ backgroundColor: marker.color || '#FFFFFF', width: 8, height: 8 }} />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-[11px] font-medium text-zinc-300 truncate">{marker.name}</p>
+                        <p className="text-[9px] text-zinc-600 font-mono">{Math.round(marker.x)}, {Math.round(marker.z)}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
         {/* Canvas */}
         <div
           ref={containerRef}
-          className={`flex-1 relative ${draggingRef.current ? 'cursor-grabbing' : hoveredRef.current ? 'cursor-pointer' : 'cursor-grab'}`}
+          className={`flex-1 relative ${getCursorClass()}`}
         >
           <canvas
             ref={canvasRef}
@@ -530,13 +855,28 @@ export default function MapPage() {
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
+            onDoubleClick={handleDoubleClick}
+            onContextMenu={handleContextMenu}
             className="w-full h-full"
           />
+
+          {/* Context menu */}
+          <MapContextMenu />
+
+          {/* Zone editor dialog */}
+          <ZoneEditorDialog />
+
+          {/* Route name dialog */}
+          <RouteNameDialog />
+
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
             <p className="text-zinc-500 font-semibold uppercase tracking-wider mb-2">Legend</p>
             <div className="space-y-1.5">
               <LegendItem shape="circle" color="#6B7280" label="Bot" />
               <LegendItem shape="square" color="#60A5FA" label="Player" />
+              {show.zones && <LegendItem shape="square" color="#8B5CF6" label="Zone" />}
+              {show.routes && <LegendItem shape="circle" color="#F59E0B" label="Route" />}
+              {show.markers && <LegendItem shape="diamond" color="#FFFFFF" label="Marker" />}
               {show.terrain && terrainCanvas.current && (
                 <>
                   <LegendItem shape="square" color="#5B8C33" label="Grass" />
@@ -563,10 +903,13 @@ function ToggleBtn({ active, onClick, label, color }: { active: boolean; onClick
   );
 }
 
-function LegendItem({ shape, color, label }: { shape: 'circle' | 'square'; color: string; label: string }) {
+function LegendItem({ shape, color, label }: { shape: 'circle' | 'square' | 'diamond'; color: string; label: string }) {
   return (
     <div className="flex items-center gap-2">
-      <span className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : 'rounded-sm'}`} style={{ backgroundColor: color }} />
+      <span
+        className={`w-3 h-3 ${shape === 'circle' ? 'rounded-full' : shape === 'diamond' ? 'rotate-45 rounded-sm' : 'rounded-sm'}`}
+        style={{ backgroundColor: color, ...(shape === 'diamond' ? { width: 8, height: 8 } : {}) }}
+      />
       <span className="text-zinc-400">{label}</span>
     </div>
   );

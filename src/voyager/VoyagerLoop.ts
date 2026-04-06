@@ -28,6 +28,7 @@ import { PlanLibrary } from './PlanLibrary';
 import { SkillAttribution } from './SkillAttribution';
 import { TradeNegotiator } from './TradeNegotiator';
 import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
+import { DependencyResolver, FlatStep } from './DependencyResolver';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -72,6 +73,7 @@ export class VoyagerLoop {
   private skillAttribution: SkillAttribution | null = null;
   private tradeNegotiator: TradeNegotiator | null = null;
   private reputationNotify: ((event: any) => void) | null = null;
+  private dependencyResolver: DependencyResolver | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -109,6 +111,12 @@ export class VoyagerLoop {
     );
     this.statsTracker = new StatsTracker('./data');
     this.decisionTrace = new DecisionTrace(botName);
+
+    try {
+      this.dependencyResolver = new DependencyResolver(config.minecraft.version);
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'DependencyResolver init failed, prerequisite resolution disabled');
+    }
   }
 
   start(): void {
@@ -966,6 +974,28 @@ export class VoyagerLoop {
         return false;
       }
 
+      // If recovery says replace task, queue prerequisites and bail out of this task
+      if (recovery?.replaceTask) {
+        const prereqs = this.resolvePrerequisites(recovery.replaceTask, task.description);
+        if (prereqs.length > 0) {
+          // Queue prerequisites at the front, then re-queue the original task after them
+          const originalKeywords = task.keywords.length > 0 ? task.keywords
+            : task.description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 2);
+          this.playerTaskQueue.unshift({ description: task.description, keywords: originalKeywords });
+          for (let i = prereqs.length - 1; i >= 0; i--) {
+            const p = prereqs[i];
+            const kw = p.description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w: string) => w.length > 2);
+            this.playerTaskQueue.unshift({ description: p.description, keywords: kw });
+          }
+          logger.info({ bot: this.botName, task: task.description, prereqs: prereqs.map((p) => p.description) },
+            'ErrorRecovery: replacing task with prerequisite chain');
+          this.decisionTrace.record('retry_decision', task.description,
+            `Replaced with ${prereqs.length} prerequisites: ${prereqs.map((p) => p.description).join(' → ')}`,
+            'replace', { pattern: recovery.pattern, prereqs: prereqs.map((p) => p.description) });
+          return false;
+        }
+      }
+
       if (attempt < this.config.voyager.maxRetriesPerTask - 1) {
         // Enrich the critique with recovery hints
         const enrichedCritique = recovery
@@ -1019,6 +1049,55 @@ export class VoyagerLoop {
 
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;
+  }
+
+  /**
+   * Use DependencyResolver to turn a replacement hint (e.g. "Obtain oak_planks")
+   * into an ordered list of prerequisite task descriptions.
+   */
+  private resolvePrerequisites(replaceHint: string, originalTask: string): { description: string }[] {
+    // Extract item name from hints like "Obtain oak_planks", "Craft a stone_pickaxe"
+    const itemMatch = replaceHint.match(/(?:obtain|craft|get|gather|mine)\s+(?:a\s+)?(\d+\s+)?(\w+)/i);
+    const itemName = itemMatch?.[2];
+    if (!itemName) {
+      // Fallback: just queue the hint itself as a single task
+      return [{ description: replaceHint }];
+    }
+
+    if (!this.dependencyResolver) {
+      return [{ description: replaceHint }];
+    }
+
+    try {
+      const inv = Object.fromEntries(
+        this.bot.inventory.items().map((i) => [i.name, i.count])
+      );
+      const plan = this.dependencyResolver.resolve(itemName, 1, inv);
+
+      if (plan.orderedSteps.length === 0) {
+        return [{ description: replaceHint }];
+      }
+
+      // Convert FlatSteps into task descriptions
+      return plan.orderedSteps
+        .map((step) => {
+          switch (step.action) {
+            case 'mine':
+              return { description: `Mine ${step.count} ${step.item.replace(/_/g, ' ')}` };
+            case 'craft':
+              return { description: `Craft ${step.count} ${step.item.replace(/_/g, ' ')}` };
+            case 'smelt':
+              return { description: `Smelt ${step.count} ${step.item.replace(/_/g, ' ')}` };
+            case 'gather':
+              return { description: `Gather ${step.count} ${step.item.replace(/_/g, ' ')}` };
+            default:
+              return { description: `Obtain ${step.count} ${step.item.replace(/_/g, ' ')}` };
+          }
+        });
+    } catch (err: any) {
+      logger.warn({ err: err.message, item: itemName }, 'DependencyResolver failed, falling back to simple replacement');
+      return [{ description: replaceHint }];
+    }
   }
 
   private taskToSkillName(task: Task): string {

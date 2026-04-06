@@ -24,27 +24,18 @@ function createMockIO() {
 }
 
 function createMockBotManager() {
-  const mockVoyager = {
-    pause: vi.fn(),
-    resume: vi.fn(),
-    isRunning: vi.fn().mockReturnValue(true),
-    isPaused: vi.fn().mockReturnValue(false),
-  };
-  const mockBot = {
-    pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
-    players: {},
-    entity: { position: { x: 0, y: 64, z: 0 } },
-    inventory: { items: vi.fn().mockReturnValue([]) },
-  };
-  const mockInstance = {
-    bot: mockBot,
-    getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager),
+  const mockWorker = {
+    sendCommand: vi.fn(),
+    isAlive: vi.fn().mockReturnValue(true),
     name: 'TestBot',
   };
+  const workers = new Map<string, any>();
+  workers.set('testbot', mockWorker);
   return {
-    getBot: vi.fn().mockReturnValue(mockInstance),
-    getAllBots: vi.fn().mockReturnValue([mockInstance]),
-    _mockInstance: mockInstance,
+    getWorker: vi.fn((name: string) => workers.get(name.toLowerCase())),
+    getAllWorkers: vi.fn(() => [...workers.values()]),
+    _mockWorker: mockWorker,
+    _workers: workers,
   } as any;
 }
 

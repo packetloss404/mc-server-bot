@@ -308,6 +308,7 @@ Write the function:`;
 
     const parsed = this.extractFunctionWithBabel(code);
     if (parsed) {
+      parsed.functionCode = this.injectNullGuards(parsed.functionCode);
       return parsed;
     }
 
@@ -325,7 +326,7 @@ Write the function:`;
     this.assertFunctionParses(wrappedCode);
     return {
       functionName: fallbackName,
-      functionCode: wrappedCode,
+      functionCode: this.injectNullGuards(wrappedCode),
       execCode: `await ${fallbackName}(bot);`,
     };
   }
@@ -358,6 +359,47 @@ Write the function:`;
       logger.warn({ err: err.message }, 'ActionAgent Babel parse failed');
       return null;
     }
+  }
+
+  /**
+   * Post-process generated code to add null guards around bot.findBlock() and
+   * bot.nearestEntity() calls that are immediately accessed (e.g. .position).
+   * This prevents the recurring "Cannot read properties of null" crashes.
+   */
+  private injectNullGuards(code: string): string {
+    // Pattern: const/let/var X = bot.findBlock(...);  followed by X.position or X.x etc.
+    // We wrap with: if (!X) throw new Error("...not found...");
+    let result = code;
+
+    // Match assignments from findBlock/nearestEntity
+    const assignPattern = /^([ \t]*)(const|let|var)\s+(\w+)\s*=\s*((?:await\s+)?bot\.(?:findBlock|nearestEntity)\s*\([^)]*\))\s*;/gm;
+    const insertions: { index: number; text: string }[] = [];
+
+    let match;
+    while ((match = assignPattern.exec(result)) !== null) {
+      const indent = match[1];
+      const varName = match[3];
+      const methodCall = match[4];
+      const afterAssign = match.index + match[0].length;
+
+      // Check if there's already a null check for this variable within the next few lines
+      const nextChunk = result.slice(afterAssign, afterAssign + 200);
+      if (nextChunk.match(new RegExp(`if\\s*\\(!\\s*${varName}\\s*\\)`))) {
+        continue; // already has a null check
+      }
+
+      const lookupType = methodCall.includes('findBlock') ? 'Block' : 'Entity';
+      const guard = `\n${indent}if (!${varName}) { console.log("${lookupType} not found"); return; }`;
+      insertions.push({ index: afterAssign, text: guard });
+    }
+
+    // Apply insertions in reverse order to preserve indices
+    for (let i = insertions.length - 1; i >= 0; i--) {
+      const ins = insertions[i];
+      result = result.slice(0, ins.index) + ins.text + result.slice(ins.index);
+    }
+
+    return result;
   }
 
   /**

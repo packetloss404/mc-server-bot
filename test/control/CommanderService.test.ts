@@ -115,21 +115,21 @@ describe('CommanderService', () => {
       markerStore: createMockMarkerStore(),
     };
     service = new CommanderService(deps);
+    service.setCommandCenter(commandCenter);
+    service.setMissionManager(missionManager);
   });
 
   // ── Parse with no LLM ────────────────────────────────
 
-  it('returns low confidence plan when no LLM is configured', async () => {
+  it('falls back to regex parsing when no LLM is configured', async () => {
     const plan = await service.parse('send all bots to the mine');
 
     expect(plan).toBeDefined();
     expect(plan.id).toMatch(/^plan_/);
     expect(plan.input).toBe('send all bots to the mine');
-    expect(plan.confidence).toBe(0);
-    expect(plan.requiresConfirmation).toBe(true);
-    expect(plan.warnings).toContain('No LLM configured — natural language parsing is unavailable');
-    expect(plan.commands).toEqual([]);
-    expect(plan.missions).toEqual([]);
+    // Regex fallback recognises "mine" intent and "all" target
+    expect(plan.confidence).toBeGreaterThan(0);
+    expect(plan.intent).toBeTruthy();
     expect(plan.createdAt).toBeTypeOf('string');
   });
 
@@ -195,7 +195,7 @@ describe('CommanderService', () => {
     expect(plan.requiresConfirmation).toBe(false); // high confidence, no warnings
   });
 
-  it('handles LLM returning invalid JSON gracefully', async () => {
+  it('handles LLM returning invalid JSON gracefully (falls through to regex)', async () => {
     const mockLLM = {
       generate: vi.fn().mockResolvedValue({ text: 'not valid json at all' }),
     };
@@ -207,13 +207,15 @@ describe('CommanderService', () => {
 
     const plan = await svc.parse('do something');
 
-    expect(plan.confidence).toBe(0);
-    expect(plan.warnings).toContain('LLM response was not valid JSON');
+    // LLM bad JSON falls through to regex fallback; "do something" has no
+    // recognised verb so intent is "unknown" with low confidence
+    expect(plan.intent).toBe('unknown');
+    expect(plan.confidence).toBeLessThan(0.3);
     expect(plan.commands).toEqual([]);
     expect(plan.missions).toEqual([]);
   });
 
-  it('handles LLM error gracefully', async () => {
+  it('handles LLM error gracefully (falls through to regex)', async () => {
     const mockLLM = {
       generate: vi.fn().mockRejectedValue(new Error('API quota exceeded')),
     };
@@ -225,8 +227,9 @@ describe('CommanderService', () => {
 
     const plan = await svc.parse('test');
 
-    expect(plan.confidence).toBe(0);
-    expect(plan.warnings.some((w) => w.includes('API quota exceeded'))).toBe(true);
+    // LLM error falls through to regex fallback; "test" has no recognised verb
+    expect(plan.intent).toBe('unknown');
+    expect(plan.confidence).toBeLessThan(0.3);
   });
 
   // ── Execute dispatches commands and creates missions ──
@@ -243,6 +246,9 @@ describe('CommanderService', () => {
     storedPlan.missions = [
       { type: 'gather_items', title: 'Gather wood', assigneeIds: ['TestBot'] },
     ];
+    // Clear any clarification flag so execute() doesn't bail out early
+    storedPlan.needsClarification = false;
+    storedPlan.clarificationQuestions = [];
 
     const result = await service.execute(plan.id);
 

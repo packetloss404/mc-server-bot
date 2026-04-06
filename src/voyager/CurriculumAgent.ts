@@ -111,7 +111,11 @@ export class CurriculumAgent {
   private static MAX_QA_CACHE_SIZE = 200;
   private static MAX_COMPLETED_TASKS = 100;
   private static MAX_FAILED_TASKS = 50;
+  private static COOLDOWN_THRESHOLD = 3; // after 3 proposals without success, start cooling down
+  private static COOLDOWN_MS = 5 * 60 * 1000; // 5 minute cooldown per excess proposal
   private persistDebounceTimer: NodeJS.Timeout | null = null;
+  /** Tracks how many times a task has been proposed without completing. Resets on success. */
+  private proposalCounts: Map<string, { count: number; lastProposedAt: number }> = new Map();
 
   constructor(llmClient: LLMClient | null, useLLM: boolean, dataDir: string = './data') {
     this.llmClient = llmClient;
@@ -165,6 +169,8 @@ export class CurriculumAgent {
       }
       // Remove from failed if it was there
       this.failedTasks = this.failedTasks.filter((t) => t !== task.description);
+      // Reset cooldown on success
+      this.proposalCounts.delete(task.description);
     } else {
       if (!this.failedTasks.includes(task.description)) {
         this.failedTasks.push(task.description);
@@ -180,6 +186,26 @@ export class CurriculumAgent {
     }
 
     this.persistTasks();
+  }
+
+  /** Track that a task was proposed and check if it's on cooldown. */
+  private isOnCooldown(description: string): boolean {
+    const entry = this.proposalCounts.get(description);
+    if (!entry) return false;
+    const excessProposals = entry.count - CurriculumAgent.COOLDOWN_THRESHOLD;
+    if (excessProposals <= 0) return false;
+    const cooldownUntil = entry.lastProposedAt + excessProposals * CurriculumAgent.COOLDOWN_MS;
+    return Date.now() < cooldownUntil;
+  }
+
+  private trackProposal(description: string): void {
+    const entry = this.proposalCounts.get(description);
+    if (entry) {
+      entry.count++;
+      entry.lastProposedAt = Date.now();
+    } else {
+      this.proposalCounts.set(description, { count: 1, lastProposedAt: Date.now() });
+    }
   }
 
   private isInventoryManagementTask(task: Task): boolean {
@@ -295,6 +321,7 @@ export class CurriculumAgent {
       (t) => t.description !== this.lastTask
         && !this.completedTasks.includes(t.description)
         && !recentFailures.has(t.description)
+        && !this.isOnCooldown(t.description)
         && taskMatchesProgression(t, progression)
     );
 
@@ -302,6 +329,7 @@ export class CurriculumAgent {
       // Pick from the first few to maintain progression order with slight variety
       const pick = uncompleted[Math.floor(Math.random() * Math.min(3, uncompleted.length))];
       this.lastTask = pick.description;
+      this.trackProposal(pick.description);
       return pick;
     }
 
@@ -382,6 +410,11 @@ Propose the next task:`;
         logger.info({ task: proposedTask.description }, 'Curriculum proposed infeasible task, falling back to static');
         return this.proposeStaticTask(personality);
       }
+      if (this.isOnCooldown(proposedTask.description)) {
+        logger.info({ task: proposedTask.description }, 'Curriculum: LLM-proposed task is on cooldown, falling back to static');
+        return this.proposeStaticTask(personality);
+      }
+      this.trackProposal(proposedTask.description);
       return proposedTask;
     } catch (err: any) {
       logger.warn({ err: err.message }, 'Curriculum LLM call failed, falling back to static');

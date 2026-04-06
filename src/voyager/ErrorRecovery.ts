@@ -56,9 +56,11 @@ export function analyzeFailure(ctx: FailureContext): RecoveryHint | null {
     // Common crafting prerequisites
     const craftHints = getCraftingHint(targetItem, inv);
     if (craftHints) {
+      const firstMissing = getFirstMissingMaterial(targetItem, inv);
       return {
         pattern: 'missing_craft_materials',
         hint: `CRAFTING FAILED for "${targetItem}". Your current inventory: [${invSummary}]. ${craftHints} Gather the missing materials FIRST using mineBlock(), then craft.`,
+        replaceTask: firstMissing ? `Obtain ${firstMissing}` : undefined,
       };
     }
 
@@ -282,6 +284,52 @@ function checkMiningTool(task: string, bot: Bot): RecoveryHint | null {
     }
   }
 
+  return null;
+}
+
+/** Return the first missing material for a crafting recipe, or null */
+function getFirstMissingMaterial(item: string, inv: Record<string, number>): string | null {
+  const recipes: Record<string, Record<string, number>> = {
+    'stick': { 'oak_planks': 2 },
+    'sticks': { 'oak_planks': 2 },
+    'crafting_table': { 'oak_planks': 4 },
+    'wooden_pickaxe': { 'oak_planks': 3, 'stick': 2 },
+    'wooden_axe': { 'oak_planks': 3, 'stick': 2 },
+    'wooden_shovel': { 'oak_planks': 1, 'stick': 2 },
+    'wooden_hoe': { 'oak_planks': 2, 'stick': 2 },
+    'wooden_sword': { 'oak_planks': 2, 'stick': 1 },
+    'stone_pickaxe': { 'cobblestone': 3, 'stick': 2 },
+    'stone_axe': { 'cobblestone': 3, 'stick': 2 },
+    'stone_shovel': { 'cobblestone': 1, 'stick': 2 },
+    'stone_hoe': { 'cobblestone': 2, 'stick': 2 },
+    'stone_sword': { 'cobblestone': 2, 'stick': 1 },
+    'iron_pickaxe': { 'iron_ingot': 3, 'stick': 2 },
+    'iron_sword': { 'iron_ingot': 2, 'stick': 1 },
+    'iron_axe': { 'iron_ingot': 3, 'stick': 2 },
+    'iron_shovel': { 'iron_ingot': 1, 'stick': 2 },
+    'iron_hoe': { 'iron_ingot': 2, 'stick': 2 },
+    'furnace': { 'cobblestone': 8 },
+    'chest': { 'oak_planks': 8 },
+    'oak_planks': { 'oak_log': 1 },
+    'spruce_planks': { 'spruce_log': 1 },
+    'birch_planks': { 'birch_log': 1 },
+    'torch': { 'stick': 1, 'coal': 1 },
+    'bread': { 'wheat': 3 },
+    'bucket': { 'iron_ingot': 3 },
+  };
+
+  const recipe = recipes[item.toLowerCase()];
+  if (!recipe) return null;
+
+  const planksCount = (inv['oak_planks'] || 0) + (inv['spruce_planks'] || 0) +
+    (inv['birch_planks'] || 0) + (inv['jungle_planks'] || 0) +
+    (inv['acacia_planks'] || 0) + (inv['dark_oak_planks'] || 0);
+
+  for (const [mat, needed] of Object.entries(recipe)) {
+    let have = inv[mat] || 0;
+    if (mat === 'oak_planks') have = Math.max(have, planksCount);
+    if (have < needed) return mat;
+  }
   return null;
 }
 

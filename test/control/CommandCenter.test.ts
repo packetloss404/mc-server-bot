@@ -1,12 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock fs before importing the module
-vi.mock('fs', () => ({
-  existsSync: vi.fn().mockReturnValue(false),
-  readFileSync: vi.fn().mockReturnValue('{"commands":[]}'),
-  writeFileSync: vi.fn(),
-  mkdirSync: vi.fn(),
-}));
+vi.mock('fs', () => {
+  const fns = {
+    existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue('{"commands":[]}'),
+    writeFileSync: vi.fn(),
+    mkdirSync: vi.fn(),
+    renameSync: vi.fn(),
+  };
+  return { default: fns, ...fns };
+});
 
 import { CommandCenter } from '../../src/control/CommandCenter';
 import { CommandRecord } from '../../src/control/CommandTypes';
@@ -16,29 +20,18 @@ function createMockIO() {
 }
 
 function createMockBotManager() {
-  const mockVoyager = {
-    pause: vi.fn(),
-    resume: vi.fn(),
-    isRunning: vi.fn().mockReturnValue(true),
-    isPaused: vi.fn().mockReturnValue(false),
-  };
-  const mockBot = {
-    pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
-    players: {},
-    entity: { position: { x: 0, y: 64, z: 0 } },
-    inventory: { items: vi.fn().mockReturnValue([]) },
-  };
-  const mockInstance = {
-    bot: mockBot,
-    getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager),
+  const mockWorker = {
+    sendCommand: vi.fn(),
+    isAlive: vi.fn().mockReturnValue(true),
     name: 'TestBot',
   };
+  const workers = new Map<string, any>();
+  workers.set('testbot', mockWorker);
   return {
-    getBot: vi.fn().mockReturnValue(mockInstance),
-    getAllBots: vi.fn().mockReturnValue([mockInstance]),
-    _mockInstance: mockInstance,
-    _mockVoyager: mockVoyager,
-    _mockBot: mockBot,
+    getWorker: vi.fn((name: string) => workers.get(name.toLowerCase())),
+    getAllWorkers: vi.fn(() => [...workers.values()]),
+    _mockWorker: mockWorker,
+    _workers: workers,
   } as any;
 }
 
@@ -82,7 +75,7 @@ describe('CommandCenter', () => {
     const result = await cc.dispatchCommand(cmd);
 
     expect(result.status).toBe('succeeded');
-    expect(bm._mockVoyager.pause).toHaveBeenCalledOnce();
+    expect(bm._mockWorker.sendCommand).toHaveBeenCalledWith('setMode', { pause: true });
   });
 
   it('dispatches stop_movement command', async () => {
@@ -93,7 +86,7 @@ describe('CommandCenter', () => {
     const result = await cc.dispatchCommand(cmd);
 
     expect(result.status).toBe('succeeded');
-    expect(bm._mockBot.pathfinder.stop).toHaveBeenCalledOnce();
+    expect(bm._mockWorker.sendCommand).toHaveBeenCalledWith('stopMovement', {});
   });
 
   it('emits socket events on state changes', async () => {
@@ -138,28 +131,12 @@ describe('CommandCenter', () => {
   });
 
   it('fans out squad-scoped commands across squad members', async () => {
-    const secondVoyager = {
-      pause: vi.fn(),
-      resume: vi.fn(),
-      isRunning: vi.fn().mockReturnValue(true),
-      isPaused: vi.fn().mockReturnValue(false),
-    };
-    const secondBot = {
-      pathfinder: { stop: vi.fn(), setGoal: vi.fn() },
-      players: {},
-      entity: { position: { x: 10, y: 64, z: 10 } },
-      inventory: { items: vi.fn().mockReturnValue([]) },
-    };
-    const secondInstance = {
-      bot: secondBot,
-      getVoyagerLoop: vi.fn().mockReturnValue(secondVoyager),
+    const secondWorker = {
+      sendCommand: vi.fn(),
+      isAlive: vi.fn().mockReturnValue(true),
       name: 'Bravo',
     };
-
-    bm.getBot.mockImplementation((name: string) => {
-      if (name === 'Bravo') return secondInstance;
-      return bm._mockInstance;
-    });
+    bm._workers.set('bravo', secondWorker);
 
     const parent = cc.createCommand({
       type: 'pause_voyager',
@@ -171,54 +148,36 @@ describe('CommandCenter', () => {
 
     expect(result.status).toBe('succeeded');
     expect(result.childCommandIds).toHaveLength(2);
-    expect(bm._mockVoyager.pause).toHaveBeenCalledOnce();
-    expect(secondVoyager.pause).toHaveBeenCalledOnce();
+    expect(bm._mockWorker.sendCommand).toHaveBeenCalledWith('setMode', { pause: true });
+    expect(secondWorker.sendCommand).toHaveBeenCalledWith('setMode', { pause: true });
   });
 
-  // ── Task 1: Cancellation stops pathfinder for movement commands ──
+  // ── Task 1: Cancellation transitions status correctly ──
+  // Note: pathfinder-stop on cancel was removed; cancellation only changes status now.
 
-  it('stops pathfinder when cancelling a started movement command', async () => {
-    // Create and dispatch a walk_to_coords command
+  it('cancelling a started command transitions it to cancelled', () => {
     const cmd = cc.createCommand({
-      type: 'walk_to_coords',
-      targets: ['TestBot'],
-      params: { x: 100, y: 64, z: 200 },
-    });
-    await cc.dispatchCommand(cmd);
-
-    // It should have succeeded (mock pathfinder.setGoal works), so let's
-    // test cancelling a command that's in 'started' status by creating one
-    // and manually setting its status
-    const cmd2 = cc.createCommand({
       type: 'follow_player',
       targets: ['TestBot'],
       params: { playerName: 'Steve' },
     });
-    // Force the command into started status for testing cancellation
-    (cmd2 as any).status = 'started';
-    (cmd2 as any).startedAt = new Date().toISOString();
+    (cmd as any).status = 'started';
+    (cmd as any).startedAt = new Date().toISOString();
 
-    bm._mockBot.pathfinder.stop.mockClear();
-    cc.cancelCommand(cmd2.id);
-
-    expect(cmd2.status).toBe('cancelled');
-    expect(bm._mockBot.pathfinder.stop).toHaveBeenCalled();
+    cc.cancelCommand(cmd.id);
+    expect(cmd.status).toBe('cancelled');
   });
 
-  it('does NOT stop pathfinder when cancelling a non-movement command', () => {
+  it('cancelling a non-movement command transitions it to cancelled', () => {
     const cmd = cc.createCommand({
       type: 'pause_voyager',
       targets: ['TestBot'],
     });
-    // Force into started
     (cmd as any).status = 'started';
     (cmd as any).startedAt = new Date().toISOString();
 
-    bm._mockBot.pathfinder.stop.mockClear();
     cc.cancelCommand(cmd.id);
-
     expect(cmd.status).toBe('cancelled');
-    expect(bm._mockBot.pathfinder.stop).not.toHaveBeenCalled();
   });
 
   it('includes reason in cancellation error', () => {
@@ -313,8 +272,6 @@ describe('CommandCenter', () => {
   // ── Task 4: Bot validation ──
 
   it('fails with BOT_NOT_FOUND if bot does not exist', async () => {
-    bm.getBot.mockReturnValue(null);
-
     const cmd = cc.createCommand({
       type: 'pause_voyager',
       targets: ['NonExistentBot'],
@@ -326,7 +283,7 @@ describe('CommandCenter', () => {
   });
 
   it('fails with BOT_OFFLINE if bot is not connected', async () => {
-    bm._mockInstance.bot = null;
+    bm._mockWorker.isAlive.mockReturnValue(false);
 
     const cmd = cc.createCommand({
       type: 'stop_movement',
@@ -380,7 +337,7 @@ describe('CommandCenter', () => {
 
   // ── Persistence ──
 
-  it('persist writes synchronously on each mutation', async () => {
+  it('persist writes to disk after creating commands (debounced + flush)', async () => {
     const fs = await import('fs');
     const writeFileSync = vi.mocked(fs.writeFileSync);
     writeFileSync.mockClear();
@@ -389,7 +346,8 @@ describe('CommandCenter', () => {
     cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
     cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
 
-    // persist() is called synchronously on each createCommand, not debounced
-    expect(writeFileSync.mock.calls.length).toBeGreaterThanOrEqual(3);
+    // persist() is debounced — flush to force the write
+    cc.flush();
+    expect(writeFileSync.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 });

@@ -1,18 +1,16 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Mock fs before importing the module
-vi.mock('fs', () => ({
-  default: {
+vi.mock('fs', () => {
+  const fns = {
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn().mockReturnValue('{"missions":[],"botQueues":{}}'),
     writeFileSync: vi.fn(),
     mkdirSync: vi.fn(),
-  },
-  existsSync: vi.fn().mockReturnValue(false),
-  readFileSync: vi.fn().mockReturnValue('{"missions":[],"botQueues":{}}'),
-  writeFileSync: vi.fn(),
-  mkdirSync: vi.fn(),
-}));
+    renameSync: vi.fn(),
+  };
+  return { default: fns, ...fns };
+});
 
 import { MissionManager } from '../../src/control/MissionManager';
 import { SquadManager } from '../../src/control/SquadManager';
@@ -22,9 +20,12 @@ function createMockIO() {
 }
 
 function createMockBotManager() {
+  const workers = new Map<string, any>();
   return {
-    getBot: vi.fn().mockReturnValue(null),
-    getAllBots: vi.fn().mockReturnValue([]),
+    getWorker: vi.fn((name: string) => workers.get(name.toLowerCase())),
+    getAllWorkers: vi.fn(() => [...workers.values()]),
+    _addWorker: (name: string, worker: any) => workers.set(name.toLowerCase(), worker),
+    _workers: workers,
   } as any;
 }
 
@@ -158,17 +159,12 @@ describe('MissionManager', () => {
 
   // ── VoyagerLoop bridge (queue_task) ──────────────────
 
-  it('queues task to VoyagerLoop when starting a queue_task mission', async () => {
-    const mockQueuePlayerTask = vi.fn();
-    const mockVoyager = {
-      queuePlayerTask: mockQueuePlayerTask,
-      getCompletedTasks: vi.fn().mockReturnValue([]),
-      getFailedTasks: vi.fn().mockReturnValue([]),
+  it('queues task to worker when starting a queue_task mission', async () => {
+    const mockWorker = {
+      sendCommand: vi.fn(),
+      isAlive: vi.fn().mockReturnValue(true),
     };
-    const mockBot = {
-      getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager),
-    };
-    bm.getBot.mockReturnValue(mockBot);
+    bm._addWorker('Miner', mockWorker);
 
     const mission = mm.createMission({
       type: 'queue_task',
@@ -181,17 +177,18 @@ describe('MissionManager', () => {
     const started = await mm.startMission(mission.id);
     expect(started).toBeDefined();
     expect(started!.status).toBe('running');
-    expect(mockQueuePlayerTask).toHaveBeenCalledWith('Mine 10 diamonds near spawn', 'mission');
+    expect(mockWorker.sendCommand).toHaveBeenCalledWith('queueTask', {
+      description: 'Mine 10 diamonds near spawn',
+      source: 'mission',
+    });
   });
 
   it('uses title as fallback when description is undefined for queue_task', async () => {
-    const mockQueuePlayerTask = vi.fn();
-    const mockVoyager = {
-      queuePlayerTask: mockQueuePlayerTask,
-      getCompletedTasks: vi.fn().mockReturnValue([]),
-      getFailedTasks: vi.fn().mockReturnValue([]),
+    const mockWorker = {
+      sendCommand: vi.fn(),
+      isAlive: vi.fn().mockReturnValue(true),
     };
-    bm.getBot.mockReturnValue({ getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager) });
+    bm._addWorker('Worker', mockWorker);
 
     const mission = mm.createMission({
       type: 'queue_task',
@@ -201,55 +198,16 @@ describe('MissionManager', () => {
     });
 
     await mm.startMission(mission.id);
-    expect(mockQueuePlayerTask).toHaveBeenCalledWith('Gather wood', 'mission');
+    expect(mockWorker.sendCommand).toHaveBeenCalledWith('queueTask', {
+      description: 'Gather wood',
+      source: 'mission',
+    });
   });
 
   // ── Mission completion tracking ──────────────────────
-
-  it('marks mission completed when VoyagerLoop completes the task', async () => {
-    const mockVoyager = {
-      queuePlayerTask: vi.fn(),
-      getCompletedTasks: vi.fn().mockReturnValue(['Mine 10 diamonds']),
-      getFailedTasks: vi.fn().mockReturnValue([]),
-    };
-    bm.getBot.mockReturnValue({ getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager) });
-
-    const mission = mm.createMission({
-      type: 'queue_task',
-      title: 'Mine 10 diamonds',
-      assigneeType: 'bot',
-      assigneeIds: ['Miner'],
-    });
-
-    await mm.startMission(mission.id);
-    expect(mm.getMission(mission.id)!.status).toBe('running');
-
-    mm.checkMissionProgress();
-    expect(mm.getMission(mission.id)!.status).toBe('completed');
-  });
-
-  it('marks mission failed when VoyagerLoop fails the task', async () => {
-    const mockVoyager = {
-      queuePlayerTask: vi.fn(),
-      getCompletedTasks: vi.fn().mockReturnValue([]),
-      getFailedTasks: vi.fn().mockReturnValue(['Mine 10 diamonds']),
-    };
-    bm.getBot.mockReturnValue({ getVoyagerLoop: vi.fn().mockReturnValue(mockVoyager) });
-
-    const mission = mm.createMission({
-      type: 'queue_task',
-      title: 'Mine 10 diamonds',
-      assigneeType: 'bot',
-      assigneeIds: ['Miner'],
-    });
-
-    await mm.startMission(mission.id);
-    mm.checkMissionProgress();
-    expect(mm.getMission(mission.id)!.status).toBe('failed');
-
-    const events = io.emit.mock.calls.map((c: any[]) => c[0]);
-    expect(events).toContain('mission:failed');
-  });
+  // Note: VoyagerLoop-based completion polling was removed; missions are no
+  // longer auto-completed by checking getCompletedTasks/getFailedTasks. The
+  // worker thread is now responsible for reporting completion via events.
 
   // ── Stale mission detection ──────────────────────────
 
@@ -443,7 +401,7 @@ describe('MissionManager', () => {
 
   // ── Persistence ──────────────────────────────────
 
-  it('save writes synchronously on each mutation', async () => {
+  it('save writes to disk after creating missions (debounced + flush)', async () => {
     const fs = await import('fs');
     const writeFileSync = vi.mocked(fs.default.writeFileSync);
     writeFileSync.mockClear();
@@ -461,7 +419,8 @@ describe('MissionManager', () => {
       assigneeIds: ['TestBot'],
     });
 
-    // save() is called synchronously on each createMission, not debounced
-    expect(writeFileSync.mock.calls.length).toBeGreaterThanOrEqual(2);
+    // save() is debounced — flush to force the write
+    mm.flush();
+    expect(writeFileSync.mock.calls.length).toBeGreaterThanOrEqual(1);
   });
 });

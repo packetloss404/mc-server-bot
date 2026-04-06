@@ -559,4 +559,14 @@ export class ChainCoordinator {
       }
     }
   }
+
+  /** Stop polling and flush chain state to disk (call on process exit). */
+  shutdown(): void {
+    if (this.pollingInterval) {
+      clearInterval(this.pollingInterval);
+      this.pollingInterval = null;
+    }
+    this.save();
+    logger.info('Chain coordinator shut down, state flushed to disk');
+  }
 }

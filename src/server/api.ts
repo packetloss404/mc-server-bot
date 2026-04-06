@@ -3,34 +3,24 @@ import cors from 'cors';
 import http from 'http';
 import path from 'path';
 import fs from 'fs';
+import { Vec3 } from 'vec3';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
 import { EventLog } from './EventLog';
+import { BuildCoordinator } from '../build/BuildCoordinator';
+import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
-import { CommandCenter } from '../control/CommandCenter';
-import { MissionManager } from '../control/MissionManager';
-import { MarkerStore } from '../control/MarkerStore';
-import { SquadManager } from '../control/SquadManager';
-import { RoleManager } from '../control/RoleManager';
-import { CommanderService } from '../control/CommanderService';
-import { LLMClient } from '../ai/LLMClient';
-import { CommandType } from '../control/CommandTypes';
-import { MissionType, MissionStatus } from '../control/MissionTypes';
 
 export interface APIServerResult {
   app: express.Application;
   httpServer: http.Server;
   io: SocketIOServer;
   eventLog: EventLog;
-  markerStore: MarkerStore;
-  squadManager: SquadManager;
-  roleManager: RoleManager;
-  commandCenter: CommandCenter;
-  missionManager: MissionManager;
-  commanderService: CommanderService;
+  buildCoordinator: BuildCoordinator;
+  chainCoordinator: ChainCoordinator;
 }
 
-export function createAPIServer(botManager: BotManager, llmClient?: LLMClient | null): APIServerResult {
+export function createAPIServer(botManager: BotManager): APIServerResult {
   const app = express();
   const httpServer = http.createServer(app);
 
@@ -73,21 +63,11 @@ export function createAPIServer(botManager: BotManager, llmClient?: LLMClient | 
     });
   });
 
-  // ═══════════════════════════════════════
-  //  CONTROL PLATFORM — instantiate managers
-  // ═══════════════════════════════════════
+  // ── Build coordinator ──
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
 
-  const markerStore = new MarkerStore(io);
-  const squadManager = new SquadManager(io);
-  const roleManager = new RoleManager(io);
-  const commandCenter = new CommandCenter(botManager, io, markerStore);
-  commandCenter.setRoleManager(roleManager);
-  const missionManager = new MissionManager(botManager, io);
-  missionManager.setCommandCenter(commandCenter);
-  missionManager.setSquadManager(squadManager);
-  roleManager.setMissionManager(missionManager);
-
-  const commanderService = new CommanderService({ llmClient: llmClient ?? null });
+  // ── Supply chain coordinator ──
+  const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -413,787 +393,262 @@ export function createAPIServer(botManager: BotManager, llmClient?: LLMClient | 
   });
 
   // ═══════════════════════════════════════
-  //  BOT ACTION ROUTES (sendCommand shortcuts)
+  //  SCHEMATIC ENDPOINTS
   // ═══════════════════════════════════════
 
-  app.post('/api/bots/:name/pause', (req: Request, res: Response) => {
+  // List .schem files in schematics/ directory
+  app.get('/api/schematics', async (_req: Request, res: Response) => {
     try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('setMode', { pause: true });
-      res.json({ success: true });
+      const schematics = await buildCoordinator.listSchematics();
+      res.json({ schematics });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/resume', (req: Request, res: Response) => {
-    try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('setMode', { pause: false });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/stop', (req: Request, res: Response) => {
-    try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('disconnect', {});
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/follow', (req: Request, res: Response) => {
-    try {
-      const { playerName } = req.body;
-      if (!playerName) {
-        res.status(400).json({ error: 'playerName is required' });
-        return;
-      }
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('follow', { playerName });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/walkto', (req: Request, res: Response) => {
-    try {
-      const { x, y, z } = req.body;
-      if (x == null || y == null || z == null) {
-        res.status(400).json({ error: 'x, y, z coordinates are required' });
-        return;
-      }
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('walkTo', { x, y, z });
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/return-to-base', (req: Request, res: Response) => {
-    try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('returnToBase', {});
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/unstuck', (req: Request, res: Response) => {
-    try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('unstuck', {});
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/bots/:name/equip-best', (req: Request, res: Response) => {
-    try {
-      const handle = botManager.getWorker(req.params.name as string);
-      if (!handle || !handle.isAlive()) {
-        res.status(404).json({ error: 'Bot not found or not connected' });
-        return;
-      }
-      handle.sendCommand('equipBest', {});
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+      res.status(500).json({ error: err.message });
     }
   });
 
   // ═══════════════════════════════════════
-  //  PLAYERS
+  //  BUILD ENDPOINTS
   // ═══════════════════════════════════════
 
-  app.get('/api/players', (_req: Request, res: Response) => {
-    try {
-      const playerSet = new Set<string>();
-      for (const w of botManager.getAllWorkers()) {
-        const detailed = w.getCachedDetailedStatus();
-        if (detailed?.nearbyPlayers) {
-          for (const p of detailed.nearbyPlayers) {
-            playerSet.add(typeof p === 'string' ? p : (p as any).name ?? String(p));
-          }
-        }
-      }
-      res.json({ players: Array.from(playerSet) });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
+  // List all build jobs
+  app.get('/api/builds', (_req: Request, res: Response) => {
+    res.json({ builds: buildCoordinator.getAllBuildJobs() });
   });
 
-  // ═══════════════════════════════════════
-  //  TERRAIN
-  // ═══════════════════════════════════════
-
-  app.get('/api/terrain', (_req: Request, res: Response) => {
-    try {
-      const workers = botManager.getAllWorkers();
-      const botPositions: Record<string, any> = {};
-      for (const w of workers) {
-        const status = w.getCachedStatus();
-        if (status?.position) {
-          botPositions[status.name] = status.position;
-        }
-      }
-      res.json({ botPositions, markers: markerStore.getMarkers(), zones: markerStore.getZones() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Get a specific build job
+  app.get('/api/builds/:id', (req: Request, res: Response) => {
+    const job = buildCoordinator.getBuildJob(req.params.id as string);
+    if (!job) {
+      res.status(404).json({ error: 'Build job not found' });
+      return;
     }
+    res.json({ build: job });
   });
 
-  // ═══════════════════════════════════════
-  //  BOT MISSION QUEUE
-  // ═══════════════════════════════════════
-
-  app.get('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
+  // Start a new build
+  app.post('/api/builds', async (req: Request, res: Response) => {
     try {
-      const botName = req.params.name as string;
-      const queue = missionManager.getBotMissionQueue(botName);
-      res.json({ queue });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
+      const { schematicFile, origin, botNames, options } = req.body;
 
-  app.patch('/api/bots/:name/mission-queue', (req: Request, res: Response) => {
-    try {
-      const botName = req.params.name as string;
-      const { action, missionId, position } = req.body;
-      if (!action) {
-        res.status(400).json({ error: 'action is required (remove | reorder | clear)' });
+      if (!schematicFile || !origin || !botNames || !Array.isArray(botNames)) {
+        res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' });
         return;
       }
-      const success = missionManager.updateBotMissionQueue(botName, action, missionId, position);
-      if (!success) {
-        res.status(400).json({ error: 'Failed to update mission queue' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
 
-  // ═══════════════════════════════════════
-  //  BOT OVERRIDE
-  // ═══════════════════════════════════════
+      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames, options);
 
-  app.get('/api/bots/:name/override', (req: Request, res: Response) => {
-    try {
-      const botName = req.params.name as string;
-      const override = roleManager.getOverride(botName);
-      res.json({ override });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.delete('/api/bots/:name/override', (req: Request, res: Response) => {
-    try {
-      const botName = req.params.name as string;
-      roleManager.clearOverride(botName);
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  COMMANDS (Control Platform)
-  // ═══════════════════════════════════════
-
-  app.post('/api/commands', async (req: Request, res: Response) => {
-    try {
-      const { type, scope, priority, source, targets, params, payload, force } = req.body;
-      if (!type || !targets || !Array.isArray(targets) || targets.length === 0) {
-        res.status(400).json({ error: 'type and targets[] are required' });
-        return;
-      }
-      const command = commandCenter.createCommand({
-        type: type as CommandType,
-        scope,
-        priority,
-        source,
-        targets,
-        params,
-        payload,
-        force,
+      const event = eventLog.push({
+        type: 'build:started',
+        botName: botNames.join(', '),
+        description: `Build started: ${schematicFile}`,
+        metadata: { jobId: job.id },
       });
-      const dispatched = await commandCenter.dispatchCommand(command, force);
-      res.status(201).json({ command: dispatched });
+      io.emit('activity', event);
+
+      res.status(201).json({ build: job });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+      res.status(400).json({ error: err.message });
     }
   });
 
-  app.get('/api/commands', (req: Request, res: Response) => {
-    try {
-      const bot = req.query.bot ? String(req.query.bot) : undefined;
-      const status = req.query.status ? String(req.query.status) : undefined;
-      const limit = req.query.limit ? parseInt(String(req.query.limit)) : undefined;
-      const commands = commandCenter.getCommands({ bot, status: status as any, limit });
-      res.json({ commands });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Cancel a build
+  app.post('/api/builds/:id/cancel', (req: Request, res: Response) => {
+    const success = buildCoordinator.cancelBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or already finished' });
+      return;
     }
+    res.json({ success: true });
   });
 
-  app.get('/api/commands/:id', (req: Request, res: Response) => {
-    try {
-      const command = commandCenter.getCommand(req.params.id as string);
-      if (!command) {
-        res.status(404).json({ error: 'Command not found' });
-        return;
-      }
-      res.json({ command });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Pause a build
+  app.post('/api/builds/:id/pause', (req: Request, res: Response) => {
+    const success = buildCoordinator.pauseBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not running' });
+      return;
     }
+    res.json({ success: true });
   });
 
-  app.post('/api/commands/:id/cancel', (req: Request, res: Response) => {
-    try {
-      const { reason } = req.body ?? {};
-      const command = commandCenter.cancelCommand(req.params.id as string, reason);
-      if (!command) {
-        res.status(404).json({ error: 'Command not found' });
-        return;
-      }
-      res.json({ command });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Resume a build
+  app.post('/api/builds/:id/resume', (req: Request, res: Response) => {
+    const success = buildCoordinator.resumeBuild(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Build not found or not paused' });
+      return;
     }
+    res.json({ success: true });
   });
 
   // ═══════════════════════════════════════
-  //  MISSIONS (Control Platform)
+  //  SUPPLY CHAIN ENDPOINTS
   // ═══════════════════════════════════════
 
-  app.post('/api/missions', (req: Request, res: Response) => {
+  // List chain templates
+  app.get('/api/chains/templates', (_req: Request, res: Response) => {
+    res.json({ templates: chainCoordinator.getTemplates() });
+  });
+
+  // List all chains
+  app.get('/api/chains', (_req: Request, res: Response) => {
+    res.json({ chains: chainCoordinator.getAllChains() });
+  });
+
+  // Get a specific chain
+  app.get('/api/chains/:id', (req: Request, res: Response) => {
+    const chain = chainCoordinator.getChain(req.params.id as string);
+    if (!chain) {
+      res.status(404).json({ error: 'Supply chain not found' });
+      return;
+    }
+    res.json({ chain });
+  });
+
+  // Create a new chain
+  app.post('/api/chains', (req: Request, res: Response) => {
     try {
-      const { type, title, description, assigneeType, assigneeIds, priority, source, steps, linkedCommandIds } = req.body;
-      if (!type || !title || !assigneeType || !assigneeIds || !Array.isArray(assigneeIds)) {
-        res.status(400).json({ error: 'type, title, assigneeType, and assigneeIds[] are required' });
-        return;
-      }
-      const mission = missionManager.createMission({
-        type: type as MissionType,
-        title,
-        description,
-        assigneeType,
-        assigneeIds,
-        priority,
-        source,
-        steps,
-        linkedCommandIds,
+      const chain = chainCoordinator.createChain(req.body);
+
+      const event = eventLog.push({
+        type: 'chain:created',
+        botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
+        description: `Supply chain created: ${chain.name}`,
+        metadata: { chainId: chain.id },
       });
-      res.status(201).json({ mission });
+      io.emit('activity', event);
+
+      res.status(201).json({ chain });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+      res.status(400).json({ error: err.message });
     }
   });
 
-  app.get('/api/missions', (req: Request, res: Response) => {
-    try {
-      const bot = req.query.bot ? String(req.query.bot) : undefined;
-      const squad = req.query.squad ? String(req.query.squad) : undefined;
-      const status = req.query.status ? String(req.query.status) : undefined;
-      const limit = req.query.limit ? parseInt(String(req.query.limit)) : undefined;
-      const missions = missionManager.getMissions({ bot, squad, status: status as MissionStatus, limit });
-      res.json({ missions });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Start a chain
+  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
+    const success = chainCoordinator.startChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or already running' });
+      return;
     }
+    res.json({ success: true });
   });
 
-  app.get('/api/missions/:id', (req: Request, res: Response) => {
-    try {
-      const mission = missionManager.getMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Pause a chain
+  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
+    const success = chainCoordinator.pauseChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found or not running' });
+      return;
     }
+    res.json({ success: true });
   });
 
-  app.post('/api/missions/:id/start', async (req: Request, res: Response) => {
-    try {
-      const mission = await missionManager.startMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found or cannot be started' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Cancel a chain
+  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
+    const success = chainCoordinator.cancelChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
     }
+    res.json({ success: true });
   });
 
-  app.post('/api/missions/:id/pause', (req: Request, res: Response) => {
-    try {
-      const mission = missionManager.pauseMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found or cannot be paused' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+  // Delete a chain
+  app.delete('/api/chains/:id', (req: Request, res: Response) => {
+    const success = chainCoordinator.deleteChain(req.params.id as string);
+    if (!success) {
+      res.status(404).json({ error: 'Chain not found' });
+      return;
     }
-  });
-
-  app.post('/api/missions/:id/resume', (req: Request, res: Response) => {
-    try {
-      const mission = missionManager.resumeMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found or cannot be resumed' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/missions/:id/cancel', (req: Request, res: Response) => {
-    try {
-      const mission = missionManager.cancelMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found or cannot be cancelled' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/missions/:id/retry', (req: Request, res: Response) => {
-    try {
-      const mission = missionManager.retryMission(req.params.id as string);
-      if (!mission) {
-        res.status(404).json({ error: 'Mission not found or cannot be retried' });
-        return;
-      }
-      res.json({ mission });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
+    res.json({ success: true });
   });
 
   // ═══════════════════════════════════════
-  //  MARKERS (Control Platform)
+  //  TERRAIN ENDPOINTS
   // ═══════════════════════════════════════
 
-  app.get('/api/markers', (_req: Request, res: Response) => {
+  // Scan blocks around a bot's position
+  app.get('/api/terrain', (req: Request, res: Response) => {
     try {
-      res.json({ markers: markerStore.getMarkers() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
+      const botName = req.query.bot ? String(req.query.bot) : undefined;
+      const radius = parseInt(String(req.query.radius ?? '8'), 10);
 
-  app.post('/api/markers', (req: Request, res: Response) => {
-    try {
-      const { name, kind, position, tags, notes } = req.body;
-      if (!name || !kind || !position) {
-        res.status(400).json({ error: 'name, kind, and position are required' });
-        return;
-      }
-      const marker = markerStore.createMarker({ name, kind, position, tags, notes });
-      res.status(201).json({ marker });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.patch('/api/markers/:id', (req: Request, res: Response) => {
-    try {
-      const updated = markerStore.updateMarker(req.params.id as string, req.body);
-      if (!updated) {
-        res.status(404).json({ error: 'Marker not found' });
-        return;
-      }
-      res.json({ marker: updated });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.delete('/api/markers/:id', (req: Request, res: Response) => {
-    try {
-      const deleted = markerStore.deleteMarker(req.params.id as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Marker not found' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  ZONES (Control Platform)
-  // ═══════════════════════════════════════
-
-  app.get('/api/zones', (_req: Request, res: Response) => {
-    try {
-      res.json({ zones: markerStore.getZones() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/zones', (req: Request, res: Response) => {
-    try {
-      const { name, mode, shape, circle, rectangle, markerIds, rules } = req.body;
-      if (!name || !mode || !shape) {
-        res.status(400).json({ error: 'name, mode, and shape are required' });
-        return;
-      }
-      const zone = markerStore.createZone({ name, mode, shape, circle, rectangle, markerIds, rules });
-      res.status(201).json({ zone });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.patch('/api/zones/:id', (req: Request, res: Response) => {
-    try {
-      const updated = markerStore.updateZone(req.params.id as string, req.body);
-      if (!updated) {
-        res.status(404).json({ error: 'Zone not found' });
-        return;
-      }
-      res.json({ zone: updated });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.delete('/api/zones/:id', (req: Request, res: Response) => {
-    try {
-      const deleted = markerStore.deleteZone(req.params.id as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Zone not found' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  ROUTES (Control Platform)
-  // ═══════════════════════════════════════
-
-  app.get('/api/routes', (_req: Request, res: Response) => {
-    try {
-      res.json({ routes: markerStore.getRoutes() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/routes', (req: Request, res: Response) => {
-    try {
-      const { name, waypointIds, loop } = req.body;
-      if (!name || !waypointIds || !Array.isArray(waypointIds)) {
-        res.status(400).json({ error: 'name and waypointIds[] are required' });
-        return;
-      }
-      const route = markerStore.createRoute({ name, waypointIds, loop: loop ?? false });
-      res.status(201).json({ route });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.patch('/api/routes/:id', (req: Request, res: Response) => {
-    try {
-      const updated = markerStore.updateRoute(req.params.id as string, req.body);
-      if (!updated) {
-        res.status(404).json({ error: 'Route not found' });
-        return;
-      }
-      res.json({ route: updated });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.delete('/api/routes/:id', (req: Request, res: Response) => {
-    try {
-      const deleted = markerStore.deleteRoute(req.params.id as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Route not found' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  SQUADS (Control Platform)
-  // ═══════════════════════════════════════
-
-  app.get('/api/squads', (_req: Request, res: Response) => {
-    try {
-      res.json({ squads: squadManager.getSquads() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/squads', (req: Request, res: Response) => {
-    try {
-      const { name, botNames, defaultRole, homeMarkerId } = req.body;
-      if (!name) {
-        res.status(400).json({ error: 'name is required' });
-        return;
-      }
-      const squad = squadManager.createSquad({ name, botNames: botNames ?? [], defaultRole, homeMarkerId });
-      res.status(201).json({ squad });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.get('/api/squads/:id', (req: Request, res: Response) => {
-    try {
-      const squad = squadManager.getSquad(req.params.id as string);
-      if (!squad) {
-        res.status(404).json({ error: 'Squad not found' });
-        return;
-      }
-      res.json({ squad });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.patch('/api/squads/:id', (req: Request, res: Response) => {
-    try {
-      const updated = squadManager.updateSquad(req.params.id as string, req.body);
-      if (!updated) {
-        res.status(404).json({ error: 'Squad not found' });
-        return;
-      }
-      res.json({ squad: updated });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.delete('/api/squads/:id', (req: Request, res: Response) => {
-    try {
-      const deleted = squadManager.deleteSquad(req.params.id as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Squad not found' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/squads/:id/members', (req: Request, res: Response) => {
-    try {
-      const { botName } = req.body;
       if (!botName) {
-        res.status(400).json({ error: 'botName is required' });
+        res.status(400).json({ error: 'bot query parameter is required' });
         return;
       }
-      const success = squadManager.addBotToSquad(req.params.id as string, botName);
-      if (!success) {
-        res.status(404).json({ error: 'Squad not found' });
+
+      const handle = botManager.getWorker(botName) as any;
+      if (!handle) {
+        res.status(404).json({ error: 'Bot not found' });
         return;
       }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
 
-  app.delete('/api/squads/:id/members/:botName', (req: Request, res: Response) => {
-    try {
-      const success = squadManager.removeBotFromSquad(req.params.id as string, req.params.botName as string);
-      if (!success) {
-        res.status(404).json({ error: 'Squad or bot not found' });
+      const detailed = handle.getCachedDetailedStatus();
+      const pos = detailed?.position || handle.getCachedStatus()?.position;
+      if (!pos) {
+        res.status(400).json({ error: 'Bot position not available' });
         return;
       }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
 
-  // ═══════════════════════════════════════
-  //  ROLES (Control Platform)
-  // ═══════════════════════════════════════
+      // Use the bot's mineflayer instance if available via worker
+      // Since we use worker threads, we read from cached detailed status
+      // and report block info from the bot's position
+      const clampedRadius = Math.min(radius, 16);
+      const blocks: Array<{ x: number; y: number; z: number; name: string }> = [];
 
-  app.get('/api/roles/assignments', (_req: Request, res: Response) => {
-    try {
-      res.json({ assignments: roleManager.getAssignments() });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/roles/assignments', (req: Request, res: Response) => {
-    try {
-      const { botName, role, autonomyLevel, homeMarkerId, allowedZoneIds, preferredMissionTypes, interruptPolicy, loadoutPolicy } = req.body;
-      if (!botName || !role || !autonomyLevel) {
-        res.status(400).json({ error: 'botName, role, and autonomyLevel are required' });
-        return;
-      }
-      const assignment = roleManager.createAssignment({
-        botName,
-        role,
-        autonomyLevel,
-        homeMarkerId,
-        allowedZoneIds,
-        preferredMissionTypes,
-        interruptPolicy,
-        loadoutPolicy,
+      // We cannot directly access mineflayer from the main thread (worker architecture),
+      // so return the bot's position and nearby entity/block info from cached state
+      res.json({
+        bot: botName,
+        center: pos,
+        radius: clampedRadius,
+        blocks,
+        note: 'Block scanning requires direct bot access; use /api/terrain/height for ground-level queries via bot commands',
       });
-      res.status(201).json({ assignment });
     } catch (err: any) {
-      res.status(400).json({ error: err?.message ?? 'Invalid role assignment' });
+      res.status(500).json({ error: err.message });
     }
   });
 
-  app.get('/api/roles/assignments/:id', (req: Request, res: Response) => {
+  // Get ground height at coordinates (uses first available bot to probe)
+  app.get('/api/terrain/height', (req: Request, res: Response) => {
     try {
-      const assignment = roleManager.getAssignment(req.params.id as string);
-      if (!assignment) {
-        res.status(404).json({ error: 'Assignment not found' });
+      const x = parseInt(String(req.query.x ?? ''), 10);
+      const z = parseInt(String(req.query.z ?? ''), 10);
+
+      if (isNaN(x) || isNaN(z)) {
+        res.status(400).json({ error: 'x and z query parameters are required (integers)' });
         return;
       }
-      res.json({ assignment });
+
+      // Find a connected bot to probe terrain
+      const workers = botManager.getAllWorkers();
+      const probeBot = workers.find((w) => w.isAlive());
+
+      if (!probeBot) {
+        res.status(503).json({ error: 'No connected bots available to probe terrain' });
+        return;
+      }
+
+      // Since bots run in worker threads, we send a command and return a best-effort estimate
+      // based on the bot's known position. For real height queries, the dashboard can
+      // ask the bot to navigate to the location.
+      const status = probeBot.getCachedDetailedStatus();
+      const botPos = status?.position;
+
+      res.json({
+        x,
+        z,
+        estimatedHeight: botPos ? Math.round(botPos.y) : null,
+        probeBotName: probeBot.botName,
+        note: 'Height is estimated from probe bot position; exact height requires the bot to be near the target coordinates',
+      });
     } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
+      res.status(500).json({ error: err.message });
     }
   });
 
-  app.patch('/api/roles/assignments/:id', (req: Request, res: Response) => {
-    try {
-      const updated = roleManager.updateAssignment(req.params.id as string, req.body);
-      if (!updated) {
-        res.status(404).json({ error: 'Assignment not found' });
-        return;
-      }
-      res.json({ assignment: updated });
-    } catch (err: any) {
-      res.status(400).json({ error: err?.message ?? 'Invalid update' });
-    }
-  });
-
-  app.delete('/api/roles/assignments/:id', (req: Request, res: Response) => {
-    try {
-      const deleted = roleManager.deleteAssignment(req.params.id as string);
-      if (!deleted) {
-        res.status(404).json({ error: 'Assignment not found' });
-        return;
-      }
-      res.json({ success: true });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  // ═══════════════════════════════════════
-  //  COMMANDER (Natural Language)
-  // ═══════════════════════════════════════
-
-  app.post('/api/commander/parse', async (req: Request, res: Response) => {
-    try {
-      const { input } = req.body;
-      if (!input) {
-        res.status(400).json({ error: 'input is required' });
-        return;
-      }
-      const plan = await commanderService.parse(input);
-      res.json({ plan });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  app.post('/api/commander/execute', async (req: Request, res: Response) => {
-    try {
-      const { planId } = req.body;
-      if (!planId) {
-        res.status(400).json({ error: 'planId is required' });
-        return;
-      }
-      const result = await commanderService.execute(planId);
-      if (!result) {
-        res.status(404).json({ error: 'Plan not found or requires clarification' });
-        return;
-      }
-      res.json({ result });
-    } catch (err: any) {
-      res.status(500).json({ error: err?.message ?? 'Internal error' });
-    }
-  });
-
-  return {
-    app,
-    httpServer,
-    io,
-    eventLog,
-    markerStore,
-    squadManager,
-    roleManager,
-    commandCenter,
-    missionManager,
-    commanderService,
-  };
+  return { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator };
 }

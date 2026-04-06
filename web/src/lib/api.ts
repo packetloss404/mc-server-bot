@@ -194,8 +194,171 @@ export interface MissionRecord {
   updatedAt: number;
 }
 
+export interface Marker {
+  id: string;
+  name: string;
+  position: { x: number; y: number; z: number };
+  x: number;
+  y: number;
+  z: number;
+  type?: string;
+  color?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  type: string;
+  bounds: Record<string, any>;
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  color?: string;
+  metadata?: Record<string, any>;
+}
+
+export interface Route {
+  id: string;
+  name: string;
+  waypoints: { x: number; y: number; z: number }[];
+  loop?: boolean;
+  color?: string;
+  metadata?: Record<string, any>;
+}
+
 export type MarkerRecord = Marker;
 export type ZoneRecord = Zone;
+export type RouteRecord = Route;
+
+export interface SchematicInfo {
+  filename: string;
+  size: { x: number; y: number; z: number };
+  blockCount: number;
+  palette?: string[];
+}
+
+export interface BuildRecord {
+  id: string;
+  schematicFile: string;
+  status: string;
+  origin: { x: number; y: number; z: number };
+  totalBlocks: number;
+  placedBlocks?: number;
+  assignments?: { botName: string; status: string; blocksPlaced?: number; blocksTotal?: number; yMin?: number; yMax?: number; currentY?: number }[];
+  metadata?: Record<string, any>;
+}
+
+export interface Routine {
+  id: string;
+  name: string;
+  description?: string;
+  steps: RoutineStep[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface RoutineStep {
+  type: string;
+  command?: string;
+  params?: Record<string, any>;
+  data?: Record<string, any>;
+}
+
+export interface RoutineExecution {
+  id: string;
+  routineId: string;
+  routineName: string;
+  status: string;
+  stepsCompleted: number;
+  error?: string;
+}
+
+export interface RoutineDraft {
+  name: string;
+  steps: RoutineStep[];
+}
+
+export interface CommanderPlan {
+  id: string;
+  input: string;
+  intent: string;
+  parsedIntent?: string;
+  confidence: number;
+  warnings: string[];
+  requiresConfirmation: boolean;
+  commands: any[];
+  missions: any[];
+  clarificationQuestions: (string | ClarificationQuestion)[];
+  needsClarification: boolean;
+  suggestedCommands: any[];
+  createdAt: string;
+}
+
+export interface ClarificationQuestion {
+  question: string;
+  options?: string[];
+}
+
+export interface CommanderResult {
+  success: boolean;
+  commandResults?: { id: string; status: string; error?: string }[];
+  missionResults?: { id: string; status: string; error?: string }[];
+  message?: string;
+}
+
+export interface CommanderDraft {
+  id: string;
+  input: string;
+  plan?: CommanderPlan;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SupplyChain {
+  id: string;
+  name: string;
+  description?: string;
+  status: string;
+  loop?: boolean;
+  stages: ChainStage[];
+  currentStageIndex?: number;
+  metadata?: Record<string, any>;
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface ChainTemplate {
+  id: string;
+  name: string;
+  description?: string;
+  stages: Omit<ChainStage, 'status'>[];
+}
+
+export interface ChainStage {
+  botName: string;
+  task: string;
+  status?: string;
+  inputChest?: { x: number; y: number; z: number; label?: string };
+  outputChest?: { x: number; y: number; z: number; label?: string };
+  inputItems?: { item: string; count: number }[];
+  outputItems?: { item: string; count: number }[];
+}
+
+export interface MetricsData {
+  uptime: number;
+  botCount: number;
+  activeBots: number;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  avgTaskTime?: number;
+  tasksByBot?: Record<string, number>;
+  eventCounts?: Record<string, number>;
+  memoryUsage?: Record<string, number>;
+  [key: string]: any;
+}
 
 // API functions
 export const api = {
@@ -245,10 +408,10 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ playerName, message }),
     }),
-  queueTask: (botName: string, description: string) =>
+  queueTask: (botName: string, description: string, prepend?: boolean) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/task`, {
       method: 'POST',
-      body: JSON.stringify({ description }),
+      body: JSON.stringify({ description, prepend }),
     }),
 
   // Bot commands
@@ -305,4 +468,219 @@ export const api = {
     }),
   clearBotOverride: (botName: string) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/override`, { method: 'DELETE' }),
+
+  // ─── Commands ───
+  getCommands: () =>
+    fetchJSON<{ commands: CommandRecord[] }>('/api/commands').catch(() => ({ commands: [] })),
+  createCommand: (data: { type: string; botName: string; params?: Record<string, unknown> }) =>
+    fetchJSON<{ command: CommandRecord }>('/api/commands', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  cancelCommand: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commands/${id}/cancel`, { method: 'POST' }),
+
+  // ─── Missions ───
+  getMissions: () =>
+    fetchJSON<{ missions: MissionRecord[] }>('/api/missions').catch(() => ({ missions: [] })),
+  createMission: (...args: [data: Record<string, any>] | [type: string, botName: string, description: string, priority?: number]) => {
+    const data = typeof args[0] === 'object' && !Array.isArray(args[0]) && args.length === 1
+      ? args[0]
+      : { type: args[0], botName: args[1], description: args[2], priority: args[3] };
+    return fetchJSON<{ mission: MissionRecord }>('/api/missions', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  },
+  missionAction: (id: string, action: 'start' | 'pause' | 'resume' | 'cancel' | 'retry') =>
+    fetchJSON<{ success: boolean }>(`/api/missions/${id}/${action}`, { method: 'POST' }),
+  cancelMission: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/missions/${id}/cancel`, { method: 'POST' }),
+
+  // ─── Markers ───
+  createMarker: (data: { name: string; x: number; y: number; z: number; type?: string }) =>
+    fetchJSON<{ marker: Marker }>('/api/markers', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteMarker: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/markers/${id}`, { method: 'DELETE' }),
+
+  // ─── Zones ───
+  createZone: (data: Record<string, any>) =>
+    fetchJSON<{ zone: Zone }>('/api/zones', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateZone: (id: string, data: Record<string, any>) =>
+    fetchJSON<{ zone: Zone }>(`/api/zones/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteZone: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
+
+  // ─── Routes ───
+  getRoutes: () =>
+    fetchJSON<{ routes: Route[] }>('/api/routes').catch(() => ({ routes: [] })),
+  createRoute: (data: { name: string; waypoints: { x: number; y: number; z: number }[]; loop?: boolean }) =>
+    fetchJSON<{ route: Route }>('/api/routes', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteRoute: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
+
+  // ─── Builds ───
+  getSchematics: () =>
+    fetchJSON<{ schematics: SchematicInfo[] }>('/api/schematics').catch(() => ({ schematics: [] })),
+  getBuilds: () =>
+    fetchJSON<{ builds: BuildRecord[] }>('/api/builds').catch(() => ({ builds: [] })),
+  startBuild: (
+    filename: string,
+    origin: { x: number; y: number; z: number },
+    botNames: string[],
+    cleanupBotNames?: string[],
+    options?: { fillFoundation?: boolean; snapToGround?: boolean },
+  ) =>
+    fetchJSON<{ build: BuildRecord }>('/api/builds', {
+      method: 'POST',
+      body: JSON.stringify({ filename, origin, botNames, cleanupBotNames, ...options }),
+    }),
+  cancelBuild: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/builds/${id}/cancel`, { method: 'POST' }),
+  pauseBuild: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/builds/${id}/pause`, { method: 'POST' }),
+  resumeBuild: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/builds/${id}/resume`, { method: 'POST' }),
+  getTerrainHeight: (x: number, z: number) =>
+    fetchJSON<{ y: number; block: string }>(`/api/terrain/height?x=${x}&z=${z}`),
+
+  // ─── Supply Chains ───
+  getChains: () =>
+    fetchJSON<{ chains: any[] }>('/api/chains').catch(() => ({ chains: [] })),
+  getChainTemplates: () =>
+    fetchJSON<{ templates: any[] }>('/api/chains/templates').catch(() => ({ templates: [] })),
+  createChain: (data: Record<string, any>) =>
+    fetchJSON<{ chain: any }>('/api/chains', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  startChain: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/chains/${id}/start`, { method: 'POST' }),
+  pauseChain: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/chains/${id}/pause`, { method: 'POST' }),
+  cancelChain: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/chains/${id}/cancel`, { method: 'POST' }),
+  deleteChain: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/chains/${id}`, { method: 'DELETE' }),
+
+  // ─── Routines ───
+  getRoutines: () =>
+    fetchJSON<{ routines: Routine[] }>('/api/routines').catch(() => ({ routines: [] })),
+  createRoutine: (data: { name: string; steps?: RoutineStep[] }) =>
+    fetchJSON<{ routine: Routine }>('/api/routines', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRoutine: (id: string, data: { steps?: RoutineStep[]; name?: string }) =>
+    fetchJSON<{ routine: Routine }>(`/api/routines/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteRoutine: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routines/${id}`, { method: 'DELETE' }),
+  executeRoutine: (id: string, botNames: string[]) =>
+    fetchJSON<{ execution: RoutineExecution }>(`/api/routines/${id}/execute`, {
+      method: 'POST',
+      body: JSON.stringify({ botNames }),
+    }),
+  getRecordingStatus: () =>
+    fetchJSON<{ recording: boolean; draft: RoutineDraft | null }>('/api/routines/recording').catch(() => ({ recording: false, draft: null })),
+  startRecording: (name: string) =>
+    fetchJSON<{ draft: RoutineDraft }>('/api/routines/recording/start', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    }),
+  stopRecording: (save: boolean) =>
+    fetchJSON<{ routine: Routine | null }>('/api/routines/recording/stop', {
+      method: 'POST',
+      body: JSON.stringify({ save }),
+    }),
+
+  // ─── Commander ───
+  parseCommanderInput: (input: string) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }),
+  clarifyCommanderInput: (input: string, answers: Record<string, string>) =>
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input, clarificationAnswers: answers }),
+    }),
+  executeCommanderPlan: (planId: string) =>
+    fetchJSON<{ result: any }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ planId }),
+    }),
+  getCommanderHistory: (params?: { limit?: number }) =>
+    fetchJSON<{ entries?: any[]; history?: any[] }>(`/api/commander/history${params?.limit ? `?limit=${params.limit}` : ''}`).catch(() => ({ entries: [], history: [] })),
+  getCommanderDrafts: () =>
+    fetchJSON<{ drafts: CommanderDraft[] }>('/api/commander/drafts').catch(() => ({ drafts: [] })),
+  saveCommanderDraft: (data: { input: string }) =>
+    fetchJSON<{ draft: CommanderDraft }>('/api/commander/drafts', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  deleteCommanderDraft: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commander/drafts/${id}`, { method: 'DELETE' }),
+  getCommanderSuggestions: () =>
+    fetchJSON<{ suggestions: string[] }>('/api/commander/suggestions').catch(() => ({ suggestions: [] })),
+
+  // ─── Legacy CommanderPanel aliases ───
+  commanderParse: (input: string) =>
+    fetchJSON<{ plan: any }>('/api/commander/parse', {
+      method: 'POST',
+      body: JSON.stringify({ input }),
+    }),
+  commanderExecute: (plan: any) =>
+    fetchJSON<{ result: any }>('/api/commander/execute', {
+      method: 'POST',
+      body: JSON.stringify({ plan }),
+    }),
+
+  // ─── Bot actions ───
+  returnToBase: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/return-to-base`, { method: 'POST' }),
+  unstuck: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/unstuck`, { method: 'POST' }),
+  equipBest: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/equip-best`, { method: 'POST' }),
+
+  // ─── Diagnostics / Metrics / Blackboard ───
+  getBotDiagnostics: (botName: string) =>
+    fetchJSON<any>(`/api/bots/${botName}/diagnostics`).catch(() => null),
+  getMetrics: () =>
+    fetchJSON<any>('/api/metrics').catch(() => null),
+  getBlackboard: () =>
+    fetchJSON<{ blackboard: { messages: any[]; tasks: any[]; goals: any[]; swarmGoal: string | null; reservations: any[] } }>('/api/blackboard').catch(() => ({
+      blackboard: { messages: [], tasks: [], goals: [], swarmGoal: null, reservations: [] },
+    })),
+  sendSwarmDirective: (directive: string) =>
+    fetchJSON<{ success: boolean }>('/api/blackboard/swarm-directive', {
+      method: 'POST',
+      body: JSON.stringify({ directive }),
+    }),
+
+  // ─── Bot mission queue ───
+  reorderBotMissionQueue: (botName: string, order: string[]) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
+      method: 'PATCH',
+      body: JSON.stringify({ order }),
+    }),
+  clearBotMissionQueue: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
+      method: 'DELETE',
+    }),
 };

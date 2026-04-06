@@ -5,6 +5,7 @@ import type {
   BotStatus, BotEvent, WorldState,
   SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
   CommandRecord, MissionRecord,
+  Marker, Zone, Route, Routine, RoutineStep, RoutineDraft, BuildRecord,
 } from './api';
 
 export interface BotLiveData extends BotStatus {
@@ -28,6 +29,8 @@ interface BotStore {
   connected: boolean;
   world: WorldState | null;
   unreadChats: number;
+  activeBuild: BuildRecord | null;
+  chains: any[];
 
   setBots: (bots: BotStatus[]) => void;
   updatePosition: (bot: string, x: number, y: number, z: number) => void;
@@ -41,6 +44,8 @@ interface BotStore {
   updatePlayerPosition: (name: string, x: number, y: number, z: number) => void;
   addPlayer: (name: string) => void;
   removePlayer: (name: string) => void;
+  setActiveBuild: (build: BuildRecord | null) => void;
+  setChains: (chains: any[]) => void;
   incrementUnreadChats: () => void;
   resetUnreadChats: () => void;
 }
@@ -73,6 +78,8 @@ export const useBotStore = create<BotStore>((set) => ({
   connected: false,
   world: null,
   unreadChats: 0,
+  activeBuild: null,
+  chains: [],
 
   setBots: (bots) =>
     set((state) => {
@@ -137,6 +144,9 @@ export const useBotStore = create<BotStore>((set) => ({
       const updated = { ...state.playersById, [key]: { ...existing, isOnline: false } };
       return { playersById: updated, playerList: toPlayerList(updated) };
     }),
+
+  setActiveBuild: (build) => set({ activeBuild: build }),
+  setChains: (chains) => set({ chains }),
 
   incrementUnreadChats: () =>
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
@@ -275,4 +285,216 @@ export const useRoleStore = create<RoleStore>((set) => ({
     }),
   removeAssignment: (id) =>
     set((s) => ({ assignments: s.assignments.filter((a) => a.id !== id) })),
+
+  getOverrideForBot: (botName: string) => {
+    const key = botName.toLowerCase();
+    const overrides = useRoleStore.getState().overrides;
+    return overrides[key] || overrides[botName] || null;
+  },
+  getBlockedMissionForBot: (_botName: string) => {
+    // Mission store not yet available in this build — return null
+    return null;
+  },
+}));
+
+// ─── World Store (markers, zones, routes) ───
+
+interface WorldStore {
+  markers: Marker[];
+  zones: Zone[];
+  routes: Route[];
+  upsertMarker: (marker: Marker) => void;
+  setMarkers: (markers: Marker[]) => void;
+  removeMarker: (id: string) => void;
+  upsertZone: (zone: Zone) => void;
+  setZones: (zones: Zone[]) => void;
+  removeZone: (id: string) => void;
+  upsertRoute: (route: Route) => void;
+  setRoutes: (routes: Route[]) => void;
+  removeRoute: (id: string) => void;
+}
+
+export const useWorldStore = create<WorldStore>((set) => ({
+  markers: [],
+  zones: [],
+  routes: [],
+
+  upsertMarker: (marker) =>
+    set((state) => {
+      const idx = state.markers.findIndex((m) => m.id === marker.id);
+      if (idx >= 0) {
+        const next = [...state.markers];
+        next[idx] = marker;
+        return { markers: next };
+      }
+      return { markers: [...state.markers, marker] };
+    }),
+  setMarkers: (markers) => set({ markers }),
+  removeMarker: (id) =>
+    set((state) => ({ markers: state.markers.filter((m) => m.id !== id) })),
+
+  upsertZone: (zone) =>
+    set((state) => {
+      const idx = state.zones.findIndex((z) => z.id === zone.id);
+      if (idx >= 0) {
+        const next = [...state.zones];
+        next[idx] = zone;
+        return { zones: next };
+      }
+      return { zones: [...state.zones, zone] };
+    }),
+  setZones: (zones) => set({ zones }),
+  removeZone: (id) =>
+    set((state) => ({ zones: state.zones.filter((z) => z.id !== id) })),
+
+  upsertRoute: (route) =>
+    set((state) => {
+      const idx = state.routes.findIndex((r) => r.id === route.id);
+      if (idx >= 0) {
+        const next = [...state.routes];
+        next[idx] = route;
+        return { routes: next };
+      }
+      return { routes: [...state.routes, route] };
+    }),
+  setRoutes: (routes) => set({ routes }),
+  removeRoute: (id) =>
+    set((state) => ({ routes: state.routes.filter((r) => r.id !== id) })),
+}));
+
+// ─── Routine Store ───
+
+interface RoutineStore {
+  routines: Routine[];
+  recording: boolean;
+  draft: RoutineDraft | null;
+  setRoutines: (routines: Routine[]) => void;
+  addRoutine: (routine: Routine) => void;
+  updateRoutine: (routine: Routine) => void;
+  removeRoutine: (id: string) => void;
+  setRecording: (recording: boolean, draft?: RoutineDraft | null) => void;
+}
+
+export const useRoutineStore = create<RoutineStore>((set) => ({
+  routines: [],
+  recording: false,
+  draft: null,
+
+  setRoutines: (routines) => set({ routines }),
+  addRoutine: (routine) =>
+    set((state) => ({ routines: [...state.routines, routine] })),
+  updateRoutine: (routine) =>
+    set((state) => {
+      const idx = state.routines.findIndex((r) => r.id === routine.id);
+      if (idx >= 0) {
+        const next = [...state.routines];
+        next[idx] = routine;
+        return { routines: next };
+      }
+      return { routines: [...state.routines, routine] };
+    }),
+  removeRoutine: (id) =>
+    set((state) => ({ routines: state.routines.filter((r) => r.id !== id) })),
+  setRecording: (recording, draft = null) => set({ recording, draft }),
+}));
+
+// ─── Schematic Placement Store ───
+
+interface SchematicPlacement {
+  filename: string;
+  sizeX: number;
+  sizeZ: number;
+  sizeY: number;
+}
+
+interface SchematicPlacementStore {
+  placement: SchematicPlacement | null;
+  placedOrigin: { x: number; y: number; z: number } | null;
+  startPlacement: (placement: SchematicPlacement) => void;
+  cancelPlacement: () => void;
+  setPlacedOrigin: (origin: { x: number; y: number; z: number }) => void;
+}
+
+export const useSchematicPlacementStore = create<SchematicPlacementStore>((set) => ({
+  placement: null,
+  placedOrigin: null,
+
+  startPlacement: (placement) => set({ placement, placedOrigin: null }),
+  cancelPlacement: () => set({ placement: null, placedOrigin: null }),
+  setPlacedOrigin: (origin) => set({ placedOrigin: origin }),
+}));
+
+// ─── Mission Store ───
+
+interface MissionStore {
+  missions: MissionRecord[];
+  setMissions: (missions: MissionRecord[]) => void;
+  upsertMission: (mission: MissionRecord) => void;
+  removeMission: (id: string) => void;
+}
+
+export const useMissionStore = create<MissionStore>((set) => ({
+  missions: [],
+
+  setMissions: (missions) => set({ missions }),
+  upsertMission: (mission) =>
+    set((state) => {
+      const idx = state.missions.findIndex((m) => m.id === mission.id);
+      if (idx >= 0) {
+        const next = [...state.missions];
+        next[idx] = mission;
+        return { missions: next };
+      }
+      return { missions: [mission, ...state.missions].slice(0, 200) };
+    }),
+  removeMission: (id) =>
+    set((state) => ({ missions: state.missions.filter((m) => m.id !== id) })),
+}));
+
+// ─── Build Store ───
+
+interface BuildStore {
+  builds: BuildRecord[];
+  setBuilds: (builds: BuildRecord[]) => void;
+  upsertBuild: (build: BuildRecord) => void;
+}
+
+export const useBuildStore = create<BuildStore>((set) => ({
+  builds: [],
+
+  setBuilds: (builds) => set({ builds }),
+  upsertBuild: (build) =>
+    set((state) => {
+      const idx = state.builds.findIndex((b) => b.id === build.id);
+      if (idx >= 0) {
+        const next = [...state.builds];
+        next[idx] = build;
+        return { builds: next };
+      }
+      return { builds: [build, ...state.builds].slice(0, 100) };
+    }),
+}));
+
+// ─── Chain Store ───
+
+interface ChainStore {
+  chains: any[];
+  setChains: (chains: any[]) => void;
+  upsertChain: (chain: any) => void;
+}
+
+export const useChainStore = create<ChainStore>((set) => ({
+  chains: [],
+
+  setChains: (chains) => set({ chains }),
+  upsertChain: (chain) =>
+    set((state) => {
+      const idx = state.chains.findIndex((c: any) => c.id === chain.id);
+      if (idx >= 0) {
+        const next = [...state.chains];
+        next[idx] = chain;
+        return { chains: next };
+      }
+      return { chains: [chain, ...state.chains].slice(0, 100) };
+    }),
 }));

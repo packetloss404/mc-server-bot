@@ -401,16 +401,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   //  LLM USAGE ENDPOINT (TokenLedger)
   // ═══════════════════════════════════════
 
-  app.get('/api/llm/usage', (_req: Request, res: Response) => {
-    try {
-      // TokenLedger is on the ModelRouter — access via the botManager's llmClient
-      const ledgerModule = require('../ai/TokenLedger');
-      // The ledger is managed in index.ts; for now return empty if not wired
-      res.json({ usage: {}, message: 'Token ledger available via /api/metrics' });
-    } catch {
-      res.json({ usage: {} });
-    }
-  });
+  // LLM settings and usage are managed via index.ts injection
+  // Placeholder — real endpoints registered by registerLLMSettingsRoutes() below
 
   //  METRICS ENDPOINT
   // ═══════════════════════════════════════

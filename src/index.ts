@@ -10,6 +10,8 @@ import type { LLMClient } from './ai/LLMClient';
 import { buildProviderClients } from './ai/ProviderRegistry';
 import { ModelRouter } from './ai/ModelRouter';
 import { TokenLedger } from './ai/TokenLedger';
+import { LLMSettings } from './ai/LLMSettings';
+import { registerLLMRoutes } from './server/llmRoutes';
 import { setupSocketEvents } from './server/socketEvents';
 
 function buildModelRouter(config: ReturnType<typeof loadConfig>): { client: LLMClient | null; ledger: TokenLedger } {
@@ -56,7 +58,11 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { httpServer, io, eventLog, buildCoordinator, chainCoordinator } = createAPIServer(botManager);
+  const { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator } = createAPIServer(botManager);
+
+  // Register LLM settings/usage API routes
+  const llmSettings = new LLMSettings(tokenLedger);
+  registerLLMRoutes(app, llmSettings, tokenLedger, botManager);
 
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);

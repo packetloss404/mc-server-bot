@@ -3,18 +3,33 @@ import path from 'path';
 import { Task } from './CurriculumAgent';
 import { LongTermGoal } from './LongTermGoal';
 
+export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
+
 export interface BlackboardTask {
   id: string;
   description: string;
   keywords: string[];
   status: 'pending' | 'claimed' | 'completed' | 'blocked';
+  priority: TaskPriority;
   assignedBot?: string;
   source: 'swarm' | 'goal' | 'bot';
   goalId?: string;
+  location?: { x: number; y: number; z: number };
   createdAt: number;
   updatedAt: number;
+  claimedAt?: number;
   blocker?: string;
 }
+
+const PERSONALITY_KEYWORDS: Record<string, string[]> = {
+  farmer: ['farm', 'harvest', 'plant', 'wheat', 'seeds', 'crop', 'hoe', 'bread', 'potato', 'carrot', 'beetroot', 'melon', 'pumpkin', 'sugar_cane', 'bone_meal'],
+  blacksmith: ['smelt', 'furnace', 'iron', 'gold', 'diamond', 'ore', 'anvil', 'armor', 'sword', 'pickaxe', 'axe', 'shovel', 'craft', 'ingot', 'tool'],
+  guard: ['kill', 'combat', 'zombie', 'skeleton', 'creeper', 'spider', 'patrol', 'protect', 'defend', 'sword', 'shield', 'armor', 'fight', 'mob'],
+  explorer: ['explore', 'walk', 'travel', 'discover', 'find', 'locate', 'cave', 'mountain', 'village', 'biome', 'ocean', 'desert', 'jungle', 'scout'],
+  merchant: ['trade', 'chest', 'storage', 'collect', 'gather', 'deposit', 'inventory', 'organize', 'villager', 'emerald', 'sell', 'buy'],
+  elder: ['plan', 'enchant', 'brew', 'potion', 'book', 'library', 'lapis', 'experience', 'knowledge', 'redstone'],
+  builder: ['build', 'place', 'construct', 'house', 'wall', 'floor', 'roof', 'door', 'window', 'foundation', 'structure', 'planks', 'cobblestone', 'stone'],
+};
 
 export interface BlackboardMessage {
   id: string;
@@ -113,14 +128,16 @@ export class BlackboardManager {
     this.persist();
   }
 
-  addTask(task: Task, source: 'swarm' | 'goal' | 'bot', goalId?: string): BlackboardTask {
+  addTask(task: Task, source: 'swarm' | 'goal' | 'bot', goalId?: string, priority: TaskPriority = 'normal', location?: { x: number; y: number; z: number }): BlackboardTask {
     const boardTask: BlackboardTask = {
       id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       description: task.description,
       keywords: task.keywords,
       status: 'pending',
+      priority,
       source,
       goalId,
+      location,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -129,15 +146,19 @@ export class BlackboardManager {
     return boardTask;
   }
 
-  claimBestTask(botName: string, query?: string): BlackboardTask | null {
+  claimBestTask(botName: string, query?: string, personality?: string, botPosition?: { x: number; y: number; z: number }): BlackboardTask | null {
     const candidates = this.state.tasks.filter((t) => t.status === 'pending');
     if (candidates.length === 0) return null;
     const lowered = query?.toLowerCase() || '';
-    const ranked = candidates.sort((a, b) => this.scoreTask(b, lowered) - this.scoreTask(a, lowered) || a.createdAt - b.createdAt);
+    const ranked = candidates.sort((a, b) =>
+      this.scoreTaskEnhanced(b, lowered, personality, botPosition) - this.scoreTaskEnhanced(a, lowered, personality, botPosition)
+      || a.createdAt - b.createdAt
+    );
     const task = ranked[0];
     task.status = 'claimed';
     task.assignedBot = botName;
     task.updatedAt = Date.now();
+    task.claimedAt = Date.now();
     this.postMessage(botName, 'claim', `I'm taking ${task.description}.`);
     this.persist();
     return task;
@@ -174,37 +195,17 @@ export class BlackboardManager {
     this.persist();
   }
 
-  getState(): BlackboardState {
-    return JSON.parse(JSON.stringify(this.state));
-  }
-
-  getRecentMessages(limit = 20): BlackboardMessage[] {
-    return this.state.messages.slice(-limit).reverse();
-  }
-
-  getSwarmGoal(): BlackboardGoal | null {
-    return this.state.swarmGoal;
-  }
+  getState(): BlackboardState { return JSON.parse(JSON.stringify(this.state)); }
+  getRecentMessages(limit = 20): BlackboardMessage[] { return this.state.messages.slice(-limit).reverse(); }
+  getSwarmGoal(): BlackboardGoal | null { return this.state.swarmGoal; }
 
   claimReservation(type: BlackboardReservation['type'], key: string, botName: string, goalId?: string, ttlMs = 30000): boolean {
     this.clearExpiredReservations();
     const existing = this.state.reservations.find((r) => r.type === type && r.key === key && r.botName !== botName);
     if (existing) return false;
     const own = this.state.reservations.find((r) => r.type === type && r.key === key && r.botName === botName);
-    if (own) {
-      own.expiresAt = Date.now() + ttlMs;
-      this.persist();
-      return true;
-    }
-    this.state.reservations.push({
-      id: `res-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-      type,
-      key,
-      botName,
-      goalId,
-      createdAt: Date.now(),
-      expiresAt: Date.now() + ttlMs,
-    });
+    if (own) { own.expiresAt = Date.now() + ttlMs; this.persist(); return true; }
+    this.state.reservations.push({ id: `res-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, type, key, botName, goalId, createdAt: Date.now(), expiresAt: Date.now() + ttlMs });
     this.persist();
     return true;
   }
@@ -219,25 +220,81 @@ export class BlackboardManager {
     return this.state.reservations.some((r) => r.type === type && r.key === key && (!botName || r.botName === botName));
   }
 
+  getSwarmRelevantTasks(personality?: string): BlackboardTask[] {
+    const swarm = this.state.swarmGoal;
+    if (!swarm || swarm.status !== 'active') return [];
+    const swarmTasks = this.state.tasks.filter((t) => t.source === 'swarm' && t.goalId === swarm.id && t.status === 'pending');
+    if (!personality) return swarmTasks;
+    const personalityWords = PERSONALITY_KEYWORDS[personality.toLowerCase()] || [];
+    if (personalityWords.length === 0) return swarmTasks;
+    return swarmTasks.sort((a, b) => {
+      const textA = `${a.description} ${a.keywords.join(' ')}`.toLowerCase();
+      const textB = `${b.description} ${b.keywords.join(' ')}`.toLowerCase();
+      return personalityWords.filter((w) => textB.includes(w)).length - personalityWords.filter((w) => textA.includes(w)).length;
+    });
+  }
+
+  releaseStale(timeoutMs: number = 5 * 60 * 1000): number {
+    const now = Date.now();
+    let released = 0;
+    for (const task of this.state.tasks) {
+      if (task.status === 'claimed' && task.claimedAt && now - task.claimedAt > timeoutMs) {
+        task.status = 'pending';
+        task.assignedBot = undefined;
+        task.claimedAt = undefined;
+        task.updatedAt = now;
+        released++;
+      }
+    }
+    if (released > 0) { this.postMessage('system', 'info', `Released ${released} stale claimed task(s).`); this.persist(); }
+    return released;
+  }
+
+  getBlockedTaskDescriptions(sinceMs: number = 10 * 60 * 1000): Set<string> {
+    const cutoff = Date.now() - sinceMs;
+    const blocked = new Set<string>();
+    for (const msg of this.state.messages) {
+      if (msg.kind === 'blocker' && msg.createdAt >= cutoff) {
+        const match = msg.text.match(/^(.+?)(?:\s+is blocked:|\s+failed:)/);
+        if (match) blocked.add(match[1]);
+      }
+    }
+    return blocked;
+  }
+
+  getRecentMessagesForBot(botName: string, limit = 10): BlackboardMessage[] {
+    return this.state.messages.filter((m) => m.botName !== botName).slice(-limit).reverse();
+  }
+
   private scoreTask(task: BlackboardTask, query: string): number {
     let score = task.source === 'swarm' ? 12 : task.source === 'bot' ? 10 : 6;
     if (!query) return score;
     const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
-    for (const word of query.split(/\s+/).filter(Boolean)) {
-      if (text.includes(word)) score += 4;
+    for (const word of query.split(/\s+/).filter(Boolean)) { if (text.includes(word)) score += 4; }
+    return score;
+  }
+
+  private scoreTaskEnhanced(task: BlackboardTask, query: string, personality?: string, botPosition?: { x: number; y: number; z: number }): number {
+    let score = this.scoreTask(task, query);
+    const priorityBonus: Record<TaskPriority, number> = { low: 0, normal: 3, high: 9, critical: 15 };
+    score += (priorityBonus[task.priority] ?? priorityBonus.normal) * 3;
+    if (personality) {
+      const words = PERSONALITY_KEYWORDS[personality.toLowerCase()] || [];
+      const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
+      for (const w of words) { if (text.includes(w)) score += 2; }
     }
+    if (botPosition && task.location) {
+      const dx = botPosition.x - task.location.x, dy = botPosition.y - task.location.y, dz = botPosition.z - task.location.z;
+      score += Math.max(0, 15 - Math.sqrt(dx * dx + dy * dy + dz * dz) / 256 * 15) * 1.5;
+    }
+    score += Math.min(10, (Date.now() - task.createdAt) / 60000);
     return score;
   }
 
   private load(): BlackboardState {
-    if (!fs.existsSync(this.filePath)) {
-      return { swarmGoal: null, goals: [], tasks: [], messages: [], reservations: [] };
-    }
-    try {
-      return { reservations: [], ...JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) };
-    } catch {
-      return { swarmGoal: null, goals: [], tasks: [], messages: [], reservations: [] };
-    }
+    if (!fs.existsSync(this.filePath)) return { swarmGoal: null, goals: [], tasks: [], messages: [], reservations: [] };
+    try { return { reservations: [], ...JSON.parse(fs.readFileSync(this.filePath, 'utf-8')) }; }
+    catch { return { swarmGoal: null, goals: [], tasks: [], messages: [], reservations: [] }; }
   }
 
   private clearExpiredReservations(): void {
@@ -249,29 +306,16 @@ export class BlackboardManager {
 
   private persist(): void {
     if (this._saveTimer) clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      this.writeAtomic();
-    }, 2000);
+    this._saveTimer = setTimeout(() => { this._saveTimer = null; this.writeAtomic(); }, 2000);
   }
 
   private writeAtomic(): void {
     const tmpPath = this.filePath + '.tmp';
-    try {
-      fs.writeFileSync(tmpPath, JSON.stringify(this.state, null, 2));
-      fs.renameSync(tmpPath, this.filePath);
-    } catch {
-      // Fallback: direct write (rename can fail on Windows if target is locked)
-      try { fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2)); } catch { /* best effort */ }
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    }
+    try { fs.writeFileSync(tmpPath, JSON.stringify(this.state, null, 2)); fs.renameSync(tmpPath, this.filePath); }
+    catch { try { fs.writeFileSync(this.filePath, JSON.stringify(this.state, null, 2)); } catch { /* best effort */ } try { fs.unlinkSync(tmpPath); } catch { /* ignore */ } }
   }
 
   shutdown(): void {
-    if (this._saveTimer) {
-      clearTimeout(this._saveTimer);
-      this._saveTimer = null;
-      this.writeAtomic();
-    }
+    if (this._saveTimer) { clearTimeout(this._saveTimer); this._saveTimer = null; this.writeAtomic(); }
   }
 }

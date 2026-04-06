@@ -42,85 +42,6 @@ IMPORTANT: Keep reasoning under 20 words. Do NOT write long explanations. The en
 
 // Large progression-aware fallback pool used when LLM is unavailable.
 // Tasks are ordered by progression stage; proposeStaticTask picks the first feasible & uncompleted one.
-// Personality-specific task pools — proposed first to give bots flavour.
-const PERSONALITY_TASKS: Record<string, Task[]> = {
-  farmer: [
-    { description: 'Explore and find wheat seeds', keywords: ['explore', 'seeds', 'wheat'] },
-    { description: 'Walk to the nearest farmland', keywords: ['walk', 'farm', 'crops'] },
-    { description: 'Plant 1 wheat seed', keywords: ['plant', 'wheat', 'farm'] },
-    { description: 'Harvest 3 wheat', keywords: ['harvest', 'wheat', 'farm'] },
-    { description: 'Craft 1 bread', keywords: ['craft', 'bread', 'food'] },
-    { description: 'Craft a wooden hoe', keywords: ['craft', 'wooden_hoe', 'tool'] },
-    { description: 'Breed 2 cows', keywords: ['breed', 'cow', 'animal'] },
-    { description: 'Breed 2 chickens', keywords: ['breed', 'chicken', 'animal'] },
-    { description: 'Collect 3 eggs', keywords: ['collect', 'egg', 'animal'] },
-    { description: 'Plant 3 carrot seeds', keywords: ['plant', 'carrot', 'farm'] },
-    { description: 'Harvest 3 potatoes', keywords: ['harvest', 'potato', 'farm'] },
-  ],
-  merchant: [
-    { description: 'Explore 100 blocks to find a village', keywords: ['explore', 'village', 'trade'] },
-    { description: 'Mine 3 gold ore', keywords: ['mine', 'gold_ore', 'resource'] },
-    { description: 'Collect 5 emeralds', keywords: ['collect', 'emerald', 'trade'] },
-    { description: 'Mine 5 lapis lazuli ore', keywords: ['mine', 'lapis_ore', 'resource'] },
-    { description: 'Explore 50 blocks to the east', keywords: ['explore', 'walk', 'east'] },
-    { description: 'Mine 3 diamonds', keywords: ['mine', 'diamond', 'resource'] },
-    { description: 'Collect 5 redstone', keywords: ['collect', 'redstone', 'resource'] },
-  ],
-  builder: [
-    { description: 'Mine 16 oak logs', keywords: ['mine', 'oak_log', 'wood'] },
-    { description: 'Craft 32 oak planks', keywords: ['craft', 'oak_planks', 'wood'] },
-    { description: 'Mine 16 cobblestone', keywords: ['mine', 'cobblestone', 'stone'] },
-    { description: 'Craft 1 crafting table', keywords: ['craft', 'crafting_table', 'wood'] },
-    { description: 'Craft 4 oak stairs', keywords: ['craft', 'oak_stairs', 'build'] },
-    { description: 'Mine 8 sand', keywords: ['mine', 'sand', 'resource'] },
-    { description: 'Craft 8 glass from sand', keywords: ['smelt', 'glass', 'build'] },
-    { description: 'Mine 16 dirt', keywords: ['mine', 'dirt', 'resource'] },
-  ],
-  guard: [
-    { description: 'Craft a wooden sword', keywords: ['craft', 'wooden_sword', 'tool'] },
-    { description: 'Craft a stone sword', keywords: ['craft', 'stone_sword', 'tool'] },
-    { description: 'Kill 1 zombie', keywords: ['kill', 'zombie', 'combat'] },
-    { description: 'Kill 1 skeleton', keywords: ['kill', 'skeleton', 'combat'] },
-    { description: 'Kill 1 spider', keywords: ['kill', 'spider', 'combat'] },
-    { description: 'Craft an iron sword', keywords: ['craft', 'iron_sword', 'tool'] },
-    { description: 'Craft a shield', keywords: ['craft', 'shield', 'armor'] },
-    { description: 'Craft iron armor', keywords: ['craft', 'iron_armor', 'armor'] },
-    { description: 'Explore 50 blocks to patrol the area', keywords: ['explore', 'patrol', 'guard'] },
-  ],
-  explorer: [
-    { description: 'Explore 100 blocks to the north', keywords: ['explore', 'walk', 'north'] },
-    { description: 'Explore 100 blocks to the east', keywords: ['explore', 'walk', 'east'] },
-    { description: 'Explore 100 blocks to the south', keywords: ['explore', 'walk', 'south'] },
-    { description: 'Explore 100 blocks to the west', keywords: ['explore', 'walk', 'west'] },
-    { description: 'Explore and find a cave entrance', keywords: ['explore', 'cave', 'structure'] },
-    { description: 'Explore 100 blocks to find a village', keywords: ['explore', 'village', 'structure'] },
-    { description: 'Craft a boat', keywords: ['craft', 'boat', 'transport'] },
-    { description: 'Craft a compass', keywords: ['craft', 'compass', 'navigation'] },
-  ],
-  blacksmith: [
-    { description: 'Mine 5 coal ore', keywords: ['mine', 'coal_ore', 'resource'] },
-    { description: 'Mine 5 iron ore', keywords: ['mine', 'iron_ore', 'resource'] },
-    { description: 'Craft 1 furnace', keywords: ['craft', 'furnace', 'smelt'] },
-    { description: 'Smelt 3 raw iron', keywords: ['smelt', 'raw_iron', 'iron'] },
-    { description: 'Craft an iron pickaxe', keywords: ['craft', 'iron_pickaxe', 'tool'] },
-    { description: 'Craft an iron sword', keywords: ['craft', 'iron_sword', 'tool'] },
-    { description: 'Craft an iron axe', keywords: ['craft', 'iron_axe', 'tool'] },
-    { description: 'Mine 3 gold ore', keywords: ['mine', 'gold_ore', 'resource'] },
-    { description: 'Smelt 3 raw gold', keywords: ['smelt', 'raw_gold', 'gold'] },
-    { description: 'Mine 3 diamonds', keywords: ['mine', 'diamond', 'resource'] },
-  ],
-  elder: [
-    { description: 'Mine 3 oak logs', keywords: ['mine', 'oak_log', 'wood'] },
-    { description: 'Craft 1 crafting table', keywords: ['craft', 'crafting_table', 'wood'] },
-    { description: 'Craft a wooden pickaxe', keywords: ['craft', 'wooden_pickaxe', 'tool'] },
-    { description: 'Mine 3 coal ore', keywords: ['mine', 'coal_ore', 'resource'] },
-    { description: 'Craft 1 furnace', keywords: ['craft', 'furnace', 'smelt'] },
-    { description: 'Craft a bookshelf', keywords: ['craft', 'bookshelf', 'knowledge'] },
-    { description: 'Craft a map', keywords: ['craft', 'map', 'knowledge'] },
-    { description: 'Craft an enchanting table', keywords: ['craft', 'enchanting_table', 'knowledge'] },
-  ],
-};
-
 const FALLBACK_TASKS: Task[] = [
   // Stage 0: basics
   { description: 'Mine 1 oak log', keywords: ['mine', 'oak_log', 'wood'] },
@@ -361,7 +282,7 @@ export class CurriculumAgent {
     return null;
   }
 
-  private proposeStaticTask(personality: string): Task {
+  private proposeStaticTask(_personality: string): Task {
     const progression = this.lastBotForProgression
       ? getProgressionState(this.lastBotForProgression, this.completedTasks)
       : { hasWood: false, hasCraftingTable: false, hasWoodenPickaxe: false, hasWoodenHoe: false, hasCobblestone: false, canMineStoneTier: false, canFarm: false };
@@ -369,24 +290,7 @@ export class CurriculumAgent {
     // Only block tasks that failed very recently (last 5 failures), not permanently
     const recentFailures = new Set(this.failedTasks.slice(-5));
 
-    // 65% chance to try personality-specific tasks first
-    if (Math.random() < 0.65) {
-      const personalityPool = PERSONALITY_TASKS[personality] || [];
-      const personalityUncompleted = personalityPool.filter(
-        (t) => t.description !== this.lastTask
-          && !this.completedTasks.includes(t.description)
-          && !recentFailures.has(t.description)
-          && taskMatchesProgression(t, progression)
-      );
-      if (personalityUncompleted.length > 0) {
-        const pick = personalityUncompleted[Math.floor(Math.random() * Math.min(3, personalityUncompleted.length))];
-        this.lastTask = pick.description;
-        logger.info({ personality, task: pick.description }, 'Curriculum: picked personality-weighted task');
-        return pick;
-      }
-    }
-
-    // Fall back to the generic progression pool
+    // Find the first uncompleted, feasible task in progression order
     const uncompleted = FALLBACK_TASKS.filter(
       (t) => t.description !== this.lastTask
         && !this.completedTasks.includes(t.description)
@@ -445,7 +349,7 @@ Last task: ${this.lastTask || 'none'}
 
 Propose the next task:`;
 
-      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000, { taskType: "curriculum" as const });
+      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000);
       logger.debug({ rawResponse: response.text.slice(0, 500) }, 'Curriculum LLM raw response');
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       let parsed: any;
@@ -548,7 +452,6 @@ Propose the next task:`;
             'Answer briefly with 1-2 sentences grounded in the provided Minecraft state.',
             `Question: ${question}\nState: ${baseContext}`,
             120,
-            { taskType: 'curriculum' },
           );
           answer = response.text.trim();
           await this.storeCachedAnswer(question, answer);
@@ -579,7 +482,6 @@ Propose the next task:`;
         'Generate 3 short Minecraft curriculum questions tailored to the bot state. Output only a JSON array of strings.',
         `Personality: ${personality}\nBiome: ${biome}\nInventory: ${obs.inventory}\nNearby blocks: ${obs.nearbyBlocks}\nKnown world memory: ${worldMemory}\nCompleted tasks: ${this.completedTasks.slice(-8).join(', ') || 'none'}`,
         160,
-        { taskType: 'curriculum' },
       );
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(cleaned);
@@ -603,7 +505,6 @@ Propose the next task:`;
         'Answer with concise task context for a Minecraft agent. Focus on prerequisites, likely tools, and useful nearby resources. 2-3 sentences max.',
         `Question: ${question}\nInventory: ${obs.inventory}\nNearby blocks: ${obs.nearbyBlocks}\nKnown world memory: ${this.worldMemory.summary()}\nKnown blockers: ${this.blockerMemory.summarize()}\nCompleted tasks: ${this.completedTasks.slice(-8).join(', ') || 'none'}`,
         140,
-        { taskType: 'curriculum' },
       );
       const answer = response.text.trim();
       await this.storeCachedAnswer(question, answer);
@@ -722,7 +623,7 @@ Goal: ${description}
 
 Decompose into ordered subtasks:`;
 
-      const response = await this.llmClient.generate(systemPrompt, userMessage, 1000, { taskType: 'curriculum' });
+      const response = await this.llmClient.generate(systemPrompt, userMessage, 1000);
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const subtasks: string[] = JSON.parse(cleaned);
 
@@ -766,10 +667,5 @@ Decompose into ordered subtasks:`;
 
   getWorldMemory(): WorldMemory {
     return this.worldMemory;
-  }
-
-  shutdown(): void {
-    this.blockerMemory.shutdown();
-    this.worldMemory.shutdown();
   }
 }

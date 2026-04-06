@@ -14,7 +14,6 @@ export interface BlockerRecord {
 export class BlockerMemory {
   private records: BlockerRecord[] = [];
   private filePath: string;
-  private _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(dataDir: string) {
     this.filePath = path.join(dataDir, 'blockers.json');
@@ -87,29 +86,6 @@ export class BlockerMemory {
   }
 
   private persist(): void {
-    if (this._saveTimer) clearTimeout(this._saveTimer);
-    this._saveTimer = setTimeout(() => {
-      this._saveTimer = null;
-      this.writeAtomic();
-    }, 2000);
-  }
-
-  private writeAtomic(): void {
-    const tmpPath = this.filePath + '.tmp';
-    try {
-      fs.writeFileSync(tmpPath, JSON.stringify(this.records, null, 2));
-      fs.renameSync(tmpPath, this.filePath);
-    } catch {
-      try { fs.writeFileSync(this.filePath, JSON.stringify(this.records, null, 2)); } catch { /* best effort */ }
-      try { fs.unlinkSync(tmpPath); } catch { /* ignore */ }
-    }
-  }
-
-  shutdown(): void {
-    if (this._saveTimer) {
-      clearTimeout(this._saveTimer);
-      this._saveTimer = null;
-      this.writeAtomic();
-    }
+    fs.writeFileSync(this.filePath, JSON.stringify(this.records, null, 2));
   }
 }

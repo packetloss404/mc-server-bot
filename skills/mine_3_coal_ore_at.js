@@ -1,8 +1,9 @@
-async function mine3CoalOreAtLocation(bot) {
-  let pickaxe = bot.inventory.items().find(i => i.name.includes('pickaxe'));
-  if (pickaxe) {
-    await bot.equip(pickaxe, 'hand');
-  }
-  await moveTo(947, 48, 367, 3);
+async function mine3CoalOreAt(bot) {
+  const coalOrePos = {
+    x: 995,
+    y: 49,
+    z: 360
+  };
+  await moveTo(coalOrePos.x, coalOrePos.y, coalOrePos.z, 2, 60);
   await mineBlock('coal_ore', 3);
 }

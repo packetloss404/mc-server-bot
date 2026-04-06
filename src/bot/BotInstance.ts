@@ -10,6 +10,15 @@ import { LLMClient } from '../ai/LLMClient';
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { buildSystemPrompt, buildAmbientContext } from '../ai/prompts/personality';
+import { GoalGenerator } from '../voyager/GoalGenerator';
+import { ThreatAssessor } from '../voyager/ThreatAssessor';
+import { OpportunityDetector } from '../voyager/OpportunityDetector';
+import { DecisionNarrator } from '../voyager/DecisionNarrator';
+import { ProactiveCommunicator } from '../voyager/ProactiveCommunicator';
+import { ActionTemplateRegistry } from '../voyager/ActionTemplates';
+import { PlanLibrary } from '../voyager/PlanLibrary';
+import { SkillAttribution } from '../voyager/SkillAttribution';
+import { TradeNegotiator } from '../voyager/TradeNegotiator';
 import { analyzeSentiment, parseCommand, extractTask } from '../ai/prompts/chat';
 import { followPlayer } from '../actions/followPlayer';
 import { buildSchematic, listSchematics } from '../actions/buildSchematic';
@@ -32,6 +41,7 @@ export interface BotOptions {
   conversationManager: ConversationManager;
   blackboardManager: BlackboardManager;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
+  onReputationEvent?: (event: any) => void;
 }
 
 export class BotInstance {
@@ -56,6 +66,7 @@ export class BotInstance {
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
+  private onReputationEvent?: (event: any) => void;
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
   private botComms: BotComms;
@@ -83,6 +94,7 @@ export class BotInstance {
     this.conversationManager = options.conversationManager;
     this.blackboardManager = options.blackboardManager;
     this.onSwarmDirective = options.onSwarmDirective;
+    this.onReputationEvent = options.onReputationEvent;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = BotComms.getInstance();
     this.botComms.registerBot(this.name);
@@ -806,6 +818,21 @@ export class BotInstance {
     this.voyagerLoop.setBlackboardManager(this.blackboardManager);
     this.voyagerLoop.setSocialMemory(this.socialMemory);
     this.voyagerLoop.setBotComms(this.botComms);
+
+    // Wire per-bot intelligence systems
+    this.voyagerLoop.setGoalGenerator(new GoalGenerator(this.personality));
+    this.voyagerLoop.setThreatAssessor(new ThreatAssessor());
+    this.voyagerLoop.setOpportunityDetector(new OpportunityDetector());
+    this.voyagerLoop.setDecisionNarrator(new DecisionNarrator());
+    this.voyagerLoop.setProactiveCommunicator(new ProactiveCommunicator(this.name, this.personality));
+    this.voyagerLoop.setActionTemplates(new ActionTemplateRegistry());
+    this.voyagerLoop.setPlanLibrary(new PlanLibrary('./data'));
+    this.voyagerLoop.setSkillAttribution(new SkillAttribution('./data'));
+    this.voyagerLoop.setTradeNegotiator(new TradeNegotiator(this.personality));
+    if (this.onReputationEvent) {
+      this.voyagerLoop.setReputationNotifier(this.onReputationEvent);
+    }
+
     this.voyagerLoop.start();
   }
 

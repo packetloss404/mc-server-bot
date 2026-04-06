@@ -67,6 +67,12 @@ export interface Config {
     }>;
   };
   skills: { directory: string; maxSkills: number };
+  ollama?: {
+    baseUrl?: string;
+    chatModel?: string;
+    codeModel?: string;
+    timeoutMs?: number;
+  };
   logging: { level: string };
 }
 

@@ -1,10 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
 import { LLMClient } from '../ai/LLMClient';
-
-const DEBOUNCE_MS = 1_000;
 
 interface SkillEntry {
   name: string;
@@ -40,7 +37,6 @@ export class SkillLibrary {
   private docFreq: Map<string, number> = new Map();
   private embeddingClient: LLMClient | null;
   private allSkillCodeCache: string | null = null;
-  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(skillsDir: string, maxSkills: number, embeddingClient: LLMClient | null = null) {
     this.skillsDir = skillsDir;
@@ -287,25 +283,7 @@ export class SkillLibrary {
   }
 
   private saveIndex(): void {
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.saveIndexImmediate();
-    }, DEBOUNCE_MS);
-  }
-
-  private saveIndexImmediate(): void {
-    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
-    try {
-      atomicWriteJsonSync(this.indexPath, this.index);
-    } catch (err) {
-      logger.error({ err }, 'Failed to save skill index');
-    }
-  }
-
-  /** Flush any pending debounced writes to disk immediately. */
-  flush(): void {
-    this.saveIndexImmediate();
+    fs.writeFileSync(this.indexPath, JSON.stringify(this.index, null, 2));
   }
 
   private rebuildIndexStats(): void {

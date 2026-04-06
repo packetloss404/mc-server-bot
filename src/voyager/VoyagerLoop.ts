@@ -17,6 +17,17 @@ import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
+import { DecisionTrace } from './DecisionTrace';
+import { GoalGenerator, GoalGeneratorState } from './GoalGenerator';
+import { ThreatAssessor, ThreatAssessment } from './ThreatAssessor';
+import { OpportunityDetector } from './OpportunityDetector';
+import { DecisionNarrator } from './DecisionNarrator';
+import { ProactiveCommunicator } from './ProactiveCommunicator';
+import { ActionTemplateRegistry } from './ActionTemplates';
+import { PlanLibrary } from './PlanLibrary';
+import { SkillAttribution } from './SkillAttribution';
+import { TradeNegotiator } from './TradeNegotiator';
+import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -50,6 +61,17 @@ export class VoyagerLoop {
   private activeBlackboardTask: BlackboardTask | null = null;
   private socialMemory: SocialMemory | null = null;
   private botComms: BotComms | null = null;
+  private decisionTrace: DecisionTrace;
+  private goalGenerator: GoalGenerator | null = null;
+  private threatAssessor: ThreatAssessor | null = null;
+  private opportunityDetector: OpportunityDetector | null = null;
+  private decisionNarrator: DecisionNarrator | null = null;
+  private proactiveCommunicator: ProactiveCommunicator | null = null;
+  private actionTemplates: ActionTemplateRegistry | null = null;
+  private planLibrary: PlanLibrary | null = null;
+  private skillAttribution: SkillAttribution | null = null;
+  private tradeNegotiator: TradeNegotiator | null = null;
+  private reputationNotify: ((event: any) => void) | null = null;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -86,6 +108,7 @@ export class VoyagerLoop {
       config.voyager.criticLLMCalls
     );
     this.statsTracker = new StatsTracker('./data');
+    this.decisionTrace = new DecisionTrace(botName);
   }
 
   start(): void {
@@ -130,6 +153,22 @@ export class VoyagerLoop {
   isPaused(): boolean {
     return this.paused;
   }
+
+  getDecisionTrace(): DecisionTrace {
+    return this.decisionTrace;
+  }
+
+  setGoalGenerator(g: GoalGenerator): void { this.goalGenerator = g; }
+  setThreatAssessor(t: ThreatAssessor): void { this.threatAssessor = t; }
+  setOpportunityDetector(o: OpportunityDetector): void { this.opportunityDetector = o; }
+  setDecisionNarrator(n: DecisionNarrator): void { this.decisionNarrator = n; }
+  setProactiveCommunicator(p: ProactiveCommunicator): void { this.proactiveCommunicator = p; }
+  setActionTemplates(t: ActionTemplateRegistry): void { this.actionTemplates = t; }
+  setPlanLibrary(p: PlanLibrary): void { this.planLibrary = p; }
+  setSkillAttribution(s: SkillAttribution): void { this.skillAttribution = s; }
+  setTradeNegotiator(t: TradeNegotiator): void { this.tradeNegotiator = t; }
+  /** Set a callback for recording reputation events to the main thread. */
+  setReputationNotifier(fn: (event: any) => void): void { this.reputationNotify = fn; }
 
   /** Get the current task description, or null if idle */
   getCurrentTask(): string | null {
@@ -342,30 +381,92 @@ export class VoyagerLoop {
     if (this.paused) return;
 
     // Check for inter-bot messages (help requests become queued tasks)
+    // Process inter-bot messages (rate-limited to 3 per cycle)
     if (this.botComms) {
       const unread = this.botComms.getUnread(this.botName);
-      for (const msg of unread) {
-        if (msg.type === 'help_request') {
-          logger.info({ bot: this.botName, from: msg.from, content: msg.content }, 'Help request received from bot');
-          const keywords = msg.content.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-          this.playerTaskQueue.push({ description: msg.content, keywords });
-        }
+      for (const msg of unread.slice(0, 3)) {
+        this.processBotMessage(msg);
       }
     }
 
     // Reflect on emotional state (decay toward neutral)
     this.socialMemory?.reflect(this.botName);
 
+    // Assess threats and scan opportunities each cycle
+    let threatAssessment: ThreatAssessment | null = null;
+    if (this.threatAssessor) {
+      try { threatAssessment = this.threatAssessor.assess(this.bot); } catch { /* ignore scan errors */ }
+      if (threatAssessment && threatAssessment.overallThreatLevel >= 7) {
+        this.decisionTrace.record('task_selection', threatAssessment.suggestedAction,
+          `Threat level ${threatAssessment.overallThreatLevel}: ${threatAssessment.threats[0]?.description || 'unknown'}`,
+          threatAssessment.suggestedAction, { level: threatAssessment.overallThreatLevel, threats: threatAssessment.threats.length });
+      }
+    }
+
+    // Proactive communication: announce discoveries and threats
+    if (this.proactiveCommunicator && this.opportunityDetector) {
+      try {
+        const scan = this.opportunityDetector.scan(this.bot);
+        const announcements = this.proactiveCommunicator.checkAndAnnounce({
+          threats: threatAssessment?.threats.map((t) => ({ type: t.type, source: t.source, dangerLevel: t.dangerLevel, distance: t.distance, position: t.position })) ?? [],
+          opportunities: scan.opportunities,
+          health: this.bot.health,
+          food: this.bot.food,
+          currentTask: this.currentTask ?? undefined,
+        });
+        for (const ann of announcements) {
+          if (ann.priority >= 7 && this.bot.chat) {
+            this.bot.chat(this.proactiveCommunicator.formatForChat(ann));
+          }
+        }
+      } catch { /* ignore scan errors */ }
+    }
+
     if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
       await this.runBuildGoalCycle();
       return;
     }
+
+    // GoalGenerator: check for survival/safety overrides before normal task selection
+    let goalOverrideTask: Task | null = null;
+    if (this.goalGenerator && this.playerTaskQueue.length === 0) {
+      try {
+        const goals = this.goalGenerator.generateGoals({
+          health: this.bot.health,
+          food: this.bot.food,
+          oxygen: this.getOxygenLevel(),
+          inventory: Object.fromEntries(this.bot.inventory.items().map((i) => [i.name, i.count])),
+          equipment: {},
+          nearbyHostiles: {
+            count: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').length ?? 0,
+            closestDistance: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').reduce((min, t) => Math.min(min, t.distance), Infinity) ?? Infinity,
+          },
+          timeOfDay: this.bot.time?.timeOfDay ?? 0,
+          isRaining: this.bot.isRaining ?? false,
+          hasShelter: false,
+          playerTasks: this.playerTaskQueue.map((t) => t.description),
+          blackboardTasks: [],
+          completedTaskCount: this.curriculumAgent.getCompletedTasks().length,
+          personality: this.personality,
+        });
+        const top = goals[0];
+        if (top && (top.priority === 'survival' || top.priority === 'safety') && top.urgency >= 7) {
+          goalOverrideTask = { description: top.description, keywords: top.keywords };
+          this.decisionTrace.record('task_selection', top.description, `GoalGenerator: ${top.priority} override (urgency ${top.urgency})`,
+            top.description, { priority: top.priority, urgency: top.urgency });
+        }
+      } catch { /* ignore goal generation errors */ }
+    }
+
     // 1. Get task from player queue or curriculum
     const goalTask = this.activeLongTermGoal ? longTermGoalToTask(this.activeLongTermGoal) : null;
-    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality)) || null : null;
+    this.blackboardManager?.releaseStale();
+    const botPos = this.bot.entity?.position ? { x: this.bot.entity.position.x, y: this.bot.entity.position.y, z: this.bot.entity.position.z } : undefined;
+    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
-    const task = goalTask
+    const task = goalOverrideTask
+      || goalTask
       || playerTask
       || (blackboardTask ? { description: blackboardTask.description, keywords: blackboardTask.keywords } : null)
       || await this.curriculumAgent.proposeTask(
@@ -384,6 +485,18 @@ export class VoyagerLoop {
       source: goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous',
       plan: plan.steps.map((step) => step.description),
     }, 'Voyager task proposed');
+
+    const taskSource = goalTask ? 'long-term-goal' : playerTask ? 'player-request' : blackboardTask ? 'blackboard' : 'autonomous';
+    this.decisionTrace.record('task_selection', task.description, `Selected ${taskSource} task`, task.description, {
+      plan: plan.steps.map((s) => s.description),
+      playerQueueSize: this.playerTaskQueue.length,
+      hasLongTermGoal: !!this.activeLongTermGoal,
+    }, [
+      { label: 'long-term-goal', chosen: taskSource === 'long-term-goal', reason: goalTask ? 'Active goal' : 'No goal' },
+      { label: 'player-request', chosen: taskSource === 'player-request', reason: playerTask && !goalTask ? 'Queued' : 'None' },
+      { label: 'blackboard', chosen: taskSource === 'blackboard', reason: blackboardTask ? 'Claimed' : 'None' },
+      { label: 'autonomous', chosen: taskSource === 'autonomous', reason: taskSource === 'autonomous' ? 'Curriculum' : 'Higher priority used' },
+    ]);
 
     for (const step of plan.steps) {
       const ok = await this.executeTaskStep(step);
@@ -639,20 +752,61 @@ export class VoyagerLoop {
     const blockerSummary = this.curriculumAgent.getBlockerMemory().summarize(task);
     const worldMemorySummary = this.curriculumAgent.getWorldMemory().summary();
     const useDirectSkill = !!bestSkill && composableSkills.length <= 1;
-    let generated = useDirectSkill
-      ? this.skillToGeneratedCode(bestSkill)
-      : await this.actionAgent.generateCode(this.bot, task, this.skillLibrary, undefined, undefined, undefined, undefined, blockerSummary, worldMemorySummary);
+
+    // Try action templates as a middle tier between skill library and full code gen
+    const templateMatch = !useDirectSkill && this.actionTemplates
+      ? this.actionTemplates.findTemplate(task.description, task.keywords)
+      : null;
+    const useTemplate = templateMatch && templateMatch.confidence >= 0.5;
+
+    let generated: GeneratedCode;
+    let codeSource: string;
+
+    if (useDirectSkill) {
+      generated = this.skillToGeneratedCode(bestSkill);
+      codeSource = 'skill-library';
+    } else if (useTemplate && templateMatch) {
+      // Render template to code
+      const params: Record<string, string> = {};
+      for (const kw of task.keywords) params[kw] = kw;
+      const rendered = this.actionTemplates!.renderTemplate(templateMatch.template, params);
+      const code = this.actionTemplates!.toCode(rendered, this.taskToSkillName(task));
+      const fnMatch = code.match(/async\s+function\s+(\w+)/);
+      generated = {
+        functionName: fnMatch?.[1] || 'templateTask',
+        functionCode: code,
+        execCode: `await ${fnMatch?.[1] || 'templateTask'}(bot);`,
+      };
+      codeSource = 'action-template';
+    } else {
+      generated = await this.actionAgent.generateCode(this.bot, task, this.skillLibrary, undefined, undefined, undefined, undefined, blockerSummary, worldMemorySummary);
+      codeSource = 'action-agent';
+    }
 
     logger.info({
       bot: this.botName,
-      source: useDirectSkill ? 'skill-library' : 'action-agent',
+      source: codeSource,
       skillName: bestSkill?.name,
       skillScore: bestSkill?.score,
+      templateName: templateMatch?.template.name,
+      templateConfidence: templateMatch?.confidence,
       composableSkills: composableSkills.map((skill) => ({ name: skill.name, score: skill.score })),
       functionName: generated.functionName,
       codeLength: generated.functionCode.length,
       execCode: generated.execCode,
-    }, useDirectSkill ? 'Reusing saved skill' : 'Code generated by ActionAgent');
+    }, codeSource === 'skill-library' ? 'Reusing saved skill' : codeSource === 'action-template' ? 'Using action template' : 'Code generated by ActionAgent');
+
+    this.decisionTrace.record('skill_vs_codegen', task.description,
+      codeSource === 'skill-library' ? `Reusing skill "${bestSkill!.name}"`
+        : codeSource === 'action-template' ? `Using template "${templateMatch!.template.name}" (${(templateMatch!.confidence * 100).toFixed(0)}%)`
+        : `Generating fresh code`,
+      codeSource, { functionName: generated.functionName, codeLength: generated.functionCode.length, composableCount: composableSkills.length },
+      [
+        { label: 'skill-library', chosen: codeSource === 'skill-library', score: bestSkill?.score, reason: bestSkill ? `Match: "${bestSkill.name}"` : 'No match' },
+        { label: 'action-template', chosen: codeSource === 'action-template', score: templateMatch?.confidence, reason: templateMatch ? `Template: "${templateMatch.template.name}"` : 'No match' },
+        { label: 'action-agent', chosen: codeSource === 'action-agent', reason: 'Full code gen' },
+      ],
+    );
 
     logger.debug({
       bot: this.botName,
@@ -691,6 +845,11 @@ export class VoyagerLoop {
         execOutputLength: execResult.output.length,
         execEventsCount: execResult.events.length,
       }, 'Execution result');
+      this.decisionTrace.record('execution', task.description,
+        `Attempt ${attempt + 1}: ${execResult.success ? 'success' : `error: ${execResult.error?.slice(0, 120) || 'unknown'}`}`,
+        execResult.success ? 'success' : 'error',
+        { attempt: attempt + 1, execSuccess: execResult.success, execError: execResult.error?.slice(0, 300), eventCount: execResult.events.length },
+      );
       logger.debug({
         bot: this.botName,
         execOutput: execResult.output.slice(0, 4000),
@@ -736,6 +895,11 @@ export class VoyagerLoop {
         success: criticResult.success,
         reason: criticResult.reason,
       }, 'Voyager task evaluated');
+      this.decisionTrace.record('critic_evaluation', task.description,
+        `Attempt ${attempt + 1}: ${criticResult.success ? 'PASS' : 'FAIL'} — ${criticResult.reason.slice(0, 150)}`,
+        criticResult.success ? 'success' : 'failure',
+        { attempt: attempt + 1, success: criticResult.success, reason: criticResult.reason, critique: criticResult.critique?.slice(0, 300) },
+      );
 
       if (criticResult.success) {
         // Save the named function as a reusable skill
@@ -760,19 +924,61 @@ export class VoyagerLoop {
         this.socialMemory?.addMemory(this.botName, 'task_complete', this.botName, `Completed task: ${task.description}`, 0.5);
         this.socialMemory?.updateEmotionalState(this.botName, 'task_success');
 
+        // Narrate completion in-game
+        if (this.decisionNarrator) {
+          const narration = this.decisionNarrator.narrate({ task: task.description, personality: this.personality, botName: this.botName, event: 'task_complete' });
+          if (narration && this.bot.chat) this.bot.chat(narration);
+        }
+
+        // Report reputation event to main thread
+        try { this.decisionTrace.emitReputation({ botName: this.botName, type: 'task_completed', description: task.description, timestamp: Date.now(), impact: 0.5 }); } catch { /* ignore */ }
+        try { this.skillAttribution?.recordUsage({ skillName: generated.functionName, botName: this.botName, personality: this.personality, context: task.description, success: true, executionTimeMs: Date.now() - (this.lastExecutionMetrics?.timestamp ?? Date.now()), timestamp: Date.now() }); } catch { /* ignore */ }
+        try { this.planLibrary?.savePlan(task.description, [{ description: task.description, preconditions: [], postconditions: [], estimatedDurationMs: 0, failureRate: 0 }], task.keywords); } catch { /* ignore */ }
+
+        this.decisionTrace.record('task_outcome', task.description, `Task succeeded on attempt ${attempt + 1}`, 'success',
+          { attempts: attempt + 1, source: codeSource, skillSaved: quality >= 0.65, skillQuality: quality });
+
         return true;
       }
 
-      // Retry with iterative refinement
+      // Retry with iterative refinement + error recovery analysis
       lastError = criticResult.reason;
       if (useDirectSkill && bestSkill) {
         this.skillLibrary.recordOutcome(bestSkill.name, false);
       }
-        if (attempt < this.config.voyager.maxRetriesPerTask - 1) {
-        logger.info({ bot: this.botName, attempt: attempt + 1, critique: criticResult.critique, previousSource: useDirectSkill ? 'skill-library' : 'action-agent' }, 'Retrying with error feedback');
+
+      // Analyze the failure and get specific recovery hints
+      const recovery = analyzeFailure({
+        task: task.description,
+        error: lastError || '',
+        critique: criticResult.critique || '',
+        code: generated.functionCode,
+        bot: this.bot,
+        attempt: attempt + 1,
+        maxAttempts: this.config.voyager.maxRetriesPerTask,
+      });
+
+      // If recovery says abandon (e.g. swimming when already safe), skip retries
+      if (recovery?.abandon) {
+        logger.info({ bot: this.botName, pattern: recovery.pattern, hint: recovery.hint }, 'ErrorRecovery: abandoning task');
+        this.decisionTrace.record('retry_decision', task.description,
+          `Abandoned: ${recovery.pattern}`, 'abandon', { pattern: recovery.pattern, hint: recovery.hint });
+        return false;
+      }
+
+      if (attempt < this.config.voyager.maxRetriesPerTask - 1) {
+        // Enrich the critique with recovery hints
+        const enrichedCritique = recovery
+          ? `${recovery.hint}\n\n${criticResult.critique || ''}`
+          : criticResult.critique;
+
+        logger.info({ bot: this.botName, attempt: attempt + 1, recoveryPattern: recovery?.pattern || 'none', critique: enrichedCritique?.slice(0, 200) }, 'Retrying with error feedback');
+        this.decisionTrace.record('retry_decision', task.description,
+          `Retrying (attempt ${attempt + 2}/${this.config.voyager.maxRetriesPerTask})${recovery ? ` [${recovery.pattern}]` : ''}`,
+          'retry', { attempt: attempt + 1, error: lastError?.slice(0, 200), recoveryPattern: recovery?.pattern, recoveryHint: recovery?.hint?.slice(0, 200), critique: enrichedCritique?.slice(0, 200) });
         generated = await this.actionAgent.generateCode(
           this.bot, task, this.skillLibrary,
-          lastError, generated.functionCode, criticResult.critique, eventLog, blockerSummary, worldMemorySummary
+          lastError, generated.functionCode, enrichedCritique, eventLog, blockerSummary, worldMemorySummary
         );
         logger.info({
           bot: this.botName,
@@ -802,6 +1008,14 @@ export class VoyagerLoop {
     // Record failure in social memory
     this.socialMemory?.addMemory(this.botName, 'task_failure', this.botName, `Failed task: ${task.description} - ${lastError || 'unknown'}`, -0.3);
     this.socialMemory?.updateEmotionalState(this.botName, 'task_failure');
+
+    // Report reputation + attribution
+    try { this.decisionTrace.emitReputation({ botName: this.botName, type: 'task_failed', description: task.description, timestamp: Date.now(), impact: -0.3 }); } catch { /* ignore */ }
+    try { this.skillAttribution?.recordUsage({ skillName: generated.functionName, botName: this.botName, personality: this.personality, context: task.description, success: false, executionTimeMs: Date.now() - (this.lastExecutionMetrics?.timestamp ?? Date.now()), timestamp: Date.now() }); } catch { /* ignore */ }
+
+    this.decisionTrace.record('task_outcome', task.description,
+      `Task failed after ${this.config.voyager.maxRetriesPerTask} attempts: ${lastError?.slice(0, 120) || 'unknown'}`,
+      'failure', { attempts: this.config.voyager.maxRetriesPerTask, source: codeSource, lastError: lastError?.slice(0, 300) });
 
     logger.warn({ bot: this.botName, task: task.description, lastError }, 'Task failed after max retries');
     return false;
@@ -838,5 +1052,78 @@ export class VoyagerLoop {
       quality -= 0.15;
     }
     return Math.max(0, Math.min(1, quality));
+  }
+
+  /** Get oxygen level, but return 300 (safe) if bot is clearly not underwater. */
+  private getOxygenLevel(): number {
+    const raw = (this.bot as any).oxygenLevel;
+    if (raw === undefined || raw === null) return 300;
+    // If oxygen is reported as low but bot is above sea level and not in water, it's a false alarm
+    if (raw < 100) {
+      try {
+        const pos = this.bot.entity?.position;
+        if (pos) {
+          const blockAtHead = this.bot.blockAt(pos.offset(0, 1, 0));
+          const blockAtFeet = this.bot.blockAt(pos);
+          const inWater = blockAtHead?.name === 'water' || blockAtFeet?.name === 'water';
+          if (!inWater) return 300; // Not actually in water, ignore low oxygen
+        }
+      } catch { /* ignore */ }
+    }
+    return raw;
+  }
+
+  private processBotMessage(msg: { from: string; type: string; content: string }): void {
+    const content = msg.content;
+    const keywords = content.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+
+    switch (msg.type) {
+      case 'help_request':
+        logger.info({ bot: this.botName, from: msg.from, content }, 'Help request received from bot');
+        this.playerTaskQueue.push({ description: content, keywords });
+        this.socialMemory?.addMemory(this.botName, 'observation', msg.from, `Help request: ${content}`, 0.3);
+        break;
+      case 'inform':
+        logger.info({ bot: this.botName, from: msg.from, content }, 'Info received from bot');
+        this.socialMemory?.addMemory(this.botName, 'observation', msg.from, content, 0.1);
+        this.blackboardManager?.postMessage(msg.from, 'info', content);
+        break;
+      case 'request': {
+        logger.info({ bot: this.botName, from: msg.from, content }, 'Resource request from bot');
+        const requestedItem = keywords.find((w) => this.bot.inventory.items().some((i) => i.name.includes(w)));
+        if (requestedItem) {
+          this.playerTaskQueue.push({ description: `Give ${requestedItem} to ${msg.from}`, keywords: ['give', requestedItem, msg.from] });
+          this.botComms?.sendMessage(this.botName, msg.from, `I have ${requestedItem}, coming to you.`, 'chat');
+        } else {
+          this.botComms?.sendMessage(this.botName, msg.from, `Sorry, I don't have what you need.`, 'chat');
+        }
+        this.socialMemory?.addMemory(this.botName, 'trade', msg.from, content, 0.2);
+        break;
+      }
+      case 'broadcast':
+        logger.info({ bot: this.botName, from: msg.from, content }, 'Broadcast received');
+        this.blackboardManager?.postMessage(msg.from, 'info', content);
+        break;
+      case 'social':
+        this.socialMemory?.addMemory(this.botName, 'chat', msg.from, content, 0.15);
+        break;
+      case 'trade_offer':
+        if (this.tradeNegotiator) {
+          const proposals = this.tradeNegotiator.processTradeMessages(this.botName, [msg]);
+          for (const proposal of proposals) {
+            const inv = Object.fromEntries(this.bot.inventory.items().map((i) => [i.name, i.count]));
+            const result = this.tradeNegotiator.evaluateProposal(proposal, inv, this.personality);
+            if (result.accept) {
+              this.botComms?.sendMessage(this.botName, msg.from, `Deal accepted for ${proposal.offering.map((o) => `${o.count} ${o.item}`).join(', ')}`, 'chat');
+              this.decisionTrace.emitReputation({ botName: this.botName, type: 'trade_honored', description: `Accepted trade from ${msg.from}`, timestamp: Date.now(), impact: 0.4 });
+            } else {
+              this.botComms?.sendMessage(this.botName, msg.from, result.reason || 'No deal, sorry.', 'chat');
+            }
+          }
+        }
+        break;
+      default:
+        logger.debug({ bot: this.botName, from: msg.from, type: msg.type }, 'Unknown bot message type');
+    }
   }
 }

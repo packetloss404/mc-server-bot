@@ -90,7 +90,7 @@ Nearby entities: ${obs.nearbyEntities}`;
  * Warm-up thresholds for curriculum observation fields.
  * Matches original Voyager's graduated observation system.
  * Fields with threshold 0 are always shown; others are gated by completedTaskCount
- * and have a 95% inclusion chance once unlocked (5% dropout for minor variation).
+ * and have an 80% stochastic inclusion chance once unlocked.
  */
 const WARMUP_THRESHOLDS: Record<string, number> = {
   nearbyBlocks: 0,     // always — essential for early mining tasks
@@ -165,10 +165,9 @@ export function isContextWarmedUp(completedTaskCount: number): boolean {
 function shouldInclude(field: string, completedTaskCount: number): boolean {
   const threshold = WARMUP_THRESHOLDS[field] ?? 0;
   if (completedTaskCount < threshold) return false;
-  // Fields with threshold 0 are always included; others have 5% stochastic dropout
-  // to add minor variation without losing important context
+  // Fields with threshold 0 are always included; others have 80% stochastic inclusion
   if (threshold === 0) return true;
-  return Math.random() < 0.95;
+  return Math.random() < 0.8;
 }
 
 function filterCoreInventory(inventory: string): string {

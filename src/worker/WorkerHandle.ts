@@ -5,6 +5,7 @@ import { LLMClient } from '../ai/LLMClient';
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
 import { logger } from '../util/logger';
 
 export interface WorkerBotData {
@@ -30,6 +31,12 @@ export class WorkerHandle {
   lastStatus: any = null;
   lastDetailedStatus: any = null;
   lastDiagnostics: any = null;
+
+  // Decision trace buffer (forwarded from worker)
+  private traceBuffer: TraceRecord[] = [];
+  private traceMaxSize = 500;
+  private onTrace?: (record: TraceRecord) => void;
+  private onReputationEvent?: (event: any) => void;
 
   // Shared managers for IPC routing
   private llmClient: LLMClient | null;
@@ -118,12 +125,16 @@ export class WorkerHandle {
     if (type === 'blackboard.setBotGoal') return this.blackboardManager.setBotGoal(args[0], args[1]);
     if (type === 'blackboard.clearBotGoal') return this.blackboardManager.clearBotGoal(args[0]);
     if (type === 'blackboard.addTask') return this.blackboardManager.addTask(args[0], args[1], args[2]);
-    if (type === 'blackboard.claimBestTask') return this.blackboardManager.claimBestTask(args[0], args[1]);
+    if (type === 'blackboard.claimBestTask') return this.blackboardManager.claimBestTask(args[0], args[1], args[2], args[3]);
     if (type === 'blackboard.getState') return this.blackboardManager.getState();
     if (type === 'blackboard.getRecentMessages') return this.blackboardManager.getRecentMessages(args[0]);
     if (type === 'blackboard.getSwarmGoal') return this.blackboardManager.getSwarmGoal();
     if (type === 'blackboard.claimReservation') return this.blackboardManager.claimReservation(args[0], args[1], args[2], args[3], args[4]);
     if (type === 'blackboard.hasReservation') return this.blackboardManager.hasReservation(args[0], args[1], args[2]);
+    if (type === 'blackboard.releaseStale') return this.blackboardManager.releaseStale(args[0]);
+    if (type === 'blackboard.getSwarmRelevantTasks') return this.blackboardManager.getSwarmRelevantTasks(args[0]);
+    if (type === 'blackboard.getBlockedTaskDescriptions') return [...this.blackboardManager.getBlockedTaskDescriptions(args[0])];
+    if (type === 'blackboard.getRecentMessagesForBot') return this.blackboardManager.getRecentMessagesForBot(args[0], args[1]);
 
     // Affinity
     if (type === 'affinity.get') return this.affinityManager.get(args[0], args[1]);
@@ -151,6 +162,28 @@ export class WorkerHandle {
     // Swarm directive forwarding
     if (type === 'swarm.directive') {
       this.onSwarmDirective(data.description, data.requestedBy);
+      return;
+    }
+
+    // Reputation event forwarding from worker
+    if (type === 'reputation.recordEvent') {
+      if (this.onReputationEvent) {
+        try { this.onReputationEvent(data); }
+        catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'Reputation event handler error'); }
+      } else {
+        logger.debug({ bot: this.botName }, 'Reputation event received but no listener set');
+      }
+      return;
+    }
+
+    // Decision trace forwarding from worker
+    if (type === 'decision.trace') {
+      const record = data as TraceRecord;
+      this.traceBuffer.push(record);
+      if (this.traceBuffer.length > this.traceMaxSize) {
+        this.traceBuffer.shift();
+      }
+      this.onTrace?.(record);
       return;
     }
 
@@ -236,6 +269,25 @@ export class WorkerHandle {
 
   getCachedDiagnostics(): any {
     return this.lastDiagnostics;
+  }
+
+  /** Get recent decision traces, optionally filtered by type. Newest first. */
+  getDecisionTraces(limit = 50, type?: TraceType): TraceRecord[] {
+    let records = this.traceBuffer;
+    if (type) {
+      records = records.filter((r) => r.type === type);
+    }
+    return records.slice(-limit).reverse();
+  }
+
+  /** Register a callback for real-time trace events (used by Socket.IO). */
+  setTraceListener(fn: (record: TraceRecord) => void): void {
+    this.onTrace = fn;
+  }
+
+  /** Register a callback for reputation events from the worker. */
+  setReputationListener(fn: (event: any) => void): void {
+    this.onReputationEvent = fn;
   }
 
   isAlive(): boolean {

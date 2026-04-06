@@ -13,6 +13,15 @@ import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
 import { BlackboardManager } from '../voyager/BlackboardManager';
 import { WorkerHandle } from '../worker/WorkerHandle';
+import { SharedWorldModel } from '../voyager/SharedWorldModel';
+import { ResourceValuation } from '../voyager/ResourceValuation';
+import { SwarmCoordinator } from '../voyager/SwarmCoordinator';
+import { DungeonMaster } from '../voyager/DungeonMaster';
+import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
+import { SettlementPlanner } from '../voyager/SettlementPlanner';
+import { GovernanceSimulation } from '../voyager/GovernanceSimulation';
+import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
+import { BotReputation } from '../voyager/BotReputation';
 
 interface SavedBot {
   name: string;
@@ -31,6 +40,15 @@ export class BotManager {
   private socialMemory: SocialMemory;
   private botComms: BotComms;
   private blackboardManager: BlackboardManager;
+  private sharedWorldModel: SharedWorldModel;
+  private resourceValuation: ResourceValuation;
+  private swarmCoordinator: SwarmCoordinator;
+  private dungeonMaster: DungeonMaster;
+  private difficultyBalancer: DifficultyBalancer;
+  private settlementPlanner: SettlementPlanner;
+  private governanceSimulation: GovernanceSimulation;
+  private playerIntentModel: PlayerIntentModel;
+  private botReputation: BotReputation;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -44,6 +62,15 @@ export class BotManager {
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = new BotComms();
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
+    this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data'));
+    this.resourceValuation = new ResourceValuation();
+    this.swarmCoordinator = new SwarmCoordinator(this.blackboardManager);
+    this.dungeonMaster = new DungeonMaster();
+    this.difficultyBalancer = new DifficultyBalancer();
+    this.settlementPlanner = new SettlementPlanner();
+    this.governanceSimulation = new GovernanceSimulation('Elder');
+    this.playerIntentModel = new PlayerIntentModel();
+    this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
   }
 
   async spawnBot(
@@ -81,6 +108,11 @@ export class BotManager {
       this.blackboardManager,
       (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
     );
+
+    // Wire reputation listener immediately so it's ready before the worker sends events
+    handle.setReputationListener((event) => {
+      this.botReputation.recordEvent(event);
+    });
 
     this.workers.set(key, handle);
 
@@ -124,6 +156,8 @@ export class BotManager {
     this.affinityManager.shutdown();
     this.socialMemory.shutdown();
     this.blackboardManager.shutdown();
+    if (typeof (this.sharedWorldModel as any).shutdown === 'function') (this.sharedWorldModel as any).shutdown();
+    if (typeof (this.botReputation as any).shutdown === 'function') (this.botReputation as any).shutdown();
   }
 
   getWorker(name: string): WorkerHandle | undefined {
@@ -173,6 +207,16 @@ export class BotManager {
   getLLMClient(): LLMClient | null {
     return this.llmClient;
   }
+
+  getSharedWorldModel(): SharedWorldModel { return this.sharedWorldModel; }
+  getResourceValuation(): ResourceValuation { return this.resourceValuation; }
+  getSwarmCoordinator(): SwarmCoordinator { return this.swarmCoordinator; }
+  getDungeonMaster(): DungeonMaster { return this.dungeonMaster; }
+  getDifficultyBalancer(): DifficultyBalancer { return this.difficultyBalancer; }
+  getSettlementPlanner(): SettlementPlanner { return this.settlementPlanner; }
+  getGovernanceSimulation(): GovernanceSimulation { return this.governanceSimulation; }
+  getPlayerIntentModel(): PlayerIntentModel { return this.playerIntentModel; }
+  getBotReputation(): BotReputation { return this.botReputation; }
 
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
     // Broadcast swarm directive to all workers — this clears local queues and interrupts current tasks

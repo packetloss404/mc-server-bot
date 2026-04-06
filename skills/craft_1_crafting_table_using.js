@@ -1,13 +1,12 @@
-async function craftCraftingTableFromSprucePlanks(bot) {
-  const craftingTable = bot.inventory.items().find(i => i.name === 'crafting_table');
-  if (craftingTable) return;
-  let sprucePlanks = bot.inventory.items().find(i => i.name === 'spruce_planks');
-  if (!sprucePlanks || sprucePlanks.count < 4) {
-    let spruceLog = bot.inventory.items().find(i => i.name === 'spruce_log');
-    if (!spruceLog) {
-      await mineBlock('spruce_log', 1);
+async function craftCraftingTableFromLogs(bot) {
+  const planks = bot.inventory.items().find(i => i.name === 'oak_planks');
+  const planksCount = planks ? planks.count : 0;
+  if (planksCount < 4) {
+    const logs = bot.inventory.items().find(i => i.name === 'oak_log');
+    if (!logs || logs.count < 1) {
+      await mineBlock('oak_log', 1);
     }
-    await craftItem('spruce_planks', 1);
+    await craftItem('oak_planks', 1);
   }
   await craftItem('crafting_table', 1);
 }

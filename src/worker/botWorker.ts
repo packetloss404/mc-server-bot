@@ -48,6 +48,9 @@ const instance = new BotInstance({
   onSwarmDirective: (description, requestedBy) => {
     ipc.notify('swarm.directive', { description, requestedBy });
   },
+  onReputationEvent: (event) => {
+    ipc.notify('reputation.recordEvent', event);
+  },
 });
 
 // Handle commands from main thread
@@ -115,6 +118,22 @@ const statusInterval = setInterval(() => {
     });
   } catch {
     // Bot may not be fully initialized yet
+  }
+}, 2000);
+
+// Wire decision trace + reputation forwarding — re-check periodically to catch reconnected loops
+let lastWiredLoop: any = null;
+setInterval(() => {
+  const loop = instance.getVoyagerLoop();
+  if (loop && loop !== lastWiredLoop) {
+    lastWiredLoop = loop;
+    loop.getDecisionTrace().setEmitter((record) => {
+      ipc.notify('decision.trace', record);
+    });
+    loop.getDecisionTrace().setReputationEmitter((event) => {
+      ipc.notify('reputation.recordEvent', event);
+    });
+    logger.info({ bot: data.botName }, 'Decision trace + reputation notifier wired');
   }
 }, 2000);
 

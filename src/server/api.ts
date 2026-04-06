@@ -263,6 +263,74 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     });
   });
 
+  // Bot decision traces — from worker-forwarded trace buffer
+  app.get('/api/bots/:name/decisions', (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const limit = parseInt(String(req.query.limit ?? '50')) || 50;
+    const type = req.query.type ? String(req.query.type) : undefined;
+    const traces = handle.getDecisionTraces(limit, type as any);
+    res.json({ decisions: traces });
+  });
+
+  // ═══════════════════════════════════════
+  //  SMART AI SYSTEM ENDPOINTS
+  // ═══════════════════════════════════════
+
+  // Shared world model
+  app.get('/api/world/model', (_req: Request, res: Response) => {
+    res.json(botManager.getSharedWorldModel().getSnapshot());
+  });
+
+  // Resource economy / market values
+  app.get('/api/economy', (_req: Request, res: Response) => {
+    res.json({ values: botManager.getResourceValuation().getAllValues() });
+  });
+
+  // Bot reputation scores
+  app.get('/api/reputation', (_req: Request, res: Response) => {
+    res.json({ scores: botManager.getBotReputation().getAllReputations() });
+  });
+
+  app.get('/api/reputation/:name', (req: Request, res: Response) => {
+    const score = botManager.getBotReputation().getReputation(req.params.name as string);
+    res.json({ reputation: score });
+  });
+
+  // DungeonMaster world events
+  app.get('/api/events/world', (_req: Request, res: Response) => {
+    res.json({ active: botManager.getDungeonMaster().getActiveEvents(), history: botManager.getDungeonMaster().getEventHistory(20) });
+  });
+
+  // Difficulty state
+  app.get('/api/difficulty', (_req: Request, res: Response) => {
+    res.json(botManager.getDifficultyBalancer().calculateDifficulty());
+  });
+
+  // Settlement plans
+  app.get('/api/settlement', (_req: Request, res: Response) => {
+    res.json({ plans: (botManager.getSettlementPlanner() as any).plans ?? [] });
+  });
+
+  // Governance state
+  app.get('/api/governance', (_req: Request, res: Response) => {
+    res.json(botManager.getGovernanceSimulation().getGovernanceState());
+  });
+
+  // Swarm coordination plans
+  app.get('/api/swarm/plans', (_req: Request, res: Response) => {
+    res.json({ plans: botManager.getSwarmCoordinator().getActivePlans() });
+  });
+
+  // Player intent predictions
+  app.get('/api/players/:name/intent', (req: Request, res: Response) => {
+    const prediction = botManager.getPlayerIntentModel().predictIntent(req.params.name as string);
+    res.json({ prediction });
+  });
+
   // Full social graph (all bots, all players) — direct from main thread
   app.get('/api/relationships', (_req: Request, res: Response) => {
     const allAffinities = botManager.getAffinityManager().getAll();

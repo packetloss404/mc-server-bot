@@ -23,8 +23,8 @@ export class BlackboardProxy {
     return this.ipc.request('blackboard.addTask', [task, source, goalId]);
   }
 
-  async claimBestTask(botName: string, query?: string): Promise<any> {
-    return this.ipc.request('blackboard.claimBestTask', [botName, query]);
+  async claimBestTask(botName: string, query?: string, personality?: string, botPosition?: { x: number; y: number; z: number }): Promise<any> {
+    return this.ipc.request('blackboard.claimBestTask', [botName, query, personality, botPosition]);
   }
 
   async completeTask(taskDescription: string, botName: string): Promise<void> {
@@ -61,5 +61,21 @@ export class BlackboardProxy {
 
   async hasReservation(type: string, key: string, botName?: string): Promise<boolean> {
     return this.ipc.request('blackboard.hasReservation', [type, key, botName]);
+  }
+
+  async releaseStale(timeoutMs?: number): Promise<number> {
+    return this.ipc.request('blackboard.releaseStale', [timeoutMs]);
+  }
+
+  async getSwarmRelevantTasks(personality?: string): Promise<any[]> {
+    return this.ipc.request('blackboard.getSwarmRelevantTasks', [personality]);
+  }
+
+  async getBlockedTaskDescriptions(sinceMs?: number): Promise<string[]> {
+    return this.ipc.request('blackboard.getBlockedTaskDescriptions', [sinceMs]).then((s: any) => [...(s ?? [])]);
+  }
+
+  async getRecentMessagesForBot(botName: string, limit?: number): Promise<any[]> {
+    return this.ipc.request('blackboard.getRecentMessagesForBot', [botName, limit]);
   }
 }

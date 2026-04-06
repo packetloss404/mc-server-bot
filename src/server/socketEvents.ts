@@ -87,6 +87,22 @@ export function setupSocketEvents(
     }
   }, 30000);
 
+  // Wire decision trace listeners on new workers (checked every 10s alongside state polling)
+  const trackedBots = new Set<string>();
+  setInterval(() => {
+    for (const handle of botManager.getAllWorkers()) {
+      if (!trackedBots.has(handle.botName)) {
+        trackedBots.add(handle.botName);
+        handle.setTraceListener((record) => {
+          io.emit('bot:decision', record);
+        });
+        handle.setReputationListener((event) => {
+          botManager.getBotReputation().recordEvent(event);
+        });
+      }
+    }
+  }, 10000);
+
   // Clean up tracked state when bots are removed
   setInterval(() => {
     const activeNames = new Set(botManager.getAllWorkers().map((w) => w.botName));
@@ -96,6 +112,7 @@ export function setupSocketEvents(
         prevHealth.delete(name);
         prevStates.delete(name);
         prevInventory.delete(name);
+        trackedBots.delete(name);
       }
     }
   }, 60000);

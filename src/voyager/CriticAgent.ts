@@ -37,38 +37,86 @@ Do NOT wrap in markdown fences.
 
 Here are some examples:
 INPUT:
-Inventory (2/36): {"raw_iron": 5, "stone_pickaxe": 1}
-Task: Mine 5 iron_ore
+Inventory (2/36): {"oak_log":2, "spruce_log":2}
+
+Task: Mine 3 wood logs
+
 RESPONSE:
-{"reasoning": "Mining iron_ore yields raw_iron. The bot has 5 raw_iron in inventory.", "success": true, "critique": ""}
+{"reasoning": "The bot needs to mine 3 wood logs. It has 2 oak logs and 2 spruce logs, which add up to 4 wood logs.", "success": true, "critique": ""}
 
 INPUT:
 Inventory (3/36): {"crafting_table": 1, "spruce_planks": 6, "stick": 4}
+
 Task: Craft a wooden pickaxe
+
 RESPONSE:
-{"reasoning": "The bot has materials but did not craft the pickaxe.", "success": false, "critique": "Craft a wooden pickaxe with a crafting table using 3 spruce planks and 2 sticks."}
+{"reasoning": "The bot has enough materials to craft a wooden pickaxe, but it did not craft it.", "success": false, "critique": "Craft a wooden pickaxe with a crafting table using 3 spruce planks and 2 sticks."}
+
+INPUT:
+Inventory (2/36): {"raw_iron": 5, "stone_pickaxe": 1}
+
+Task: Mine 5 iron_ore
+
+RESPONSE:
+{"reasoning": "Mining iron_ore in Minecraft yields raw_iron. The bot has 5 raw_iron in inventory.", "success": true, "critique": ""}
+
+INPUT:
+Biome: plains
+
+Nearby blocks: stone, dirt, grass_block, grass, farmland, wheat
+
+Inventory (26/36): ...
+
+Task: Plant 1 wheat seed
+
+RESPONSE:
+{"reasoning": "For planting tasks, inventory information is useless. In nearby blocks, there is farmland and wheat, which means the bot successfully planted the wheat seed.", "success": true, "critique": ""}
+
+INPUT:
+Inventory (11/36): {"rotten_flesh": 1, "stone_sword": 1}
+
+Task: Kill 1 zombie
+
+RESPONSE:
+{"reasoning": "The bot has rotten flesh in inventory, which means it successfully killed a zombie.", "success": true, "critique": ""}
+
+INPUT:
+Hunger: 20.0/20.0
+
+Inventory (11/36): ...
+
+Task: Eat 1 cooked beef
+
+RESPONSE:
+{"reasoning": "For eating tasks, if hunger is 20.0 then the bot successfully ate the food.", "success": true, "critique": ""}
 
 INPUT:
 Position before: 100, 65, 200
 Position after: 145, 68, 220
 Distance moved: 52.3
+
 Task: Explore 50 blocks to the north
+
 RESPONSE:
-{"reasoning": "The bot moved 52.3 blocks, exceeding the required 50.", "success": true, "critique": ""}
+{"reasoning": "The bot moved 52.3 blocks from its starting position, which exceeds the required 50 blocks.", "success": true, "critique": ""}
+
+INPUT:
+Inventory delta: oak_log:+3, oak_planks:+4, stick:+8, crafting_table:+1
+
+Task: Mine 3 oak logs
+
+RESPONSE:
+{"reasoning": "The inventory delta shows oak_log:+3, meaning the bot gained exactly 3 oak logs during this task.", "success": true, "critique": ""}
 
 INPUT:
 Inventory delta: none
 Position before: 100, 65, 200
 Position after: 100, 65, 200
-Task: Mine 3 cobblestone
-RESPONSE:
-{"reasoning": "No inventory change and no movement occurred. The bot did not mine anything.", "success": false, "critique": "Use mineBlock('cobblestone', 3) to mine cobblestone. If no cobblestone is nearby, first use exploreUntil to find stone blocks, then mine them."}
 
-INPUT:
-Inventory delta: oak_log:+3, oak_planks:+4, stick:+8, crafting_table:+1
-Task: Mine 3 oak logs
+Task: Mine 3 cobblestone
+
 RESPONSE:
-{"reasoning": "The inventory delta shows oak_log:+3. The bot exceeded requirements by also crafting planks and sticks.", "success": true, "critique": ""}`;
+{"reasoning": "No inventory change and no movement occurred. The bot did not mine anything.", "success": false, "critique": "Use mineBlock('cobblestone', 3) to mine cobblestone. If no cobblestone is nearby, first use exploreUntil to find stone blocks, then mine them."}`;
 
 export class CriticAgent {
   private llmClient: LLMClient | null;
@@ -199,7 +247,7 @@ export class CriticAgent {
 
       const userMessage = lines.join('\n');
 
-      const response = await this.llmClient!.generate(CRITIC_SYSTEM_PROMPT, userMessage, 1000, { taskType: 'critic' });
+      const response = await this.llmClient!.generate(CRITIC_SYSTEM_PROMPT, userMessage, 1000);
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(cleaned);
 

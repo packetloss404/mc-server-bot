@@ -52,6 +52,77 @@ export function buildTaskGuidance(task: Task): TaskGuidance {
     };
   }
 
+  // Survival tasks (swim, eat, flee, shelter)
+  if (/shore|land.*water|walk.*shore/i.test(desc)) {
+    return {
+      category: 'survival',
+      prompt: task.description,
+      guidance: [
+        'The bot is in water and needs to reach land.',
+        'Use bot.findBlock({matching: b => b.name === "grass_block" || b.name === "dirt" || b.name === "sand" || b.name === "stone", maxDistance: 32}) to find land.',
+        'If land is found, use moveTo(land.position.x, land.position.y, land.position.z, 2, 30) to walk there.',
+        'If no land is found within 32 blocks, use bot.setControlState("forward", true) and swim in a direction for 3 seconds, then search again.',
+        'Do NOT keep swimming to the surface — the bot is AT the surface. It needs to reach SHORE.',
+      ],
+    };
+  }
+
+  if (/swim|drown|surface|underwater/i.test(desc)) {
+    return {
+      category: 'survival',
+      prompt: task.description,
+      guidance: [
+        'Use bot.setControlState("jump", true) and bot.setControlState("forward", true) to swim upward.',
+        'Wait with await bot.waitForTicks(40-60) while swimming.',
+        'Then call bot.clearControlStates() to stop.',
+        'Check bot.entity.position.y — if still underwater, repeat.',
+        'Once at surface, use moveTo to reach land.',
+        'Do NOT use moveTo or pathfinder while underwater — it cannot swim.',
+      ],
+    };
+  }
+
+  if (/eat|hungry|starv|food/i.test(desc)) {
+    return {
+      category: 'survival',
+      prompt: task.description,
+      guidance: [
+        'Find food in inventory: bot.inventory.items().find(i => i.foodRecovery > 0)',
+        'Equip food to hand: await bot.equip(food, "hand")',
+        'Eat: await bot.consume()',
+        'If no food in inventory, try to find and kill a nearby animal (cow, pig, chicken, sheep) using killMob.',
+        'Then pick up the dropped meat.',
+      ],
+    };
+  }
+
+  if (/flee|run away|escape|danger/i.test(desc)) {
+    return {
+      category: 'survival',
+      prompt: task.description,
+      guidance: [
+        'Find the threat: bot.nearestEntity(e => e.type === "hostile")',
+        'Calculate flee direction: opposite of threat direction.',
+        'Use moveTo to run away at least 20 blocks.',
+        'Use bot.setControlState("sprint", true) for speed.',
+        'After reaching safety, call bot.clearControlStates().',
+      ],
+    };
+  }
+
+  if (/shelter|house|hide|night|sleep/i.test(desc)) {
+    return {
+      category: 'survival',
+      prompt: task.description,
+      guidance: [
+        'Gather 10-20 blocks of dirt or cobblestone if not in inventory.',
+        'Build a small 3x3x3 enclosure with placeItem.',
+        'Leave one block open as a door or place a door.',
+        'Stay inside until dawn (bot.time.timeOfDay < 13000 means daytime).',
+      ],
+    };
+  }
+
   if (spec.kind === 'movement') {
     return {
       category: 'movement',

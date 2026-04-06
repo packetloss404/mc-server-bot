@@ -535,6 +535,22 @@ export class CodeExecutor {
       toss: async (itemType: number, metadata: any, count: number) => {
         await bot.toss(itemType, metadata, count);
       },
+      setControlState: (state: string, value: boolean) => {
+        bot.setControlState(state as any, value);
+      },
+      clearControlStates: () => {
+        bot.clearControlStates();
+      },
+      consume: async () => {
+        await (bot as any).consume();
+      },
+      activateItem: () => {
+        bot.activateItem();
+      },
+      deactivateItem: () => {
+        bot.deactivateItem();
+      },
+      get oxygenLevel() { return (bot as any).oxygenLevel ?? 300; },
     };
   }
 }

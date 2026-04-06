@@ -16,6 +16,82 @@ const MAX_HISTORY = 100;
 // Confidence threshold below which clarification is required
 const CLARIFICATION_THRESHOLD = 0.5;
 
+// Timeout for LLM parse calls (ms) — fall back to regex if exceeded
+const LLM_PARSE_TIMEOUT_MS = 8000;
+
+// ── LLM System Prompt ───────────────────────────────────
+
+const LLM_COMMANDER_SYSTEM_PROMPT = `You are a command parser for a Minecraft bot fleet management system.
+Your job is to parse natural language instructions into structured JSON command plans.
+
+## Available Command Types (instant actions dispatched to bots)
+- "pause_voyager" — pause/stop/halt bots
+- "resume_voyager" — resume/unpause/continue bots
+- "stop_movement" — stop bot movement only
+- "follow_player" — follow a specific player (payload: { playerName })
+- "walk_to_coords" — move bots to coordinates (payload: { x, y?, z })
+- "move_to_marker" — move bots to a named marker (payload: { markerId })
+- "return_to_base" — return bots to their home base
+- "regroup" — regroup bots at a location
+- "guard_zone" — guard a zone/area (payload: { zoneId? })
+- "patrol_route" — patrol a route (payload: { routeId? })
+- "deposit_inventory" — deposit inventory into nearby chests
+- "equip_best" — equip the best available gear
+- "unstuck" — attempt to free a stuck bot
+
+## Available Mission Types (longer tasks tracked by MissionManager)
+- "queue_task" — generic task (mining, farming, etc.)
+- "gather_items" — gather specific items (payload: { items })
+- "craft_items" — craft specific items (payload: { items })
+- "smelt_batch" — smelt items in a furnace
+- "build_schematic" — build from a schematic file
+- "supply_chain" — run a supply chain
+- "patrol_zone" — long-duration patrol mission
+- "escort_player" — escort a player
+- "resupply_builder" — resupply a building bot
+
+## Target Formats
+- Specific bot names (capitalize first letter, e.g. "Ada", "Bob", "Carl")
+- "__all__" for all bots
+- "__role:<role>__" for role-based targeting (roles: guard, farmer, miner, explorer, blacksmith, merchant)
+
+## Output Format
+Respond with ONLY a JSON object (no markdown, no explanation) with these fields:
+{
+  "intent": "<string: brief name of the parsed intent>",
+  "confidence": <number 0-1: how confident you are in the parse>,
+  "warnings": ["<any issues or assumptions made>"],
+  "commands": [{ "type": "<CommandType>", "targets": ["<target>"], "payload": {} }],
+  "missions": [{ "type": "<MissionType>", "title": "<short title>", "description": "<from input>", "assigneeIds": ["<target>"] }],
+  "clarifications": [{ "question": "<question to ask user>", "options": ["<option1>", "<option2>"], "field": "<which field this clarifies>" }]
+}
+
+Rules:
+- Use commands for instant actions, missions for longer tasks.
+- Set confidence high (0.8-1.0) when the intent and targets are clear.
+- Set confidence medium (0.5-0.8) when some assumptions are needed.
+- Set confidence low (0.2-0.5) when the input is vague or ambiguous.
+- Add clarifications when something is genuinely unclear (missing target, ambiguous action, vague location).
+- If you cannot determine the intent at all, set intent to "unknown" and confidence to 0.1.
+- Do NOT wrap the JSON in markdown code fences.
+
+## Examples
+
+Input: "Send all guards to 100, 64, -200"
+Output: {"intent":"move_bots","confidence":0.95,"warnings":[],"commands":[{"type":"walk_to_coords","targets":["__role:guard__"],"payload":{"x":100,"y":64,"z":-200}}],"missions":[],"clarifications":[]}
+
+Input: "Have Bob mine diamonds"
+Output: {"intent":"mine_task","confidence":0.85,"warnings":[],"commands":[],"missions":[{"type":"queue_task","title":"Mine diamonds","description":"have bob mine diamonds","assigneeIds":["Bob"]}],"clarifications":[]}
+
+Input: "Pause everything"
+Output: {"intent":"pause_bots","confidence":0.95,"warnings":[],"commands":[{"type":"pause_voyager","targets":["__all__"],"payload":{}}],"missions":[],"clarifications":[]}
+
+Input: "Do something useful"
+Output: {"intent":"unknown","confidence":0.1,"warnings":["Input is too vague to determine a specific action"],"commands":[],"missions":[],"clarifications":[{"question":"What would you like the bots to do?","options":["Move to a location","Mine resources","Farm crops","Guard an area","Patrol a route"],"field":"intent"}]}
+
+Input: "Go collect wood"
+Output: {"intent":"gather_task","confidence":0.5,"warnings":["No specific bot targeted"],"commands":[],"missions":[{"type":"gather_items","title":"Collect wood","description":"go collect wood","assigneeIds":[]}],"clarifications":[{"question":"Which bot should collect wood?","options":["All bots","Farmers only","Miners only","Specify by name"],"field":"targets"}]}`;
+
 // ── Types ────────────────────────────────────────────────
 
 export interface ClarificationQuestion {
@@ -414,6 +490,22 @@ export class CommanderService {
       return plan;
     }
 
+    // Try LLM-based parsing first (falls back to regex below)
+    const llmPlan = await this.llmParse(planId, trimmedInput, now);
+    if (llmPlan && llmPlan.confidence > 0) {
+      this.plans.set(planId, llmPlan);
+      this.upsertHistory({
+        planId,
+        input,
+        plan: llmPlan,
+        status: llmPlan.needsClarification ? 'clarification_needed' : 'parsed',
+        createdAt: now,
+      });
+      this.trackParseMetrics(llmPlan);
+      return llmPlan;
+    }
+
+    // Regex fallback
     let intent = '';
     let confidence = 0;
     const warnings: string[] = [];
@@ -525,6 +617,132 @@ export class CommanderService {
     });
     this.trackParseMetrics(plan);
     return plan;
+  }
+
+  // ── LLM parsing ────────────────────────────────────────
+
+  private async llmParse(
+    planId: string,
+    trimmedInput: string,
+    now: string,
+  ): Promise<CommanderPlan | null> {
+    if (!this.llmClient) return null;
+
+    const start = Date.now();
+    try {
+      logger.info({ input: trimmedInput }, 'Commander: attempting LLM parse');
+
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('LLM parse timeout')), LLM_PARSE_TIMEOUT_MS);
+      });
+
+      const llmPromise = this.llmClient.generate(
+        LLM_COMMANDER_SYSTEM_PROMPT,
+        trimmedInput,
+        1024,
+      );
+
+      const response = await Promise.race([llmPromise, timeoutPromise]);
+      const latencyMs = Date.now() - start;
+
+      // Strip markdown code fences if present
+      let jsonText = response.text.trim();
+      const fenceMatch = jsonText.match(/```(?:json)?\s*([\s\S]*?)```/);
+      if (fenceMatch) {
+        jsonText = fenceMatch[1].trim();
+      }
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(jsonText);
+      } catch {
+        logger.warn({ input: trimmedInput, text: response.text.slice(0, 200), latencyMs }, 'Commander: LLM returned invalid JSON');
+        return null; // fall through to regex
+      }
+
+      if (typeof parsed.intent !== 'string' || typeof parsed.confidence !== 'number') {
+        logger.warn({ parsed, latencyMs }, 'Commander: LLM response missing required fields');
+        return null;
+      }
+
+      const confidence = Math.max(0, Math.min(1, parsed.confidence));
+
+      const commands: CommanderPlanCommand[] = [];
+      if (Array.isArray(parsed.commands)) {
+        for (const cmd of parsed.commands) {
+          if (cmd && typeof cmd.type === 'string' && Array.isArray(cmd.targets)) {
+            commands.push({
+              type: cmd.type,
+              targets: cmd.targets,
+              payload: cmd.payload && typeof cmd.payload === 'object' ? cmd.payload : {},
+            });
+          }
+        }
+      }
+
+      const missions: CommanderPlanMission[] = [];
+      if (Array.isArray(parsed.missions)) {
+        for (const msn of parsed.missions) {
+          if (msn && typeof msn.type === 'string' && typeof msn.title === 'string') {
+            missions.push({
+              type: msn.type,
+              title: msn.title,
+              description: msn.description ?? trimmedInput.toLowerCase(),
+              assigneeIds: Array.isArray(msn.assigneeIds) ? msn.assigneeIds : [],
+            });
+          }
+        }
+      }
+
+      const clarifications: ClarificationQuestion[] = [];
+      if (Array.isArray(parsed.clarifications)) {
+        for (const cq of parsed.clarifications) {
+          if (cq && typeof cq.question === 'string' && typeof cq.field === 'string') {
+            clarifications.push({
+              id: this.generateId('cq'),
+              question: cq.question,
+              options: Array.isArray(cq.options) ? cq.options : [],
+              field: cq.field,
+            });
+          }
+        }
+      }
+
+      const warnings: string[] = Array.isArray(parsed.warnings)
+        ? parsed.warnings.filter((w: unknown) => typeof w === 'string')
+        : [];
+
+      logger.info(
+        { input: trimmedInput, intent: parsed.intent, confidence, commandCount: commands.length, missionCount: missions.length, latencyMs },
+        'Commander: LLM parse succeeded',
+      );
+
+      const needsClarification = confidence < CLARIFICATION_THRESHOLD || clarifications.length > 0;
+      const suggestedCommands = confidence < CLARIFICATION_THRESHOLD ? this.getSuggestedCommands() : [];
+
+      return {
+        id: planId,
+        input: trimmedInput,
+        intent: parsed.intent,
+        confidence,
+        warnings,
+        requiresConfirmation: confidence < 0.8 || warnings.length > 0,
+        commands,
+        missions,
+        clarificationQuestions: clarifications,
+        needsClarification,
+        suggestedCommands,
+        createdAt: now,
+      };
+    } catch (err: any) {
+      const latencyMs = Date.now() - start;
+      const isTimeout = err.message === 'LLM parse timeout';
+      logger.warn(
+        { input: trimmedInput, err: err.message, latencyMs, isTimeout },
+        `Commander: LLM parse failed${isTimeout ? ' (timeout)' : ''}, falling back to regex`,
+      );
+      return null; // fall through to regex
+    }
   }
 
   // ── Target resolution ──────────────────────────────────

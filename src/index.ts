@@ -72,6 +72,44 @@ async function main() {
     botManager.getAffinityManager().decayTowardDefault();
   }, 60000);
 
+  // DungeonMaster: evaluate world state and generate events every 60s
+  setInterval(() => {
+    try {
+      const workers = botManager.getAllWorkers();
+      if (workers.length === 0) return;
+      const statuses = workers.map((w) => w.getCachedDetailedStatus()).filter(Boolean);
+      const snapshot = {
+        botCount: workers.length,
+        playerCount: 0, // TODO: track via player-join/leave events
+        serverTimeOfDay: statuses[0]?.world?.timeOfDay ?? 0,
+        weather: statuses[0]?.world?.isRaining ? 'rain' : 'clear',
+        totalResources: {},
+        recentCompletedTasks: statuses.reduce((sum: number, s: any) => sum + (s?.voyager?.completedTasks?.length ?? 0), 0),
+        exploredChunkCount: 0,
+        activeThreatCount: 0,
+        averageBotHealth: statuses.reduce((sum: number, s: any) => sum + (s?.health ?? 20), 0) / Math.max(1, statuses.length),
+      };
+      const event = botManager.getDungeonMaster().evaluateAndGenerate(snapshot);
+      if (event) {
+        for (const task of event.tasks) {
+          botManager.getBlackboardManager().addTask(
+            { description: task.description, keywords: task.keywords },
+            'swarm',
+            undefined,
+            task.priority as any,
+          );
+        }
+        const ev = eventLog.push({ type: 'world:event', botName: 'DungeonMaster', description: event.title });
+        io.emit('world:event', event);
+        io.emit('activity', ev);
+        logger.info({ eventId: event.id, title: event.title }, 'DungeonMaster generated world event');
+      }
+      botManager.getDungeonMaster().expireOldEvents();
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'DungeonMaster tick failed');
+    }
+  }, 60000);
+
   const formatMb = (bytes: number) => Number((bytes / 1024 / 1024).toFixed(1));
   const captureHeapSnapshot = (thresholdMb: number, heapUsedMb: number) => {
     try {

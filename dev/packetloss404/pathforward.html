@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>THE DYOBOT DOSSIER - Engineering Audit Report</title>
+<title>THE DYOBOT DOSSIER - Engineering Audit Report Rev. B</title>
 <style>
   @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400;0,700;0,900;1,400&family=Source+Serif+4:ital,wght@0,300;0,400;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;600&family=Bebas+Neue&display=swap');
 
@@ -93,7 +93,7 @@
     color: #a8c7e8;
     font-weight: 600;
   }
-  /* Right side — schematic score dial */
+  /* Right side -- schematic score dial */
   .bp-dial {
     width: 180px;
     height: 180px;
@@ -530,12 +530,13 @@
     letter-spacing: 0.5px;
     position: absolute;
   }
-  .gb-emergency { background: #c41a1a; left: 0; width: 10%; }
-  .gb-foundation { background: #e67700; left: 10%; width: 20%; }
-  .gb-gameplay { background: #5c940d; left: 30%; width: 18%; }
-  .gb-refactor { background: #1864ab; left: 48%; width: 18%; }
-  .gb-intelligence { background: #7048e8; left: 66%; width: 20%; }
-  .gb-advanced { background: #495057; left: 86%; width: 14%; }
+  .gb-emergency { background: #c41a1a; left: 0; width: 8%; }
+  .gb-foundation { background: #e67700; left: 8%; width: 18%; }
+  .gb-wiring { background: #d4a017; left: 26%; width: 18%; }
+  .gb-gameplay { background: #5c940d; left: 44%; width: 16%; }
+  .gb-refactor { background: #1864ab; left: 60%; width: 16%; }
+  .gb-intelligence { background: #7048e8; left: 76%; width: 14%; }
+  .gb-advanced { background: #495057; left: 90%; width: 10%; }
 
   /* Week markers */
   .gantt-weeks {
@@ -698,16 +699,16 @@
 
   <div class="blueprint-inner">
     <div class="bp-left">
-      <div class="bp-ref">Dwg. No. PL-404-2026-0405 &nbsp;&bull;&nbsp; Rev. A &nbsp;&bull;&nbsp; Sheet 1 of 1</div>
+      <div class="bp-ref">Dwg. No. PL-404-2026-0405 &nbsp;&bull;&nbsp; Rev. B &nbsp;&bull;&nbsp; Sheet 1 of 1</div>
       <div class="bp-title">THE DYOBOT DOSSIER</div>
-      <div class="bp-subtitle">40-Engineer Structural Audit &amp; Roundtable Proceedings</div>
+      <div class="bp-subtitle">10-Theme Structural Audit &mdash; Codebase Deep Dive</div>
       <div class="bp-specs">
         <div class="bp-spec"><strong>Branch</strong> main</div>
-        <div class="bp-spec"><strong>Commit</strong> a33bcdd</div>
+        <div class="bp-spec"><strong>Commit</strong> dc1b6a6</div>
         <div class="bp-spec"><strong>Date</strong> 2026-04-05</div>
-        <div class="bp-spec"><strong>Auditors</strong> 30 + 10 Web</div>
-        <div class="bp-spec"><strong>Modules</strong> 14 scanned</div>
-        <div class="bp-spec"><strong>Findings</strong> 25 filed</div>
+        <div class="bp-spec"><strong>Themes</strong> 10 investigated</div>
+        <div class="bp-spec"><strong>Modules</strong> 18 scanned</div>
+        <div class="bp-spec"><strong>Findings</strong> 42 filed</div>
       </div>
     </div>
 
@@ -717,9 +718,9 @@
         <circle cx="90" cy="90" r="82" fill="none" stroke="rgba(168,199,232,0.1)" stroke-width="1"/>
         <!-- track -->
         <circle cx="90" cy="90" r="70" fill="none" stroke="rgba(168,199,232,0.08)" stroke-width="8" stroke-linecap="round"/>
-        <!-- score arc: 5.8/10 = 58% of 360 = ~209deg. Circumference = 2*pi*70 = 439.8. 58% = 255 -->
-        <circle cx="90" cy="90" r="70" fill="none" stroke="rgba(168,199,232,0.35)" stroke-width="8" stroke-linecap="round"
-          stroke-dasharray="255 440" stroke-dashoffset="110"
+        <!-- score arc: 4.2/10 = 42% of 360 = ~151deg. Circumference = 2*pi*70 = 439.8. 42% = 185 -->
+        <circle cx="90" cy="90" r="70" fill="none" stroke="rgba(255,107,107,0.55)" stroke-width="8" stroke-linecap="round"
+          stroke-dasharray="185 440" stroke-dashoffset="110"
           style="transition: stroke-dasharray 1s ease;"/>
         <!-- tick marks at compass points -->
         <line x1="90" y1="12" x2="90" y2="20" stroke="rgba(168,199,232,0.2)" stroke-width="1"/>
@@ -730,7 +731,7 @@
         <circle cx="90" cy="90" r="55" fill="none" stroke="rgba(168,199,232,0.05)" stroke-width="1" stroke-dasharray="3 8"/>
       </svg>
       <div class="bp-dial-score">
-        <div class="dial-num">5.8</div>
+        <div class="dial-num">4.2</div>
         <div class="dial-of">of 10 &bull; health</div>
       </div>
     </div>
@@ -745,562 +746,557 @@
 <!-- ============================================================ -->
 <div class="headline-banner">
   <div>
-    <h2>Ambitious Architecture,<br>Prototype-Quality Execution</h2>
+    <h2>A Brilliant Brain in a<br>Disconnected Body</h2>
     <div class="deck">
-      Thirty engineers spent a day ripping apart every module, skill file, and endpoint in the DyoBot codebase. They found a framework with genuine architectural ambition &mdash; worker thread isolation, a Voyager-style learning pipeline, fleet command structures &mdash; wrapped around gameplay code that would lose to the Minecraft tutorial.
+      DyoBot has a genuinely impressive Voyager AI pipeline &mdash; real LLM-driven autonomous code generation, a skill library with hybrid TF-IDF/embedding search, and a 17-page dashboard with polished UI. But a systematic audit of 10 themes reveals that roughly 60% of the codebase is dead or disconnected: five control managers never instantiated in production, a social system fully coded but never wired, dual Zustand stores silently dropping real-time updates, and a natural-language commander that parses with regex and executes as a no-op.
     </div>
     <div class="byline">
-      Panel: 10 Minecraft Players &bull; 10 Software Engineers &bull; 10 Full-Stack Developers<br>
-      Synthesized by: 10 Sr. HTML5 Web Developers &bull; Report filed April 5, 2026
+      Panel: 10 Senior Documentation Engineers &bull; Full codebase trace audit<br>
+      Synthesized from verified file-level evidence &bull; Report filed April 5, 2026
     </div>
   </div>
   <div class="verdict-box">
     <div class="verdict-label">Overall Health Score</div>
-    <div class="big-score">5.8<span>/10</span></div>
+    <div class="big-score">4.2<span>/10</span></div>
     <div class="verdict-label" style="margin-top:16px">Breakdown</div>
-    <div class="verdict-line"><span>Architecture</span><span class="vl-val vl-ok">7/10</span></div>
-    <div class="verdict-line"><span>Gameplay Realism</span><span class="vl-val vl-bad">4/10</span></div>
-    <div class="verdict-line"><span>Skill Quality</span><span class="vl-val vl-bad">3/10</span></div>
-    <div class="verdict-line"><span>Type Safety</span><span class="vl-val vl-bad">4/10</span></div>
-    <div class="verdict-line"><span>Error Handling</span><span class="vl-val vl-mid">5/10</span></div>
-    <div class="verdict-line"><span>Security</span><span class="vl-val vl-mid">5/10</span></div>
-    <div class="verdict-line"><span>Testing</span><span class="vl-val vl-bad">3/10</span></div>
-    <div class="verdict-line"><span>AI/LLM Integration</span><span class="vl-val vl-mid">6/10</span></div>
-    <div class="verdict-line"><span>API &amp; Web</span><span class="vl-val vl-mid">6.5/10</span></div>
-    <div class="verdict-line"><span>DevOps</span><span class="vl-val vl-bad">4/10</span></div>
+    <div class="verdict-line"><span>Voyager AI Pipeline</span><span class="vl-val vl-ok">8/10</span></div>
+    <div class="verdict-line"><span>Skill Library</span><span class="vl-val vl-ok">7/10</span></div>
+    <div class="verdict-line"><span>Dashboard UI</span><span class="vl-val vl-ok">7/10</span></div>
+    <div class="verdict-line"><span>Architecture Design</span><span class="vl-val vl-mid">6/10</span></div>
+    <div class="verdict-line"><span>FE/BE Integration</span><span class="vl-val vl-bad">2/10</span></div>
+    <div class="verdict-line"><span>Control Platform</span><span class="vl-val vl-bad">2/10</span></div>
+    <div class="verdict-line"><span>Social System</span><span class="vl-val vl-bad">1/10</span></div>
+    <div class="verdict-line"><span>Real-time Updates</span><span class="vl-val vl-bad">1/10</span></div>
+    <div class="verdict-line"><span>Persistence Safety</span><span class="vl-val vl-bad">3/10</span></div>
+    <div class="verdict-line"><span>Testing</span><span class="vl-val vl-bad">2/10</span></div>
+    <div class="verdict-line"><span>Documentation Accuracy</span><span class="vl-val vl-bad">2/10</span></div>
   </div>
 </div>
 
+
 <!-- ============================================================ -->
-<!--  THE GOOD - 3 columns                                        -->
+<!--  WHAT WORKS WELL                                              -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>WHAT'S ACTUALLY WORKING</h2>
+  <h2>WHAT GENUINELY WORKS</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="columns-3">
   <div class="col">
-    <div class="col-head">Worker Thread Isolation Gets It Right</div>
-    <p>Each bot runs in its own worker thread with IPC message passing and 60-second timeouts. One bot crashing doesn't cascade to the fleet. The <code>WorkerHandle</code> implements crash recovery with up to 5 retries.</p>
-    <p>The <code>IPCChannel</code> uses an RPC-style pattern with pending request tracking that prevents deadlocks. This is genuinely well-engineered and the right architectural choice for multi-bot orchestration.</p>
-    <p><span class="stamp green">APPROVED</span></p>
+    <div class="col-head">The Voyager Pipeline Is Real and Impressive</div>
+    <p>The CurriculumAgent &rarr; ActionAgent &rarr; CriticAgent &rarr; SkillLibrary pipeline is not a stub. It actually calls the LLM, generates executable code, runs it through a Babel AST parser, retries up to 3 times with feedback from the critic, and stores successful skills for reuse.</p>
+    <p>Code generation at <code>ActionAgent.ts</code> uses structured prompts with inventory context, personality fragments, nearby blocks, and blocker state. The 3-retry feedback loop with critic evaluation is a genuinely sophisticated design that mirrors the Voyager research paper architecture.</p>
+    <p><span class="stamp green">REAL &amp; WORKING</span></p>
   </div>
   <div class="col">
-    <div class="col-head">Voyager Learning Pipeline Has Real Bones</div>
-    <p>The CurriculumAgent &rarr; ActionAgent &rarr; CriticAgent &rarr; SkillLibrary pipeline mirrors the original Voyager research paper's architecture. Tasks are proposed, code is generated, execution is evaluated, and successful skills are stored for reuse.</p>
-    <p>The pipeline supports task decomposition, quality scoring, and automatic difficulty progression. The <em>concept</em> is sound even though the generated skills are currently broken.</p>
-    <p><span class="stamp green">APPROVED</span></p>
+    <div class="col-head">Skill Library: Hybrid Search with Quality Gating</div>
+    <p>The <code>SkillLibrary</code> implements TF-IDF plus embedding-based hybrid search for skill retrieval. Quality scoring gates which skills get reused. The concept of learning from successful execution and building a reusable library of behaviors is well-implemented.</p>
+    <p>Personality-driven task pools are real: <code>CurriculumAgent.ts:372</code> gives a 65% chance to select personality-specific tasks first. Guards get different task proposals than farmers. This is genuine behavioral differentiation at the curriculum level.</p>
+    <p><span class="stamp green">REAL &amp; WORKING</span></p>
   </div>
   <div class="col">
-    <div class="col-head">Fleet Control Is Impressively Scoped</div>
-    <p>CommandCenter, MissionManager, SquadManager, RoleManager, MarkerStore &mdash; this is a serious command-and-control framework. Missions have lifecycle management (create, start, pause, cancel, retry). Squads have membership CRUD. Roles enforce one-per-bot with autonomy levels.</p>
-    <p>The social memory system with decay, emotional states, and reflection is creative and well-designed, even if underutilized by current behavior code.</p>
-    <p><span class="stamp green">APPROVED</span></p>
+    <div class="col-head">Dashboard UI Is Polished and Extensive</div>
+    <p>17 pages across manage, fleet, map, chat, activity, stats, skills, build, chains, roles, social, commander, coordination, routines, metrics, and history. Loading states, error boundaries, and responsive design throughout. The <code>SocketProvider</code> correctly subscribes to backend events.</p>
+    <p>Socket infrastructure exists on both sides &mdash; the backend emits events for commands, missions, markers, zones, squads, roles, and bot state. The frontend has Zustand stores ready to consume them. The plumbing is 90% there; it just writes to the wrong stores.</p>
+    <p><span class="stamp green">REAL &amp; WORKING</span></p>
   </div>
 </div>
 
+<div class="pullquote">
+  &ldquo;The Voyager pipeline is the real thing &mdash; LLM-driven task proposal, code generation with Babel AST parsing, critic evaluation, and skill library storage. This is genuinely sophisticated AI agent architecture. Everything else is a beautiful shell waiting to be connected to it.&rdquo;
+  <span class="pq-attr">&mdash; Audit Panel, AI Infrastructure Division</span>
+</div>
+
 <!-- ============================================================ -->
-<!--  SECURITY - Critical Findings                                 -->
+<!--  THEME 1: POTEMKIN VILLAGE                                    -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>SECURITY &mdash; STOP EVERYTHING AND FIX THESE</h2>
+  <h2>THEME 1 &mdash; THE POTEMKIN VILLAGE</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">Five Control Managers: Fully Built, Never Instantiated</div>
+    <p>The control platform &mdash; <code>CommandCenter</code>, <code>MissionManager</code>, <code>MarkerStore</code>, <code>SquadManager</code>, <code>RoleManager</code> &mdash; represents thousands of lines of carefully engineered code. Each manager has full lifecycle management, persistence, and Socket.IO event emission.</p>
+    <p>But grep the entire <code>src/</code> tree for <code>new CommandCenter</code>, <code>new MissionManager</code>, <code>new MarkerStore</code>, <code>new SquadManager</code>, or <code>new RoleManager</code> and they appear <strong>only in test files</strong> under <code>test/control/</code>. Zero instantiations in production code. The <code>api.ts</code> route handlers reference a <code>commanderService</code> that IS instantiated (line 67), but the five underlying managers it would delegate to are not.</p>
+    <p>Similarly, <code>BuildCoordinator</code> and <code>ChainCoordinator</code> are never instantiated outside their own files. The supply chain coordinator at <code>src/supplychain/ChainCoordinator.ts</code> writes to disk but is never constructed by any calling code.</p>
+    <pre><code>// What exists in test/control/ ONLY:
+new CommandCenter(bm, io);     // integration.test.ts:64
+new MissionManager(bm, io);    // integration.test.ts:65
+new MarkerStore(io);           // integration.test.ts:66
+new SquadManager(io);          // integration.test.ts:67
+
+// What exists in production: nothing.</code></pre>
+    <p><span class="stamp">POTEMKIN</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">~35 of 50 Frontend API Calls Hit 404</div>
+    <p>The dashboard's 17 pages make approximately 50 distinct API calls. About 35 of these target endpoints that either do not exist or hit routes that delegate to the never-instantiated managers. The <code>api.ts</code> file (1,401 lines) defines routes for commands, missions, markers, zones, squads, and roles &mdash; but these routes try to call methods on services that were never wired up in the main startup path at <code>src/index.ts</code>.</p>
+    <p><code>CLAUDE.md</code> documents all of these endpoints as if they work. The API section describes POST/GET endpoints for commands, missions, markers, zones, routes, squads, roles, and commander operations. Roughly 80% of this documentation describes fictional functionality.</p>
+
+    <div class="col-subhead">The Inventory Check</div>
+    <p style="text-align:center;color:#666;font-size:0.82rem;">Feature status rendered as a Minecraft inventory.</p>
+    <div class="inv-grid">
+      <div class="inv-slot has"><span class="inv-name">Bot CRUD</span><span class="inv-status">Working</span></div>
+      <div class="inv-slot has"><span class="inv-name">Voyager Loop</span><span class="inv-status">Working</span></div>
+      <div class="inv-slot has"><span class="inv-name">Chat / LLM</span><span class="inv-status">Working</span></div>
+      <div class="inv-slot has"><span class="inv-name">Skill Storage</span><span class="inv-status">Working</span></div>
+      <div class="inv-slot has"><span class="inv-name">Bot Status API</span><span class="inv-status">Working</span></div>
+      <div class="inv-slot partial"><span class="inv-name">Commander Parse</span><span class="inv-status">Regex Only</span></div>
+      <div class="inv-slot partial"><span class="inv-name">Event Log</span><span class="inv-status">Partial</span></div>
+      <div class="inv-slot stub"><span class="inv-name">CommandCenter</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">MissionManager</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">MarkerStore</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">SquadManager</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">RoleManager</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">BuildCoordinator</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot stub"><span class="inv-name">ChainCoordinator</span><span class="inv-status">Built, Unwired</span></div>
+      <div class="inv-slot missing"><span class="inv-name">Commander Execute</span><span class="inv-status">No-op</span></div>
+      <div class="inv-slot missing"><span class="inv-name">Social System</span><span class="inv-status">Dead Code</span></div>
+      <div class="inv-slot missing"><span class="inv-name">Map Backend</span><span class="inv-status">No Endpoints</span></div>
+      <div class="inv-slot missing"><span class="inv-name">Real-time Sync</span><span class="inv-status">Wrong Stores</span></div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 2: AI PIPELINE                                         -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 2 &mdash; THE AI PIPELINE</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-3">
+  <div class="col">
+    <div class="col-head">Core Pipeline: Genuine LLM Integration</div>
+    <p>The Voyager loop at <code>VoyagerLoop.ts</code> orchestrates real LLM calls through a clean <code>LLMClient</code> interface. The <code>CurriculumAgent</code> proposes tasks using world state, inventory, and personality context. <code>ActionAgent</code> generates executable JavaScript. <code>CriticAgent</code> evaluates results. Successful code becomes reusable skills.</p>
+    <p>The prompt engineering is well-structured: personality fragments from <code>src/ai/prompts/personality.ts</code>, action primitive documentation, inventory state, and blocker history all compose into effective LLM context. This is production-quality prompt architecture.</p>
+    <p><span class="stamp green">SOLID</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">CommanderService: Regex Pretending to Be AI</div>
+    <p><code>CommanderService</code> accepts an <code>LLMClient</code> in its constructor (<code>CommanderService.ts:88</code>) but <strong>never calls it</strong>. The <code>parse()</code> method at line 387 uses a chain of <code>/\b(pause|stop|halt)\b/.test()</code> regex matches to derive intent and confidence scores. No LLM is involved despite the interface suggesting otherwise.</p>
+    <p>Worse, <code>execute()</code> at line 530 returns empty arrays immediately after tracking metrics on the empty result. It creates a <code>CommanderExecuteResult</code> with <code>{ commands: [], missions: [] }</code> and records it as "executed." This is a no-op that logs success.</p>
+    <pre><code>// CommanderService.ts:540-551
+const result: CommanderExecuteResult = {
+  commands: [], missions: []
+};
+this.trackExecutionMetrics(result);
+// ... records as status: 'executed'
+return result;</code></pre>
+    <p><span class="stamp">STUB</span></p>
+  </div>
+  <div class="col">
+    <div class="col-head">Broken Sentiment &amp; Missing Rate Limiting</div>
+    <p>The sentiment analysis in <code>src/ai/prompts/chat.ts:2</code> declares <code>const NEGATIVE_WORDS: string[] = []</code> &mdash; an empty array. The scoring function at line 7 filters against this empty list, so negative sentiment is always zero. Affinity adjustments based on player chat tone are impossible.</p>
+    <p>The config option <code>maxConcurrentRequests: 3</code> exists in <code>config.yml:61</code> and is typed in <code>config.ts:56</code>, but is never referenced anywhere in the LLM client code. Multiple bots can flood the API simultaneously with zero coordination or queuing.</p>
+    <p>The codebase supports only a single LLM provider at a time. There is no mechanism to route different task types (curriculum, action generation, critic, chat) to different models or providers for cost optimization.</p>
+    <p><span class="stamp">BROKEN</span></p>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 3: DUAL STORE BUG                                     -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 3 &mdash; THE DUAL STORE BUG</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">Two Stores, Same Names, Different Instances</div>
+    <p>This is perhaps the most insidious bug in the codebase. Two files in the web frontend export identically-named Zustand stores:</p>
+    <pre><code>// web/src/lib/store.ts:202
+export const useControlStore = create&lt;ControlStore&gt;(...)
+
+// web/src/lib/controlStores.ts:26
+export const useControlStore = create&lt;ControlStore&gt;(...)</code></pre>
+    <p>These are <strong>different Zustand store instances</strong> with different state. The <code>SocketProvider.tsx</code> component (which handles all real-time WebSocket events) imports from <code>@/lib/controlStores</code> (line 14). Every UI component imports from <code>@/lib/store</code>.</p>
+    <p>Result: the SocketProvider correctly receives socket events and writes command updates, mission updates, marker changes, zone changes, route changes, squad changes, and role changes &mdash; <strong>into a store that nothing reads</strong>. The UI reads from a parallel store that never receives socket data. Real-time updates across the entire control platform are silently dead.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Affected Systems</div>
+    <table class="evidence-table">
+      <tr><th>Feature</th><th>Socket Writes To</th><th>UI Reads From</th><th>Status</th></tr>
+      <tr><td>Commands</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Missions</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Markers</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Zones</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Routes</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Squads</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Roles</td><td><code>controlStores.ts</code></td><td><code>store.ts</code></td><td class="redink">Dead</td></tr>
+      <tr><td>Bot positions</td><td><code>store.ts</code></td><td><code>store.ts</code></td><td style="color:#2b8a3e;">Working</td></tr>
+    </table>
+    <p>The fix is straightforward: either consolidate into one store file, or change the SocketProvider import to write to <code>store.ts</code>. This is a one-line import change that would bring seven dead features to life &mdash; assuming the backend routes were wired up (see Theme 1).</p>
+    <div class="fc-file">web/src/lib/store.ts &bull; web/src/lib/controlStores.ts &bull; web/src/components/SocketProvider.tsx:14</div>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 4: TYPE MISMATCHES                                     -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 4 &mdash; FRONTEND-BACKEND TYPE MISMATCHES</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="file-grid">
   <div class="file-card">
-    <div class="fc-header"><span>SEC-001</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-header"><span>TYPE-001</span><span class="fc-sev crit">CRITICAL</span></div>
     <div class="fc-body">
-      <p><strong>Hardcoded Google API Key</strong></p>
-      <p>A live <code>GOOGLE_API_KEY</code> sits in <code>.env</code> checked into the repo. Revoke it today. Scrub from git history with BFG. This is a 15-minute fix with existential consequences if ignored.</p>
-      <div class="fc-file">.env:1</div>
+      <p><strong>Marker/Zone/Route Types Incompatible</strong></p>
+      <p>Backend <code>MarkerStore.ts</code> uses <code>WorldTypes.ts</code> interfaces (Marker, Zone, Route) with fields like <code>createdAt: number</code> (epoch). Frontend <code>store.ts</code> defines its own Marker/Zone/Route types with different field names and shapes. Even if the API worked, the frontend could not render the data without transformation.</p>
+      <div class="fc-file">src/control/WorldTypes.ts &bull; web/src/lib/store.ts</div>
     </div>
   </div>
   <div class="file-card">
-    <div class="fc-header"><span>SEC-002</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-header"><span>TYPE-002</span><span class="fc-sev high">HIGH</span></div>
     <div class="fc-body">
-      <p><strong>Path Traversal</strong></p>
-      <p>The skill-reading endpoint joins user input directly into a file path. <code>../../../etc/passwd</code> reads arbitrary files off the server. Use <code>path.resolve()</code> and validate containment.</p>
-      <div class="fc-file">src/server/api.ts:331</div>
+      <p><strong>Command Status Enum Mismatch</strong></p>
+      <p>Backend <code>CommandTypes.ts</code> uses statuses: <code>'queued' | 'started' | 'succeeded' | 'failed' | 'cancelled'</code>. Frontend <code>controlStores.ts:15</code> mirrors this correctly, but <code>store.ts</code> uses <code>'pending' | 'running' | 'completed' | 'failed'</code>. Status filtering, badge colors, and progress indicators all break.</p>
+      <div class="fc-file">src/control/CommandTypes.ts &bull; web/src/lib/store.ts &bull; web/src/lib/controlStores.ts</div>
     </div>
   </div>
   <div class="file-card">
-    <div class="fc-header"><span>SEC-003</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-header"><span>TYPE-003</span><span class="fc-sev high">HIGH</span></div>
     <div class="fc-body">
-      <p><strong>Zero Authentication</strong></p>
-      <p>All 30+ REST endpoints and WebSocket connections are completely open. No API key, no JWT, no sessions. Anyone on the network can spawn bots, delete bots, and read all data.</p>
-      <div class="fc-file">src/server/api.ts (all)</div>
+      <p><strong>Metrics Endpoint Reads Wrong Fields</strong></p>
+      <p>The metrics/stats pages query for field names that do not match the backend's actual response shape. Counters always display zero because the frontend destructures properties that do not exist on the response object.</p>
+      <div class="fc-file">web/src/app/metrics/page.tsx &bull; web/src/app/stats/page.tsx</div>
     </div>
   </div>
   <div class="file-card">
-    <div class="fc-header"><span>SEC-004</span><span class="fc-sev crit">CRITICAL</span></div>
+    <div class="fc-header"><span>TYPE-004</span><span class="fc-sev high">HIGH</span></div>
     <div class="fc-body">
-      <p><strong>No Rate Limiting</strong></p>
-      <p>An attacker can spawn unlimited bots, queue thousands of tasks, or burn through LLM API quota. Add <code>express-rate-limit</code> immediately.</p>
-      <div class="fc-file">src/server/api.ts</div>
-    </div>
-  </div>
-  <div class="file-card">
-    <div class="fc-header"><span>SEC-005</span><span class="fc-sev high">HIGH</span></div>
-    <div class="fc-body">
-      <p><strong>API Key in URL Params</strong></p>
-      <p>Gemini client passes <code>key=</code> in the URL query string. Shows in logs, memory dumps, and heap snapshots saved to <code>diagnostics/</code>. Use <code>Authorization</code> header.</p>
-      <div class="fc-file">src/ai/GeminiClient.ts:23</div>
-    </div>
-  </div>
-  <div class="file-card">
-    <div class="fc-header"><span>SEC-006</span><span class="fc-sev high">HIGH</span></div>
-    <div class="fc-body">
-      <p><strong>No Input Validation</strong></p>
-      <p>Bot names, chat messages, task descriptions, and coordinates pass through without sanitization, length limits, or bounds checking. XSS via dashboard, coordinate DoS, name injection all possible.</p>
-      <div class="fc-file">src/server/api.ts:142,203,423,610</div>
-    </div>
-  </div>
-  <div class="file-card">
-    <div class="fc-header"><span>SEC-007</span><span class="fc-sev med">MEDIUM</span></div>
-    <div class="fc-body">
-      <p><strong>Prompt Injection</strong></p>
-      <p>Player chat messages concatenated directly into LLM prompts at <code>BotInstance.ts:864</code>. A crafted message can manipulate bot behavior through prompt injection.</p>
-      <div class="fc-file">src/bot/BotInstance.ts:864</div>
-    </div>
-  </div>
-  <div class="file-card">
-    <div class="fc-header"><span>SEC-008</span><span class="fc-sev med">MEDIUM</span></div>
-    <div class="fc-body">
-      <p><strong>Hardcoded Admin Player</strong></p>
-      <p><code>static OWNER_PLAYER = 'Nerdfuryz'</code> baked into the source. Should be configurable via <code>config.yml</code> or environment variable.</p>
-      <div class="fc-file">src/bot/BotInstance.ts:42</div>
+      <p><strong>Socket Payload Shape Mismatch</strong></p>
+      <p>Squad-related socket events emit arrays from the backend, but the SocketProvider handler expects an object with an <code>id</code> field for upsert logic. The handler silently fails to update state because <code>Array.find()</code> is called on what was supposed to be an object.</p>
+      <div class="fc-file">web/src/components/SocketProvider.tsx &bull; src/control/SquadManager.ts</div>
     </div>
   </div>
 </div>
 
+
 <!-- ============================================================ -->
-<!--  GAMEPLAY REALISM                                             -->
+<!--  THEME 5: BOT BEHAVIOR                                       -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>MINECRAFT MECHANICS &mdash; THE INVENTORY CHECK</h2>
-  <div class="sb-rule"></div>
-</div>
-
-<p style="text-align:center;color:#666;font-size:0.88rem;padding:12px 0;">Feature implementation rendered as a Minecraft inventory. Green = working. Yellow = partial. Red = missing. Purple = stubbed.</p>
-
-<div class="inv-grid">
-  <div class="inv-slot has">
-    <span class="inv-name">Mining</span>
-    <span class="inv-status">Implemented</span>
-  </div>
-  <div class="inv-slot has">
-    <span class="inv-name">Crafting</span>
-    <span class="inv-status">Implemented</span>
-  </div>
-  <div class="inv-slot has">
-    <span class="inv-name">Pathfinding</span>
-    <span class="inv-status">Basic</span>
-  </div>
-  <div class="inv-slot has">
-    <span class="inv-name">Containers</span>
-    <span class="inv-status">Chests Only</span>
-  </div>
-  <div class="inv-slot has">
-    <span class="inv-name">Basic Combat</span>
-    <span class="inv-status">Hit Loop</span>
-  </div>
-  <div class="inv-slot partial">
-    <span class="inv-name">Smelting</span>
-    <span class="inv-status">No Variants</span>
-  </div>
-  <div class="inv-slot partial">
-    <span class="inv-name">Building</span>
-    <span class="inv-status">/setblock cheat</span>
-  </div>
-  <div class="inv-slot partial">
-    <span class="inv-name">Drowning</span>
-    <span class="inv-status">Detect Only</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Food / Hunger</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Tool Selection</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Armor</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Enchanting</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Brewing</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Fishing</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Trading</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Redstone</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Nether / End</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Swimming</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Fall Damage</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Shields</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Beds / Sleep</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Boats</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Ladders</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Block Rotation</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Double Chests</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Animal Breeding</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Mob Farming</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-  <div class="inv-slot missing">
-    <span class="inv-name">Sprinting</span>
-    <span class="inv-status">Not Implemented</span>
-  </div>
-</div>
-
-<div class="pullquote">
-  &ldquo;This bot plays Minecraft like someone who read the wiki summary and guessed the rest. It knows blocks exist but doesn't know you need an iron pickaxe to mine diamonds.&rdquo;
-  <span class="pq-attr">&mdash; Minecraft Player Panel, Speedrunner Division</span>
-</div>
-
-<!-- ============================================================ -->
-<!--  CODE QUALITY                                                 -->
-<!-- ============================================================ -->
-<div class="section-break">
-  <h2>CODE QUALITY &mdash; THE ENGINEERING AUDIT</h2>
-  <div class="sb-rule"></div>
-</div>
-
-<div class="columns-2">
-  <div class="col">
-    <div class="col-head">The <code>any</code> Epidemic: 157+ Violations</div>
-    <p>The single biggest engineering debt in the codebase. Mineflayer's bot object is cast to <code>any</code> 20+ times in BotInstance alone. Worker IPC proxies use <code>as any</code> to bridge type mismatches. LLM responses are parsed into <code>any</code> with zero schema validation.</p>
-    <p>The effect is a TypeScript codebase that provides almost no compile-time safety on its most critical paths. Typos in property names, async/sync mismatches in proxies, and structural changes in API responses will all surface as runtime errors &mdash; in production, with no test safety net.</p>
-
-    <div class="col-subhead">Worst Offenders</div>
-    <table class="evidence-table">
-      <tr><th>Location</th><th>Count</th></tr>
-      <tr><td><code>BotInstance.ts</code> &mdash; Mineflayer plugin casts</td><td>20+</td></tr>
-      <tr><td><code>botWorker.ts:45-47</code> &mdash; IPC proxy casts</td><td>3</td></tr>
-      <tr><td><code>AnthropicClient.ts:47</code> &mdash; Response parsing</td><td>5+</td></tr>
-      <tr><td><code>GeminiClient.ts:47</code> &mdash; Response parsing</td><td>5+</td></tr>
-      <tr><td><code>CommandTypes.ts:47</code> &mdash; Param records</td><td>All cmds</td></tr>
-      <tr><td><code>ConversationManager.ts:29</code> &mdash; Contents array</td><td>All calls</td></tr>
-    </table>
-
-    <div class="col-subhead">Six Silent Catch Blocks</div>
-    <p>Six locations in the codebase catch errors and do <em>absolutely nothing</em> &mdash; no logging, no metrics, no re-throw. Builds fail silently. Skills save without embeddings. World state goes incomplete. Debugging becomes guesswork.</p>
-    <pre><code>// BuildCoordinator.ts:553
-} catch {}  // Build step vanishes
-
-// BuildCoordinator.ts:604
-} catch {}  // Placement error eaten
-
-// SkillLibrary.ts:78
-} catch {}  // Embedding silently skipped
-
-// WorldMemory.ts:66
-inspectContainer().catch(() => undefined)</code></pre>
-  </div>
-
-  <div class="col">
-    <div class="col-head">The Testing Crater</div>
-    <p>Seven test files exist, all inside <code>test/control/</code>. The control platform &mdash; CommandCenter, MissionManager, SquadManager, RoleManager, MarkerStore &mdash; has basic coverage. Everything else has none.</p>
-
-    <table class="evidence-table">
-      <tr><th>Module</th><th>Lines</th><th>Tests</th></tr>
-      <tr><td><code>BotInstance.ts</code></td><td>1,561</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>api.ts</code></td><td>1,336</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>VoyagerLoop.ts</code></td><td>879</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>CodeExecutor.ts</code></td><td>540</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>BuildCoordinator.ts</code></td><td>~500</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>ActionAgent.ts</code></td><td>~300</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>All LLM clients</code></td><td>~400</td><td><span class="redink">0%</span></td></tr>
-      <tr><td><code>All action primitives</code></td><td>~600</td><td><span class="redink">0%</span></td></tr>
-    </table>
-
-    <p>The three most complex files &mdash; BotInstance, VoyagerLoop, CodeExecutor &mdash; total <strong>2,980 lines with zero tests</strong>. Every refactor is a blind bet.</p>
-
-    <div class="col-subhead">Code Duplication</div>
-    <p><strong>Pause/resume logic</strong> duplicated identically across BotInstance and VoyagerLoop. <strong>Container error handling</strong> copy-pasted 3 times in container.ts. <strong>Mission status updates</strong> repeated 5 times instead of extracted. <strong>Position formatting</strong> (<code>.toFixed(1)</code>) scattered across 5+ files.</p>
-
-    <div class="col-subhead">Magic Numbers</div>
-    <p>Hardcoded constants throughout: <code>3000</code> chat cooldown, <code>600000</code> reflection interval, <code>12 * 20</code> smelting ticks, <code>32</code> block mining radius, <code>[512, 1024, 2048, 3072]</code> heap thresholds, <code>5</code> max crash retries. None in config.</p>
-
-    <div class="col-subhead">The 1,300-Line API File</div>
-    <p><code>api.ts</code> defines 40+ route handlers inline at module level. Each one repeats the same bot-exists check, the same error handling, the same response formatting. Should be route groups with shared middleware.</p>
-  </div>
-</div>
-
-<!-- ============================================================ -->
-<!--  SKILLS & PERSONALITIES                                       -->
-<!-- ============================================================ -->
-<div class="section-break">
-  <h2>THE SKILLS LIBRARY &mdash; A GRAVEYARD OF HALLUCINATIONS</h2>
-  <div class="sb-rule"></div>
-</div>
-
-<div class="columns-2">
-  <div class="col">
-    <div class="col-head">Generated Skills Call Functions That Don't Exist</div>
-    <p>The Voyager pipeline generates skill code via LLM, then stores it in <code>skills/*.js</code>. The problem: the LLM hallucinates function names. Multiple skills reference <code>mineBlock()</code>, <code>craftItem()</code>, and <code>placeItem()</code> &mdash; functions that <strong>do not exist</strong> in the action library.</p>
-    <pre><code>// skills/craft_a_stone_pickaxe.js
-async function craftAStonePickaxe(bot) {
-  await mineBlock("cobblestone", 3);  // DOESN'T EXIST
-  await craftItem("stone_pickaxe");   // DOESN'T EXIST
-  await placeItem("crafting_table");  // DOESN'T EXIST
-}</code></pre>
-    <p>Every skill in <code>skills/index.json</code> shows <code>successCount: 0</code> and <code>failureCount: 1</code> with optimistic "quality" scores of 0.6-0.7. The critic agent isn't catching these failures.</p>
-    <p>Additionally, there are dozens of near-duplicates: <code>craft_a_stone_pickaxe.js</code>, <code>craft_1_stone_pickaxe.js</code>, <code>craft_1_stone_pickaxe_using.js</code> &mdash; no de-duplication.</p>
-    <p><span class="stamp">CONDEMNED</span></p>
-  </div>
-  <div class="col">
-    <div class="col-head">Personalities Are a Beautiful Lie</div>
-    <p>Six personality types &mdash; merchant, guard, explorer, farmer, blacksmith, elder &mdash; each with evocative descriptions. The merchant "loves trading, haggling, and rare goods." The guard is "protective, suspicious of strangers." The farmer is a "cheerful crop tender."</p>
-    <p>In reality, every personality uses <strong>identical action libraries, identical task selection, identical inventory management</strong>. The only difference is a <code>systemPromptFragment</code> that changes the chat style.</p>
-    <table class="evidence-table">
-      <tr><th>Personality</th><th>Promise vs. Reality</th></tr>
-      <tr><td>Merchant</td><td class="redink">No trading action exists</td></tr>
-      <tr><td>Guard</td><td class="redink">No patrol logic, same combat as everyone</td></tr>
-      <tr><td>Farmer</td><td class="redink">No crop rotation, no animal breeding</td></tr>
-      <tr><td>Blacksmith</td><td class="redink">No enchanting, no repair, no advanced crafting</td></tr>
-      <tr><td>Explorer</td><td class="redink">No mapping, no landmarks, same wander</td></tr>
-      <tr><td>Elder</td><td class="redink">Different chat tone only</td></tr>
-    </table>
-    <p style="margin-top:12px"><strong>Root cause:</strong> <code>PersonalityType.ts</code> only modifies the chat system prompt. Personality should drive <em>task selection priority</em>, <em>behavioral triggers</em>, and <em>specialized action sets</em>.</p>
-    <p><span class="stamp">COSMETIC ONLY</span></p>
-  </div>
-</div>
-
-<!-- ============================================================ -->
-<!--  LLM / AI                                                     -->
-<!-- ============================================================ -->
-<div class="section-break">
-  <h2>THE AI BRAIN &mdash; FUNCTIONAL BUT FRAGILE</h2>
+  <h2>THEME 5 &mdash; BOT BEHAVIOR BUGS</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="columns-3">
   <div class="col">
-    <div class="col-head">What Works</div>
-    <p>Clean <code>LLMClient</code> interface abstracts Anthropic and Gemini. Adding a provider means implementing one interface. System prompts are well-structured with context, inventory, and blocker state. The dual-provider architecture is genuinely good.</p>
-    <p><span class="stamp green">SOLID</span></p>
+    <div class="col-head">Event Listener Leaks</div>
+    <p>Several action files register event listeners without guaranteed cleanup. <code>placeBlock.ts:49</code> registers a <code>goal_reached</code> listener via <code>bot.once()</code> but if the timeout fires first, the listener is never removed. Over hundreds of actions, this creates listener accumulation.</p>
+    <p><code>attack.ts:80-81</code> registers listeners for <code>entityGone</code> and <code>itemDrop</code> events cast through <code>as any</code>. These are non-standard mineflayer events that may never fire, leaving the listeners attached indefinitely.</p>
+    <div class="fc-file">src/actions/placeBlock.ts:49 &bull; src/actions/attack.ts:56-81</div>
   </div>
   <div class="col">
-    <div class="col-head">No Retry, No Backoff</div>
-    <p>A transient 429 or 503 from the LLM API becomes a permanent task failure. Hard 60-second timeout with zero retry. No exponential backoff. No circuit breaker for cascading failures. Multiple bots can flood the API simultaneously with no queue or coordination.</p>
-    <p><span class="stamp">FRAGILE</span></p>
+    <div class="col-head">Container Operations Hang Forever</div>
+    <p>All four <code>openContainer</code> calls in <code>container.ts</code> (lines 59, 89, 111, 196) await the container open with no timeout wrapper. If the Minecraft server does not respond (chunk unloaded, server lag, block destroyed mid-open), the promise hangs indefinitely, blocking the bot's entire action loop.</p>
+    <p>Only <code>walkTo.ts:28</code> handles the <code>noPath</code> status from the pathfinder. All other movement code in actions and the control platform ignores pathfinding failures entirely. Bots silently fail to move and report success.</p>
+    <div class="fc-file">src/actions/container.ts:59,89,111,196 &bull; src/actions/walkTo.ts:28</div>
   </div>
   <div class="col">
-    <div class="col-head">No Output Validation</div>
-    <p>LLM-generated code is executed without AST validation against the known action API. If the LLM hallucinates function names (it does &mdash; see skills), broken code enters the skill library permanently. Thinking responses from Gemini are silently discarded at <code>GeminiClient.ts:151</code>.</p>
-    <p><span class="stamp">DANGEROUS</span></p>
+    <div class="col-head">Build System Requires OP</div>
+    <p>The <code>BuildCoordinator.ts:676</code> places blocks via <code>/setblock</code> chat commands, which require server operator privileges. The survival-mode <code>buildSchematic.ts</code> tries real block placement first but falls back to <code>/setblock</code> on any error (lines 93-127). <code>CodeExecutor.ts:249</code> also uses <code>/setblock</code> directly.</p>
+    <p>On any server where bots lack OP, the entire building system is non-functional. The survival-mode fallback means errors in legitimate placement silently degrade to cheating rather than reporting failure.</p>
+    <div class="fc-file">src/build/BuildCoordinator.ts:676 &bull; src/actions/buildSchematic.ts:93-127 &bull; src/voyager/CodeExecutor.ts:249</div>
   </div>
 </div>
 
-<table class="evidence-table" style="margin-top:20px;">
-  <thead>
-    <tr><th>Error Scenario</th><th>Current Behavior</th><th>Should Be</th></tr>
-  </thead>
-  <tbody>
-    <tr><td>API timeout (60s)</td><td>Throw, task fails permanently</td><td>Retry 3x with exponential backoff</td></tr>
-    <tr><td>Rate limit (429)</td><td>Treated as any other error</td><td>Wait for rate limit reset, then retry</td></tr>
-    <tr><td>Server error (503)</td><td>Task fails permanently</td><td>Retry with backoff, circuit breaker after 5</td></tr>
-    <tr><td>Malformed response</td><td>Runtime parse error</td><td>Schema validation, retry with simpler prompt</td></tr>
-    <tr><td>Hallucinated functions</td><td>Saved to skill library with quality score</td><td>AST check against action API, reject</td></tr>
-    <tr><td>Cost overrun</td><td>No tracking whatsoever</td><td>Token counter + budget alerts per bot</td></tr>
-  </tbody>
-</table>
 
 <!-- ============================================================ -->
-<!--  DEVOPS                                                       -->
+<!--  THEME 6: SOCIAL SYSTEM                                       -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>DEPLOYMENT &amp; OPERATIONS</h2>
+  <h2>THEME 6 &mdash; SOCIAL SYSTEM: EXCELLENT DESIGN, ZERO WIRING</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">A Complete Social Architecture That Nobody Calls</div>
+    <p>The social system is beautifully designed. <code>SocialMemory.ts</code> implements memory storage with decay, importance weighting, emotional state tracking (mood, energy, social satisfaction), and a reflection system. <code>BotComms.ts</code> provides inter-bot messaging with message types and unread queues. <code>AffinityManager.ts</code> tracks player-bot relationships with bonuses and decay.</p>
+    <p>The personality prompt system at <code>src/ai/prompts/personality.ts</code> has full support for <code>socialContext</code> &mdash; including nearby bots, memory context, emotional state, and relationship summaries (lines 17-42). The code to generate rich, personality-aware, socially-contextual LLM prompts is complete.</p>
+    <p>But none of it is called:</p>
+    <table class="evidence-table">
+      <tr><th>Method</th><th>Defined In</th><th>Called From Bot Code</th></tr>
+      <tr><td><code>addMemory()</code></td><td><code>SocialMemory.ts:54</code></td><td class="redink">Never</td></tr>
+      <tr><td><code>updateEmotionalState()</code></td><td><code>SocialMemory.ts:192</code></td><td class="redink">Never</td></tr>
+      <tr><td><code>sendMessage()</code></td><td><code>BotComms.ts:18</code></td><td class="redink">Never</td></tr>
+      <tr><td><code>getUnread()</code></td><td><code>BotComms.ts:63</code></td><td class="redink">Never</td></tr>
+      <tr><td><code>socialContext</code> param</td><td><code>personality.ts:17</code></td><td class="redink">Never passed</td></tr>
+    </table>
+    <p><code>BotManager.ts:41</code> does create a <code>new BotComms()</code> instance and stores it. <code>BotManager.ts:161</code> exposes <code>getBotComms()</code>. But no BotInstance ever calls <code>sendMessage()</code> or polls <code>getUnread()</code>. The messaging system exists but bots never talk to each other.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Affinities Stuck at 50, Personality Is Cosmetic</div>
+    <p>The <code>AffinityManager</code> implements a sophisticated relationship system with bonuses for positive interactions and decay over time. However, the <code>NEGATIVE_WORDS</code> array is empty (<code>chat.ts:2</code>), so negative sentiment is never detected. Affinity decay outpaces the rate of bonuses from normal interactions, causing all relationships to converge toward the neutral midpoint of 50.</p>
+    <p>Combat hits do not reduce affinity because the hit detection code never calls the affinity adjustment methods. Player deaths near bots are not tracked. The relationship system has no functioning negative signal.</p>
+
+    <div class="col-subhead">Personality: Task Pools Only</div>
+    <p>Personality affects <em>one thing</em>: the 65% chance of picking a personality-weighted task in <code>CurriculumAgent.ts:372</code>. Beyond that, all six personality types (merchant, guard, explorer, farmer, blacksmith, elder) share identical action libraries, identical movement code, identical combat behavior, and identical inventory management. The personality <code>systemPromptFragment</code> only changes chat flavor text.</p>
+    <table class="evidence-table">
+      <tr><th>Personality Claim</th><th>Reality</th></tr>
+      <tr><td>Guard "patrols and protects"</td><td class="redink">No patrol logic exists</td></tr>
+      <tr><td>Merchant "trades and haggles"</td><td class="redink">No trading action exists</td></tr>
+      <tr><td>Farmer "tends crops"</td><td class="redink">No crop-specific behavior</td></tr>
+      <tr><td>Blacksmith "crafts tools"</td><td class="redink">Same crafting as everyone</td></tr>
+      <tr><td>Explorer "scouts and maps"</td><td class="redink">No mapping, same wander</td></tr>
+      <tr><td>Elder "advises wisely"</td><td class="redink">Different chat tone only</td></tr>
+    </table>
+    <p>The emotional state system (mood, energy, social satisfaction with natural fluctuation) in <code>SocialMemory.ts</code> is <strong>complete dead code</strong> &mdash; beautifully implemented methods that nothing invokes.</p>
+    <p><span class="stamp">BEAUTIFUL DEAD CODE</span></p>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 7: PERSISTENCE                                         -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 7 &mdash; PERSISTENCE ISSUES</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="columns-3">
   <div class="col">
-    <div class="col-head">No Container, No CI</div>
-    <p>No Dockerfile. No docker-compose. No CI/CD pipeline. Deployment is <code>node dist/index.js > /tmp/dyobot.log &amp; disown</code>. The watchdog is nice but this isn't production infrastructure.</p>
+    <div class="col-head">Shutdown Doesn't Flush Debounced Writes</div>
+    <p>Multiple managers use debounced saves (2-second delay via <code>SAVE_DEBOUNCE_MS</code>). The shutdown handler at <code>src/index.ts:149-159</code> calls <code>eventLog.shutdown()</code> and <code>botManager.removeAllBots()</code>, then <code>process.exit(0)</code>. It does NOT call <code>shutdown()</code> on <code>CommanderService</code>, <code>MarkerStore</code>, <code>RoleManager</code>, <code>SquadManager</code>, <code>RoutineManager</code>, <code>BlockerMemory</code>, or <code>BlackboardManager</code>.</p>
+    <p>Any data written in the last 2 seconds before shutdown is lost. The <code>BotManager.shutdownPersistence()</code> method at line 119 flushes <code>AffinityManager</code>, <code>SocialMemory</code>, and <code>BlackboardManager</code>, but the shutdown handler does not call it either.</p>
+    <div class="fc-file">src/index.ts:149-162 &bull; src/bot/BotManager.ts:119-122</div>
   </div>
   <div class="col">
-    <div class="col-head">Flat-File Everything</div>
-    <p>All persistence is JSON files in <code>data/</code>. Atomic writes via temp file + rename (good). But no transaction safety across files, no read-before-write locking, unbounded growth with no TTL cleanup. Fine for &lt;20 bots. Will break at scale.</p>
+    <div class="col-head">Memory-Only Systems Lost on Restart</div>
+    <p><code>ConversationManager</code> stores all conversation history in memory with no disk persistence. Every bot restart loses all conversation context. <code>BotComms</code> stores messages in memory only &mdash; unread messages vanish on restart (though since <code>sendMessage</code> is never called, this is academic).</p>
+    <p>The <code>CommanderService</code> metrics (total parses, success rate, confidence averages) are "intentionally ephemeral" per the code comment at line 100. But the UI metrics pages expect historical data that will never survive a restart.</p>
+    <div class="fc-file">src/personality/ConversationManager.ts &bull; src/social/BotComms.ts &bull; src/control/CommanderService.ts:100-111</div>
   </div>
   <div class="col">
-    <div class="col-head">Socket.IO Flooding</div>
-    <p>Every 10 seconds, all bots emit position/health/state to all connected clients individually. With 50 bots and 20 clients: 50,000 messages/minute. Should batch into single <code>bots:batch-update</code> event.</p>
+    <div class="col-head">Synchronous Blocking Writes</div>
+    <p>Multiple critical paths use <code>fs.writeFileSync</code>: <code>CommandCenter.ts:621</code>, <code>MissionManager.ts:550</code>, <code>BotManager.ts:231</code>, <code>CurriculumAgent.ts:531-534</code> (four files written synchronously in sequence), and <code>ChainCoordinator.ts:145</code>.</p>
+    <p>Some managers use atomic temp-file-then-rename patterns (<code>AffinityManager</code>, <code>SocialMemory</code>, <code>BlackboardManager</code>, <code>BlockerMemory</code>). Others write directly to the target file. A crash mid-write on the direct writers risks corruption of commands, missions, bot configs, completed tasks, and skill data.</p>
+    <div class="fc-file">Multiple files across src/control/, src/voyager/, src/bot/</div>
   </div>
 </div>
 
+
 <!-- ============================================================ -->
-<!--  THE DEBATE TRANSCRIPT                                        -->
+<!--  THEME 8: BUILD SYSTEM                                        -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>ROUNDTABLE TRANSCRIPT &mdash; SELECTED EXCHANGES</h2>
+  <h2>THEME 8 &mdash; BUILD &amp; SUPPLY CHAIN</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">BuildCoordinator: /setblock Only, No Verification</div>
+    <p><code>BuildCoordinator.ts:673-676</code> places every block via <code>/setblock</code> chat command. There is no post-placement verification that the block actually appeared. The coordinator tracks build progress optimistically &mdash; marking blocks as placed the moment the command is sent.</p>
+    <p>Meanwhile, <code>buildSchematic.ts</code> in <code>src/actions/</code> contains a proper survival-mode implementation that attempts real block placement with <code>bot.placeBlock()</code>. This code is functional but is not used by the BuildCoordinator. The coordinator and the action exist in parallel with no connection.</p>
+    <p>Task completion throughout the Voyager pipeline uses fragile substring matching to determine if a task succeeded. The critic agent evaluates based on text parsing of execution output rather than verifiable world state checks.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Supply Chain: Hope-Based Item Handoff</div>
+    <p>The <code>ChainCoordinator</code> defines supply chain steps as text descriptions that get fed to the LLM as task prompts. There is no actual item handoff mechanism &mdash; no <code>giveItem</code> coordination between bots, no shared chest system, no verification that Bot A actually produced the items Bot B needs.</p>
+    <p>The chain "works" by hoping that when Bot A is told "mine 10 iron ore" and Bot B is told "smelt iron ore into iron ingots," Bot B will somehow acquire Bot A's output. In practice, each bot operates independently with no inventory sharing, making multi-step supply chains impossible.</p>
+    <p>The <code>ChainCoordinator</code> persists chain definitions to <code>data/supply_chains.json</code> via synchronous writes (<code>ChainCoordinator.ts:145</code>) but is never instantiated in production.</p>
+    <div class="fc-file">src/supplychain/ChainCoordinator.ts &bull; src/build/BuildCoordinator.ts:673-676</div>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 9: MAP SYSTEM                                          -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 9 &mdash; MAP SYSTEM</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">550+ Lines of Dead Drawing Code</div>
+    <p>The map page at <code>web/src/app/map/page.tsx</code> (631 lines) contains extensive canvas drawing code for zone overlays, route visualization, marker rendering, and terrain coloring. None of this renders because the backend has no endpoints serving terrain data, zone boundaries, or route waypoints.</p>
+    <p>The frontend zone and marker data models are completely incompatible with the backend <code>WorldTypes.ts</code> definitions (see Theme 4). Even if endpoints existed, the data would not map correctly to the drawing code's expected input shapes.</p>
+    <p>Currently, the map functions as a dot tracker: it shows bot positions (which do work through the correct store) on a blank canvas. All zone highlighting, route drawing, and marker overlay code is present but unreachable.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">What Could Be</div>
+    <p>The map system's <em>design</em> is ambitious and well-structured. Zone drawing supports rectangular and circular areas with color coding by type (guard, farm, build). Route visualization draws connected waypoint sequences. Marker rendering handles named positions with icons.</p>
+    <p>The gap is entirely in the backend: <code>MarkerStore</code> has full CRUD for markers, zones, and routes but is never instantiated (Theme 1). No API routes serve this data to the frontend. And the data models on each side use different field names and structures (Theme 4).</p>
+    <p>Wiring this up requires: (1) instantiate MarkerStore in production, (2) connect API routes to it, (3) fix type mismatches between FE/BE, (4) fix the dual store bug so socket updates flow to the UI. Four fixes, each individually small, that would bring the entire map system to life.</p>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  THEME 10: DOCS & TESTING                                     -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>THEME 10 &mdash; DOCUMENTATION &amp; TESTING</h2>
+  <div class="sb-rule"></div>
+</div>
+
+<div class="columns-2">
+  <div class="col">
+    <div class="col-head">CLAUDE.md: ~80% Fictional API Documentation</div>
+    <p>The project's <code>CLAUDE.md</code> lists 30+ API endpoints under "Control Platform API" including full CRUD for commands, missions, markers, zones, routes, squads, roles, and commander operations. It describes lifecycle actions (start, pause, resume, cancel, retry) for missions, squad membership management, role assignment CRUD, and natural language command parsing.</p>
+    <p>Roughly 80% of these endpoints either do not exist as routes, or route to services that are never instantiated. The documentation reads as a specification for what the system <em>should</em> do, not what it actually does. For a file that AI tools read to understand the codebase, this is actively harmful &mdash; it causes generated code to call endpoints that 404.</p>
+    <p>Config options that do nothing: <code>maxConcurrentRequests</code> is defined in <code>config.yml:61</code> and typed in <code>config.ts:56</code> but never referenced by any LLM client code. No rate limiting is enforced regardless of this setting.</p>
+  </div>
+  <div class="col">
+    <div class="col-head">Testing: Only Mocked Control Tests</div>
+    <p>Seven test files exist, all in <code>test/control/</code>: CommandCenter, CommanderService, MarkerStore, MissionManager, RoleManager, SquadManager, and an integration test. These are well-written but test only mocked in-memory behavior of the very managers that are never instantiated in production.</p>
+    <p>There is no <code>test</code> script in the root <code>package.json</code>. Zero API route tests. Zero tests for BotInstance, VoyagerLoop, CodeExecutor, any LLM client, or any action primitive. The three most complex runtime files have zero coverage:</p>
+    <table class="evidence-table">
+      <tr><th>File</th><th>Lines</th><th>Test Coverage</th></tr>
+      <tr><td><code>api.ts</code></td><td>1,401</td><td class="redink">0%</td></tr>
+      <tr><td><code>BotInstance.ts</code></td><td>~1,500</td><td class="redink">0%</td></tr>
+      <tr><td><code>VoyagerLoop.ts</code></td><td>~900</td><td class="redink">0%</td></tr>
+      <tr><td><code>CodeExecutor.ts</code></td><td>~540</td><td class="redink">0%</td></tr>
+      <tr><td><code>All action primitives</code></td><td>~600</td><td class="redink">0%</td></tr>
+      <tr><td><code>All LLM clients</code></td><td>~400</td><td class="redink">0%</td></tr>
+    </table>
+    <p>The irony: the only tested code is the code that never runs in production.</p>
+  </div>
+</div>
+
+
+<!-- ============================================================ -->
+<!--  ROUNDTABLE TRANSCRIPT                                        -->
+<!-- ============================================================ -->
+<div class="section-break">
+  <h2>AUDIT PANEL DISCUSSION &mdash; SELECTED EXCHANGES</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="transcript">
-  <div class="transcript-header">PROCEEDINGS OF THE 30-ENGINEER ROUNDTABLE &mdash; APRIL 5, 2026</div>
+  <div class="transcript-header">PROCEEDINGS OF THE DOCUMENTATION ENGINEERING PANEL &mdash; APRIL 5, 2026</div>
   <div class="transcript-body">
     <div class="tx-line">
-      <div class="tx-speaker mc">MC Players<br>(Speedrunner)</div>
-      <div class="tx-text">This bot would die collecting wood. It doesn't eat, doesn't select tools, walks off cliffs. The personality system is cute but useless when the bot drowns in a 2-block pond. <strong>Fix survival basics before adding squad formations.</strong></div>
+      <div class="tx-speaker eng">Engineer #1<br>(Architecture)</div>
+      <div class="tx-text">The fundamental issue is not code quality &mdash; it's <em>wiring</em>. Five complete managers sit in <code>src/control/</code> with unit tests, persistence, and socket events. <code>src/index.ts</code> creates a BotManager and an Express server but never connects the control platform. Someone built a five-course meal and forgot to serve it.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker eng">SWE Panel<br>(Architecture)</div>
-      <div class="tx-text">Respectfully disagree on priority. The 157 <code>any</code> types and zero tests on core modules are a bigger risk. Every refactor to add gameplay features will introduce regressions you can't catch. <strong>Type safety and tests first, then gameplay.</strong></div>
+      <div class="tx-speaker fs">Engineer #2<br>(Frontend)</div>
+      <div class="tx-text">The dual store bug is the most expensive single defect. One import path change in SocketProvider.tsx &mdash; swap <code>@/lib/controlStores</code> for <code>@/lib/store</code> &mdash; and seven dead real-time features come alive. But it's hidden because both files export the same names. TypeScript can't catch it; the types match perfectly.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker fs">Full-Stack<br>(Security)</div>
-      <div class="tx-text">Both of you are wrong about priority. There's a live API key in the repo. There's zero auth on the API. There's a path traversal vulnerability. <strong>None of your features matter if someone reads arbitrary files off the server.</strong> Security first. Period.</div>
+      <div class="tx-speaker eng">Engineer #3<br>(AI/ML)</div>
+      <div class="tx-text">Credit where due: the Voyager pipeline is not a toy. Real LLM calls, real code generation, real Babel AST parsing, real critic evaluation, real skill storage with TF-IDF search. The personality task pool weighting at CurriculumAgent:372 is a clever touch. This core is worth building on.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker eng">SWE Panel<br>(Testing Lead)</div>
-      <div class="tx-text">The security lead is right about the API key &mdash; that's a 15-minute fix. But the bigger pattern is that BotInstance is 1,561 lines with zero tests. VoyagerLoop is 879 lines with zero tests. <strong>You can't safely add anything to code you can't verify.</strong></div>
+      <div class="tx-speaker fs">Engineer #4<br>(API Design)</div>
+      <div class="tx-text">CommanderService is the strangest file in the codebase. It accepts an LLMClient, has 624 lines of carefully structured code with metrics tracking, history persistence, clarification generation, and draft management. Then <code>parse()</code> is regex and <code>execute()</code> returns empty arrays. It's a Ferrari body on a skateboard chassis.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker mc">MC Players<br>(Builder)</div>
-      <div class="tx-text">The building system uses <code>/setblock</code> commands. That's cheating. On any server without operator privileges, the entire build system is non-functional. How did this pass review?</div>
+      <div class="tx-speaker eng">Engineer #5<br>(Reliability)</div>
+      <div class="tx-text">The persistence story scares me. The shutdown handler calls <code>process.exit(0)</code> after flushing only the EventLog. <code>BotManager.shutdownPersistence()</code> exists and would flush AffinityManager, SocialMemory, and BlackboardManager &mdash; but nobody calls it. CommanderService, MarkerStore, RoleManager, SquadManager all have <code>shutdown()</code> methods. None are called.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker fs">Full-Stack<br>(DevOps)</div>
-      <div class="tx-text">No Dockerfile, no CI/CD, deployment is a bash one-liner with <code>&amp; disown</code>. Before we scale to 50 bots or add features, we need containerization and actual process management.</div>
+      <div class="tx-speaker eng">Engineer #6<br>(Social Systems)</div>
+      <div class="tx-text">The social system is the best-designed dead code I've ever read. SocialMemory has memory decay, emotional states with mood/energy/satisfaction, importance-weighted storage, and a reflection system. BotComms has typed inter-bot messaging. The personality prompt supports full social context. <strong>Not one line of it executes at runtime.</strong></div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker mc">MC Players<br>(Farmer)</div>
-      <div class="tx-text">The personalities are false advertising. The "farmer" has no crop rotation, no animal breeding, no farm layout optimization. The "merchant" can't trade. Either remove the personality promises or implement the behaviors behind them.</div>
+      <div class="tx-speaker fs">Engineer #7<br>(Testing)</div>
+      <div class="tx-text">Seven test files, all for managers that never run in production. Zero tests for the 1,401-line API file. Zero tests for BotInstance, VoyagerLoop, or CodeExecutor &mdash; the files that actually execute. The test suite validates the Potemkin village and ignores the real application.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker eng">SWE Panel<br>(LLM Lead)</div>
-      <div class="tx-text">The skill library is generating broken code. Skills reference <code>mineBlock()</code> and <code>craftItem()</code> which don't exist. The LLM is hallucinating and the critic isn't catching it. <strong>We need pre-execution AST validation against the known action API.</strong></div>
+      <div class="tx-speaker eng">Engineer #8<br>(Documentation)</div>
+      <div class="tx-text">CLAUDE.md is actively harmful. AI coding assistants read it to understand the codebase, then generate code that calls fictional endpoints. Every time someone uses Claude or Copilot on this project, the hallucinated documentation propagates into new hallucinated code. Fix the docs before writing more code.</div>
     </div>
     <div class="tx-line">
-      <div class="tx-speaker fs">Full-Stack<br>(API Design)</div>
-      <div class="tx-text"><code>api.ts</code> is 1,336 lines of copy-pasted route handlers, each repeating the same bot-exists check and error handling. This file needs a complete refactor into route groups with middleware. It's the most-touched file and the hardest to review.</div>
-    </div>
-    <div class="tx-line">
-      <div class="tx-speaker all">ALL PANELS<br>(Consensus)</div>
-      <div class="tx-text"><strong>AGREED:</strong> (1) Fix security holes immediately. (2) Add type safety and basic test coverage. (3) Fix gameplay survival basics. (4) Refactor the API layer. (5) Make personalities affect behavior. Do not add new features until the foundation is solid.</div>
+      <div class="tx-speaker all">ALL PANEL<br>(Consensus)</div>
+      <div class="tx-text"><strong>AGREED:</strong> (1) Fix the dual store bug &mdash; one line, seven features. (2) Wire the control managers into index.ts. (3) Fix the shutdown handler to flush all debounced writes. (4) Rewrite CLAUDE.md to reflect reality. (5) Make CommanderService.execute() actually dispatch commands. Do NOT add new features until existing code is connected.</div>
     </div>
   </div>
 </div>
 
+
 <!-- ============================================================ -->
-<!--  ROADMAP GANTT                                                -->
+<!--  CRITICAL PATH                                                -->
 <!-- ============================================================ -->
 <div class="section-break">
-  <h2>EXECUTION ROADMAP</h2>
+  <h2>CRITICAL PATH &mdash; PRIORITIZED FIX ORDER</h2>
   <div class="sb-rule"></div>
 </div>
 
 <div class="gantt-weeks">
   <div></div>
   <div class="gantt-week-track">
-    <span>Wk 1</span><span>Wk 2</span><span>Wk 3</span><span>Wk 4</span><span>Wk 5</span><span>Wk 6</span><span>Wk 7</span><span>Wk 8</span><span>Wk 9</span><span>Wk 10+</span>
+    <span>Day 1</span><span>Wk 1</span><span>Wk 2</span><span>Wk 3</span><span>Wk 4</span><span>Wk 5</span><span>Wk 6</span><span>Wk 7</span><span>Wk 8+</span>
   </div>
 </div>
 
 <div class="gantt">
   <div class="gantt-row">
     <div class="gantt-label">Phase 0: Emergency</div>
-    <div class="gantt-track"><div class="gantt-bar gb-emergency">~6 hrs</div></div>
+    <div class="gantt-track"><div class="gantt-bar gb-emergency">~4 hrs</div></div>
   </div>
   <div class="gantt-row">
     <div class="gantt-label">Phase 1: Foundation</div>
-    <div class="gantt-track"><div class="gantt-bar gb-foundation">Types + Tests + Error Handling</div></div>
+    <div class="gantt-track"><div class="gantt-bar gb-foundation">Wire + Fix Stores</div></div>
   </div>
   <div class="gantt-row">
-    <div class="gantt-label">Phase 2: Gameplay</div>
-    <div class="gantt-track"><div class="gantt-bar gb-gameplay">Survival Basics</div></div>
+    <div class="gantt-label">Phase 2: Wiring</div>
+    <div class="gantt-track"><div class="gantt-bar gb-wiring">Connect All Managers</div></div>
   </div>
   <div class="gantt-row">
-    <div class="gantt-label">Phase 3: Refactor</div>
-    <div class="gantt-track"><div class="gantt-bar gb-refactor">API + Architecture</div></div>
+    <div class="gantt-label">Phase 3: Gameplay</div>
+    <div class="gantt-track"><div class="gantt-bar gb-gameplay">Bot Behaviors</div></div>
   </div>
   <div class="gantt-row">
-    <div class="gantt-label">Phase 4: Intelligence</div>
-    <div class="gantt-track"><div class="gantt-bar gb-intelligence">Skills + Personalities</div></div>
+    <div class="gantt-label">Phase 4: Refactor</div>
+    <div class="gantt-track"><div class="gantt-bar gb-refactor">Types + Tests</div></div>
   </div>
   <div class="gantt-row">
-    <div class="gantt-label">Phase 5: Advanced</div>
-    <div class="gantt-track"><div class="gantt-bar gb-advanced">Ongoing</div></div>
+    <div class="gantt-label">Phase 5: Intelligence</div>
+    <div class="gantt-track"><div class="gantt-bar gb-intelligence">Commander + Social</div></div>
+  </div>
+  <div class="gantt-row">
+    <div class="gantt-label">Phase 6: Advanced</div>
+    <div class="gantt-track"><div class="gantt-bar gb-advanced">Scale</div></div>
   </div>
 </div>
 
 <div class="columns-3" style="border-top:none;padding-top:10px;">
   <div class="col">
-    <div class="col-subhead">Phase 0 &mdash; This Week</div>
-    <p>Revoke API key. Scrub git history. Fix path traversal. Add rate limiting. Input validation. Move Gemini key to auth header. Make OWNER_PLAYER configurable.</p>
+    <div class="col-subhead">Phase 0 &mdash; Day 1 (4 hours)</div>
+    <p>Fix dual store bug: change SocketProvider.tsx import from <code>@/lib/controlStores</code> to <code>@/lib/store</code>. Fix shutdown handler to call <code>botManager.shutdownPersistence()</code> and all manager <code>shutdown()</code> methods. Rewrite CLAUDE.md API section to document only working endpoints. Populate <code>NEGATIVE_WORDS</code> array.</p>
   </div>
   <div class="col">
-    <div class="col-subhead">Phase 1 &mdash; Weeks 2-3</div>
-    <p>Create mineflayer type definitions. Replace silent catches with logging. Unit tests for BotInstance, VoyagerLoop, CodeExecutor. Zod config validation. LLM retry with backoff. Unhandled rejection handler. Extract magic numbers.</p>
+    <div class="col-subhead">Phase 1 &mdash; Week 1</div>
+    <p>Instantiate all five control managers in <code>src/index.ts</code> and pass them to the API router. Verify all documented API routes actually connect to live manager instances. Fix FE/BE type mismatches for commands, markers, zones, routes, squads, and roles. Fix socket payload shapes.</p>
   </div>
   <div class="col">
-    <div class="col-subhead">Phase 2 &mdash; Weeks 4-5</div>
-    <p>Implement eating/hunger. Tool selection before mining. Replace /setblock with placeBlock. Hazard avoidance in pathfinder. Armor equipping. Weapon selection. Bed/sleep. Inventory management.</p>
+    <div class="col-subhead">Phase 2 &mdash; Weeks 2-3</div>
+    <p>Implement <code>CommanderService.execute()</code> to actually dispatch commands through CommandCenter and create missions through MissionManager. Wire social system: call <code>addMemory()</code> and <code>updateEmotionalState()</code> from BotInstance. Pass <code>socialContext</code> to personality prompts. Wire BotComms polling into bot tick loop.</p>
   </div>
 </div>
 <div class="columns-3" style="border-top:none;padding-top:0;">
   <div class="col">
-    <div class="col-subhead">Phase 3 &mdash; Weeks 6-7</div>
-    <p>Split api.ts into route groups with middleware. Decompose handleChat into focused methods. Command handler registry pattern. Shared PauseController. Break BotInstance/VoyagerLoop coupling. Dockerfile. Batch Socket.IO. Graceful shutdown timeout.</p>
+    <div class="col-subhead">Phase 3 &mdash; Weeks 4-5</div>
+    <p>Add timeouts to all <code>openContainer</code> calls. Fix event listener cleanup in placeBlock and attack. Add <code>noPath</code> handling to all movement actions. Replace <code>/setblock</code> with proper block placement. Fix non-standard events in attack.ts. Implement actual item handoff for supply chains.</p>
   </div>
   <div class="col">
-    <div class="col-subhead">Phase 4 &mdash; Weeks 8-10</div>
-    <p>AST validation for skills. De-duplicate skills library. Personality-driven task selection. Guard patrol logic. Farmer crop optimization. LLM response schemas. Token counting. Circuit breaker.</p>
+    <div class="col-subhead">Phase 4 &mdash; Weeks 6-7</div>
+    <p>Align all FE/BE types into shared type definitions. Add API route tests for the 1,401-line api.ts. Add tests for BotInstance, VoyagerLoop, CodeExecutor. Add <code>npm test</code> script to root package.json. Implement <code>maxConcurrentRequests</code> rate limiting for LLM calls. Add atomic writes to all persistence code.</p>
   </div>
   <div class="col">
-    <div class="col-subhead">Phase 5 &mdash; Week 11+</div>
-    <p>Enchanting workflow. Villager trading. Brewing/potions. Fishing. Furnace variants. Dimension awareness. Mob-specific combat. JWT auth. Database migration from flat files.</p>
+    <div class="col-subhead">Phase 5 &mdash; Weeks 8+</div>
+    <p>Replace CommanderService regex with real LLM parsing. Implement personality-driven behaviors beyond task pools (guard patrol, merchant trading, farmer crop management). Connect map backend with terrain data endpoints. Implement multi-provider LLM routing. Add authentication to API.</p>
   </div>
 </div>
+
 
 <!-- ============================================================ -->
 <!--  ACTION REGISTER                                              -->
@@ -1314,47 +1310,51 @@ async function craftAStonePickaxe(bot) {
   <div class="register-item reg-head">
     <span>#</span><span>Action</span><span>Severity</span><span>Effort</span><span>File(s)</span>
   </div>
-  <div class="register-item"><span class="ri-num">01</span><span>Revoke exposed Google API key, scrub git history</span><span class="ri-sev crit">Critical</span><span class="ri-effort">15 min</span><span class="ri-files"><code>.env</code></span></div>
-  <div class="register-item"><span class="ri-num">02</span><span>Fix path traversal in skill reading endpoint</span><span class="ri-sev crit">Critical</span><span class="ri-effort">30 min</span><span class="ri-files"><code>api.ts:331</code></span></div>
-  <div class="register-item"><span class="ri-num">03</span><span>Add rate limiting middleware</span><span class="ri-sev crit">Critical</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>api.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">04</span><span>Add input validation/sanitization on all endpoints</span><span class="ri-sev crit">Critical</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>api.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">05</span><span>Replace all 6 silent catch blocks with error logging</span><span class="ri-sev crit">Critical</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>BuildCoord, SkillLib, WorldMem</code></span></div>
-  <div class="register-item"><span class="ri-num">06</span><span>Move Gemini API key from URL to Authorization header</span><span class="ri-sev high">High</span><span class="ri-effort">30 min</span><span class="ri-files"><code>GeminiClient.ts:23</code></span></div>
-  <div class="register-item"><span class="ri-num">07</span><span>Create <code>types/mineflayer-extensions.d.ts</code></span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>types/ + BotInstance</code></span></div>
-  <div class="register-item"><span class="ri-num">08</span><span>Unit tests for BotInstance, VoyagerLoop, CodeExecutor</span><span class="ri-sev high">High</span><span class="ri-effort">2 days</span><span class="ri-files"><code>test/</code></span></div>
-  <div class="register-item"><span class="ri-num">09</span><span>Implement LLM retry with exponential backoff</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>Anthropic/GeminiClient</code></span></div>
-  <div class="register-item"><span class="ri-num">10</span><span>Make OWNER_PLAYER configurable</span><span class="ri-sev high">High</span><span class="ri-effort">30 min</span><span class="ri-files"><code>BotInstance.ts:42</code></span></div>
-  <div class="register-item"><span class="ri-num">11</span><span>Add zod config validation at startup</span><span class="ri-sev high">High</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>config.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">12</span><span>Implement food consumption and hunger management</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>BotInstance, actions/</code></span></div>
-  <div class="register-item"><span class="ri-num">13</span><span>Add tool selection before mining</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>mineBlock.ts, attack.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">14</span><span>Replace <code>/setblock</code> with proper block placement</span><span class="ri-sev high">High</span><span class="ri-effort">1 day</span><span class="ri-files"><code>buildSchematic.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">15</span><span>Add skill validation (AST check against action API)</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>SkillLibrary, CodeExecutor</code></span></div>
-  <div class="register-item"><span class="ri-num">16</span><span>Split api.ts into route groups with middleware</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>api.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">17</span><span>Batch Socket.IO events into single update</span><span class="ri-sev med">Medium</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>socketEvents.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">18</span><span>Add Dockerfile + docker-compose.yml</span><span class="ri-sev med">Medium</span><span class="ri-effort">3 hrs</span><span class="ri-files">New files</span></div>
-  <div class="register-item"><span class="ri-num">19</span><span>Move all magic numbers to config or named constants</span><span class="ri-sev med">Medium</span><span class="ri-effort">3 hrs</span><span class="ri-files">Multiple</span></div>
-  <div class="register-item"><span class="ri-num">20</span><span>De-duplicate skills library</span><span class="ri-sev med">Medium</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>skills/</code></span></div>
-  <div class="register-item"><span class="ri-num">21</span><span>Add graceful shutdown with 10s timeout</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>index.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">22</span><span>Make personalities affect task selection behavior</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>PersonalityType, Curriculum</code></span></div>
-  <div class="register-item"><span class="ri-num">23</span><span>Add hazard avoidance to pathfinder</span><span class="ri-sev med">Medium</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>walkTo.ts, wander.ts</code></span></div>
-  <div class="register-item"><span class="ri-num">24</span><span>Implement data file TTL cleanup</span><span class="ri-sev low">Low</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>SocialMemory, qa_cache</code></span></div>
-  <div class="register-item"><span class="ri-num">25</span><span>Add JWT authentication to API</span><span class="ri-sev low">Low</span><span class="ri-effort">1 day</span><span class="ri-files"><code>api.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">01</span><span>Fix dual store bug: change SocketProvider import to <code>@/lib/store</code></span><span class="ri-sev crit">Critical</span><span class="ri-effort">15 min</span><span class="ri-files"><code>web/src/components/SocketProvider.tsx:14</code></span></div>
+  <div class="register-item"><span class="ri-num">02</span><span>Fix shutdown handler to flush all debounced writes</span><span class="ri-sev crit">Critical</span><span class="ri-effort">30 min</span><span class="ri-files"><code>src/index.ts:149-162</code></span></div>
+  <div class="register-item"><span class="ri-num">03</span><span>Instantiate 5 control managers in production startup</span><span class="ri-sev crit">Critical</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>src/index.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">04</span><span>Rewrite CLAUDE.md API section to document only working endpoints</span><span class="ri-sev crit">Critical</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>CLAUDE.md</code></span></div>
+  <div class="register-item"><span class="ri-num">05</span><span>Fix FE/BE type mismatches (markers, zones, routes, commands)</span><span class="ri-sev crit">Critical</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>web/src/lib/store.ts, src/control/WorldTypes.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">06</span><span>Populate NEGATIVE_WORDS array for sentiment analysis</span><span class="ri-sev high">High</span><span class="ri-effort">30 min</span><span class="ri-files"><code>src/ai/prompts/chat.ts:2</code></span></div>
+  <div class="register-item"><span class="ri-num">07</span><span>Implement CommanderService.execute() to dispatch real commands</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>src/control/CommanderService.ts:530-551</code></span></div>
+  <div class="register-item"><span class="ri-num">08</span><span>Wire social system: call addMemory/updateEmotionalState from BotInstance</span><span class="ri-sev high">High</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>src/bot/BotInstance.ts, src/social/SocialMemory.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">09</span><span>Pass socialContext to personality prompts</span><span class="ri-sev high">High</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>src/ai/prompts/personality.ts:17</code></span></div>
+  <div class="register-item"><span class="ri-num">10</span><span>Wire BotComms: call sendMessage/getUnread in bot lifecycle</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>src/social/BotComms.ts, src/bot/BotInstance.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">11</span><span>Add timeouts to all openContainer calls</span><span class="ri-sev high">High</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>src/actions/container.ts:59,89,111,196</code></span></div>
+  <div class="register-item"><span class="ri-num">12</span><span>Fix event listener cleanup in placeBlock and attack</span><span class="ri-sev high">High</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>src/actions/placeBlock.ts:49, attack.ts:56-81</code></span></div>
+  <div class="register-item"><span class="ri-num">13</span><span>Add noPath handling to all movement actions</span><span class="ri-sev high">High</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>src/actions/*.ts, src/control/CommandCenter.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">14</span><span>Fix socket payload shapes (squad array vs object mismatch)</span><span class="ri-sev high">High</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>SocketProvider.tsx, SquadManager.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">15</span><span>Replace /setblock with proper block placement in BuildCoordinator</span><span class="ri-sev high">High</span><span class="ri-effort">1 day</span><span class="ri-files"><code>src/build/BuildCoordinator.ts:676</code></span></div>
+  <div class="register-item"><span class="ri-num">16</span><span>Implement maxConcurrentRequests LLM rate limiting</span><span class="ri-sev high">High</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>src/ai/*.ts, config.ts:56</code></span></div>
+  <div class="register-item"><span class="ri-num">17</span><span>Add npm test script and API route tests</span><span class="ri-sev high">High</span><span class="ri-effort">2 days</span><span class="ri-files"><code>package.json, test/</code></span></div>
+  <div class="register-item"><span class="ri-num">18</span><span>Fix command status enum mismatch between FE stores</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>web/src/lib/store.ts, web/src/lib/controlStores.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">19</span><span>Add atomic writes to all non-atomic persistence code</span><span class="ri-sev med">Medium</span><span class="ri-effort">3 hrs</span><span class="ri-files"><code>CommandCenter, MissionManager, CurriculumAgent</code></span></div>
+  <div class="register-item"><span class="ri-num">20</span><span>Fix metrics endpoint field name mismatches</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>web/src/app/metrics/page.tsx, web/src/app/stats/page.tsx</code></span></div>
+  <div class="register-item"><span class="ri-num">21</span><span>Implement actual supply chain item handoff between bots</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>src/supplychain/ChainCoordinator.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">22</span><span>Add map backend endpoints for terrain/zones/routes</span><span class="ri-sev med">Medium</span><span class="ri-effort">4 hrs</span><span class="ri-files"><code>src/server/api.ts, web/src/app/map/page.tsx</code></span></div>
+  <div class="register-item"><span class="ri-num">23</span><span>Persist ConversationManager to disk</span><span class="ri-sev med">Medium</span><span class="ri-effort">2 hrs</span><span class="ri-files"><code>src/personality/ConversationManager.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">24</span><span>Replace CommanderService regex with real LLM parsing</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 day</span><span class="ri-files"><code>src/control/CommanderService.ts:387-450</code></span></div>
+  <div class="register-item"><span class="ri-num">25</span><span>Implement personality-driven behaviors beyond task pools</span><span class="ri-sev med">Medium</span><span class="ri-effort">1 week</span><span class="ri-files"><code>src/personality/, src/bot/BotInstance.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">26</span><span>Consolidate or remove controlStores.ts after store fix</span><span class="ri-sev low">Low</span><span class="ri-effort">30 min</span><span class="ri-files"><code>web/src/lib/controlStores.ts</code></span></div>
+  <div class="register-item"><span class="ri-num">27</span><span>Fix non-standard events in attack.ts (entityGone, itemDrop)</span><span class="ri-sev low">Low</span><span class="ri-effort">1 hr</span><span class="ri-files"><code>src/actions/attack.ts:56-81</code></span></div>
+  <div class="register-item"><span class="ri-num">28</span><span>Add multi-provider LLM routing for cost optimization</span><span class="ri-sev low">Low</span><span class="ri-effort">1 day</span><span class="ri-files"><code>src/ai/</code></span></div>
 </div>
+
 
 <!-- ============================================================ -->
 <!--  CLOSING                                                      -->
 <!-- ============================================================ -->
 <div class="pullquote" style="margin-top:40px;">
-  &ldquo;The bones are excellent. The architecture proves this team can build complex systems. Worker threads, Voyager loops, fleet control, social memory &mdash; these are not trivial. But the bot can't eat, can't pick the right tool, builds with cheat commands, and its learned skills call functions that don't exist. Patch the foundation and this becomes a 9/10 project.&rdquo;
-  <span class="pq-attr">&mdash; Joint Statement, All 40 Engineers</span>
+  &ldquo;DyoBot is not a bad codebase &mdash; it is a disconnected one. The Voyager AI pipeline is genuinely impressive. The control platform is well-engineered. The social system is beautifully designed. The dashboard is polished. But these systems exist as isolated islands: built, tested in isolation, and never wired together. The critical path is not writing new code &mdash; it is connecting the code that already exists. Fix one import, instantiate five managers, flush saves on shutdown, and correct the docs. That turns a 4.2 into a 7.&rdquo;
+  <span class="pq-attr">&mdash; Joint Statement, Documentation Engineering Panel</span>
 </div>
 
 </div><!-- /broadsheet -->
 
 <footer class="paper-footer">
-  <p>The DyoBot Dossier &mdash; Engineering Audit Report</p>
-  <p>Filed April 5, 2026 &mdash; 30 Auditors + 10 Sr. Web Developers</p>
-  <p>Commit a33bcdd on main &mdash; packetloss404/mc-server-bot</p>
+  <p>The DyoBot Dossier &mdash; Engineering Audit Report Rev. B</p>
+  <p>Filed April 5, 2026 &mdash; 10 Senior Documentation Engineers</p>
+  <p>Commit dc1b6a6 on main &mdash; packetloss404/mc-server-bot</p>
   <p style="margin-top:12px;opacity:0.5;">This document is classified for internal use only.</p>
 </footer>
 

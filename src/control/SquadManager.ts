@@ -1,6 +1,7 @@
 import { Server as SocketIOServer } from 'socket.io';
 import { SquadRecord, FLEET_EVENTS } from './FleetTypes';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -57,11 +58,8 @@ export class SquadManager {
   private saveImmediate(): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
       const records = Array.from(this.squads.values());
-      fs.writeFileSync(SQUADS_FILE, JSON.stringify(records, null, 2), 'utf-8');
+      atomicWriteJsonSync(SQUADS_FILE, records);
     } catch (err) {
       logger.error({ err }, 'Failed to save squads.json');
     }
@@ -71,8 +69,8 @@ export class SquadManager {
     this.saveImmediate();
   }
 
-  private emitUpdate(): void {
-    this.io.emit(FLEET_EVENTS.SQUAD_UPDATED, this.getSquads());
+  private emitUpdate(squad: SquadRecord): void {
+    this.io.emit(FLEET_EVENTS.SQUAD_UPDATED, squad);
   }
 
   // -- CRUD --
@@ -95,7 +93,7 @@ export class SquadManager {
     };
     this.squads.set(squad.id, squad);
     this.save();
-    this.emitUpdate();
+    this.emitUpdate(squad);
     logger.info({ squadId: squad.id, name: squad.name, action: 'create' }, 'Squad created');
     return squad;
   }
@@ -121,7 +119,7 @@ export class SquadManager {
     };
     this.squads.set(id, updated);
     this.save();
-    this.emitUpdate();
+    this.emitUpdate(updated);
     logger.info({ squadId: id, name: updated.name, action: 'update' }, 'Squad updated');
     return updated;
   }
@@ -129,10 +127,10 @@ export class SquadManager {
   deleteSquad(id: string): boolean {
     const squad = this.squads.get(id);
     const existed = this.squads.delete(id);
-    if (existed) {
+    if (existed && squad) {
       this.save();
-      this.emitUpdate();
-      logger.info({ squadId: id, name: squad?.name, action: 'delete' }, 'Squad deleted');
+      this.emitUpdate(squad);
+      logger.info({ squadId: id, name: squad.name, action: 'delete' }, 'Squad deleted');
     }
     return existed;
   }
@@ -147,7 +145,7 @@ export class SquadManager {
     squad.botNames.push(botName);
     squad.updatedAt = Date.now();
     this.save();
-    this.emitUpdate();
+    this.emitUpdate(squad);
     logger.info({ squadId, name: squad.name, action: 'add_bot' }, 'Bot added to squad');
     return true;
   }
@@ -162,7 +160,7 @@ export class SquadManager {
     squad.botNames.splice(idx, 1);
     squad.updatedAt = Date.now();
     this.save();
-    this.emitUpdate();
+    this.emitUpdate(squad);
     logger.info({ squadId, name: squad.name, action: 'remove_bot' }, 'Bot removed from squad');
     return true;
   }

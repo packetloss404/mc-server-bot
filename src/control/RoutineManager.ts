@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import { BotManager } from '../bot/BotManager';
 
 // ── Types ──────────────────────────────────────────────────────────
@@ -9,7 +10,7 @@ import { BotManager } from '../bot/BotManager';
 export interface RoutineStep {
   /** 'command' dispatches via WorkerHandle.sendCommand; 'mission' queues a task */
   type: 'command' | 'mission';
-  /** Arbitrary payload – for command: { command, args }, for mission: { description } */
+  /** Arbitrary payload -- for command: { command, args }, for mission: { description } */
   data: Record<string, any>;
 }
 
@@ -97,7 +98,7 @@ export class RoutineManager {
   private saveToDisk(): void {
     try {
       const list = Array.from(this.routines.values());
-      fs.writeFileSync(this.filePath, JSON.stringify(list, null, 2), 'utf-8');
+      atomicWriteJsonSync(this.filePath, list);
     } catch (err: any) {
       logger.error({ err: err?.message }, 'Failed to save routines');
     }
@@ -204,7 +205,6 @@ export class RoutineManager {
       'Executing routine',
     );
 
-    // Execute steps sequentially
     try {
       for (const step of routine.steps) {
         await this.executeStep(step, bots);

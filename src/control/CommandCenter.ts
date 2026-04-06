@@ -13,6 +13,7 @@ import { BotManager } from '../bot/BotManager';
 import { MarkerStore } from './MarkerStore';
 import type { RoleManager } from './RoleManager';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -46,6 +47,7 @@ interface CommandFilters {
 
 const DATA_PATH = path.join(process.cwd(), 'data', 'commands.json');
 const MAX_PERSISTED = 500;
+const DEBOUNCE_MS = 1_000;
 
 const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
   'walk_to_coords',
@@ -65,6 +67,7 @@ export class CommandCenter {
   private markerStore: MarkerStore | null;
   private roleManager: RoleManager | null = null;
   private timeoutTimer: ReturnType<typeof setInterval> | null = null;
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(botManager: BotManager, io: SocketIOServer, markerStore?: MarkerStore) {
     this.botManager = botManager;
@@ -83,6 +86,7 @@ export class CommandCenter {
       clearInterval(this.timeoutTimer);
       this.timeoutTimer = null;
     }
+    this.flush();
   }
 
   // -- ID generation --
@@ -605,23 +609,32 @@ export class CommandCenter {
     }, TIMEOUT_CHECK_INTERVAL_MS);
   }
 
-  // -- Persistence --
+  // -- Persistence (debounced) --
 
   private persist(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.persistImmediate();
+    }, DEBOUNCE_MS);
+  }
+
+  private persistImmediate(): void {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
       const all = [...this.commands.values()]
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
         .slice(0, MAX_PERSISTED);
 
-      const dir = path.dirname(DATA_PATH);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-
-      fs.writeFileSync(DATA_PATH, JSON.stringify({ commands: all }, null, 2));
+      atomicWriteJsonSync(DATA_PATH, { commands: all });
     } catch (err) {
       logger.error({ err }, 'Failed to persist commands');
     }
+  }
+
+  /** Flush any pending debounced writes to disk immediately. */
+  flush(): void {
+    this.persistImmediate();
   }
 
   private loadFromDisk(): void {

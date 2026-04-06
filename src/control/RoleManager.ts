@@ -3,6 +3,7 @@ import { RoleApprovalRequestRecord, RoleAssignmentRecord, RoleType, AutonomyLeve
 import type { MissionManager } from './MissionManager';
 import type { MissionType } from './MissionTypes';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -242,15 +243,11 @@ export class RoleManager {
   private saveImmediate(): void {
     if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
     try {
-      const dir = path.dirname(this.filePath);
-      if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-      }
-      fs.writeFileSync(this.filePath, JSON.stringify({
+      atomicWriteJsonSync(this.filePath, {
         assignments: this.assignments,
         approvalRequests: this.approvalRequests,
         overrides: this.getOverrides(),
-      }, null, 2));
+      });
     } catch (err) {
       logger.error({ err }, 'RoleManager: failed to save roles.json');
     }
@@ -426,12 +423,8 @@ export class RoleManager {
     return `role_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   }
 
-  private emit(): void {
-    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, {
-      assignments: this.assignments,
-      overrides: this.getOverrides(),
-      approvalRequests: this.approvalRequests,
-    });
+  private emit(record?: RoleAssignmentRecord): void {
+    this.io.emit(FLEET_EVENTS.ROLE_UPDATED, record ?? null);
   }
 
   getApprovalRequests(): RoleApprovalRequestRecord[] {
@@ -518,7 +511,7 @@ export class RoleManager {
 
     this.assignments.push(record);
     this.save();
-    this.emit();
+    this.emit(record);
     this.evaluateAutomation(record.botName);
     logger.info({ assignmentId: record.id, botName: record.botName, role: record.role, action: 'create' }, 'RoleManager: assignment created');
     return record;
@@ -551,7 +544,7 @@ export class RoleManager {
     this.assignments[idx] = { ...this.assignments[idx], ...updateFields, updatedAt: Date.now() };
 
     this.save();
-    this.emit();
+    this.emit(this.assignments[idx]);
     this.evaluateAutomation(this.assignments[idx].botName);
     logger.info(
       { assignmentId: id, botName: this.assignments[idx].botName, role: this.assignments[idx].role, action: 'update' },

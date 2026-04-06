@@ -5,6 +5,7 @@ import { BotManager } from '../bot/BotManager';
 import { CommandCenter } from './CommandCenter';
 import { SquadManager } from './SquadManager';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import {
   MissionRecord,
   MissionStatus,
@@ -17,6 +18,7 @@ import {
 const DATA_DIR = path.join(process.cwd(), 'data');
 const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
+const DEBOUNCE_MS = 1_000;
 
 export interface MissionMetrics {
   totalCreated: number;
@@ -54,6 +56,7 @@ export class MissionManager {
   private commandCenter?: CommandCenter;
   private squadManager?: SquadManager;
   private missionTaskDescriptions: Map<string, string> = new Map();
+  private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(botManager: BotManager, io: SocketIOServer) {
     this.botManager = botManager;
@@ -513,7 +516,7 @@ export class MissionManager {
     if (idx !== -1) queue.splice(idx, 1);
   }
 
-  // -- Persistence --
+  // -- Persistence (debounced) --
 
   private load(): void {
     try {
@@ -538,18 +541,28 @@ export class MissionManager {
   }
 
   private save(): void {
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      this.saveImmediate();
+    }, DEBOUNCE_MS);
+  }
 
+  private saveImmediate(): void {
+    if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null; }
+    try {
       const data = {
         missions: Array.from(this.missions.values()),
         botQueues: Object.fromEntries(this.botMissionQueues),
       };
-      fs.writeFileSync(MISSIONS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+      atomicWriteJsonSync(MISSIONS_FILE, data);
     } catch (err: any) {
       logger.error({ err }, 'Failed to save missions file');
     }
+  }
+
+  /** Flush any pending debounced writes to disk immediately. */
+  flush(): void {
+    this.saveImmediate();
   }
 }

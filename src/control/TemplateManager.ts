@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 // -- Types --
 
@@ -241,9 +242,7 @@ export class TemplateManager {
 
   private saveCustom(): void {
     const custom = Array.from(this.templates.values()).filter((t) => !t.builtIn);
-    const dir = path.dirname(this.dataPath);
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(this.dataPath, JSON.stringify(custom, null, 2), 'utf-8');
+    atomicWriteJsonSync(this.dataPath, custom);
   }
 
   // -- Public API --

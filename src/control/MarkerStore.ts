@@ -2,22 +2,13 @@ import { Server as SocketIOServer } from 'socket.io';
 import { MarkerRecord, ZoneRecord, RouteRecord } from './WorldTypes';
 import { WORLD_EVENTS } from './FleetTypes';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DEBOUNCE_MS = 1_000;
-
-function ensureDataDir(): void {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    }
-  } catch (err) {
-    logger.error({ err }, 'Failed to create data directory');
-  }
-}
 
 function loadJson<T>(filePath: string, fallback: T): T {
   try {
@@ -28,15 +19,6 @@ function loadJson<T>(filePath: string, fallback: T): T {
     logger.warn({ err, filePath }, 'Failed to load JSON file, using fallback');
   }
   return fallback;
-}
-
-function saveJson(filePath: string, data: unknown): void {
-  try {
-    ensureDataDir();
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-  } catch (err) {
-    logger.error({ err, filePath }, 'Failed to save JSON file');
-  }
 }
 
 function genId(prefix: string): string {
@@ -81,39 +63,63 @@ export class MarkerStore {
     if (this.markerSaveTimer) return;
     this.markerSaveTimer = setTimeout(() => {
       this.markerSaveTimer = null;
-      saveJson(this.markersPath, Array.from(this.markers.values()));
+      try {
+        atomicWriteJsonSync(this.markersPath, Array.from(this.markers.values()));
+      } catch (err) {
+        logger.error({ err, filePath: this.markersPath }, 'Failed to save markers');
+      }
     }, DEBOUNCE_MS);
   }
 
   private saveMarkersImmediate(): void {
     if (this.markerSaveTimer) { clearTimeout(this.markerSaveTimer); this.markerSaveTimer = null; }
-    saveJson(this.markersPath, Array.from(this.markers.values()));
+    try {
+      atomicWriteJsonSync(this.markersPath, Array.from(this.markers.values()));
+    } catch (err) {
+      logger.error({ err, filePath: this.markersPath }, 'Failed to save markers');
+    }
   }
 
   private saveZones(): void {
     if (this.zoneSaveTimer) return;
     this.zoneSaveTimer = setTimeout(() => {
       this.zoneSaveTimer = null;
-      saveJson(this.zonesPath, Array.from(this.zones.values()));
+      try {
+        atomicWriteJsonSync(this.zonesPath, Array.from(this.zones.values()));
+      } catch (err) {
+        logger.error({ err, filePath: this.zonesPath }, 'Failed to save zones');
+      }
     }, DEBOUNCE_MS);
   }
 
   private saveZonesImmediate(): void {
     if (this.zoneSaveTimer) { clearTimeout(this.zoneSaveTimer); this.zoneSaveTimer = null; }
-    saveJson(this.zonesPath, Array.from(this.zones.values()));
+    try {
+      atomicWriteJsonSync(this.zonesPath, Array.from(this.zones.values()));
+    } catch (err) {
+      logger.error({ err, filePath: this.zonesPath }, 'Failed to save zones');
+    }
   }
 
   private saveRoutes(): void {
     if (this.routeSaveTimer) return;
     this.routeSaveTimer = setTimeout(() => {
       this.routeSaveTimer = null;
-      saveJson(this.routesPath, Array.from(this.routes.values()));
+      try {
+        atomicWriteJsonSync(this.routesPath, Array.from(this.routes.values()));
+      } catch (err) {
+        logger.error({ err, filePath: this.routesPath }, 'Failed to save routes');
+      }
     }, DEBOUNCE_MS);
   }
 
   private saveRoutesImmediate(): void {
     if (this.routeSaveTimer) { clearTimeout(this.routeSaveTimer); this.routeSaveTimer = null; }
-    saveJson(this.routesPath, Array.from(this.routes.values()));
+    try {
+      atomicWriteJsonSync(this.routesPath, Array.from(this.routes.values()));
+    } catch (err) {
+      logger.error({ err, filePath: this.routesPath }, 'Failed to save routes');
+    }
   }
 
   /** Flush all pending saves and clear timers */

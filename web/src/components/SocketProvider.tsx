@@ -2,8 +2,8 @@
 
 import { useEffect } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
 import {
+  useBotStore,
   useControlStore,
   useMissionStore,
   useWorldStore,
@@ -11,7 +11,7 @@ import {
   useRoleStore,
   useBuildStore,
   useChainStore,
-} from '@/lib/controlStores';
+} from '@/lib/store';
 import { api } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
@@ -136,7 +136,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // ── Mission events ──────────────────────────────────────────
 
     socket.on('mission:created', (data: any) => {
-      upsertMission({ ...data, status: data.status ?? 'created' });
+      upsertMission({ ...data, status: data.status ?? 'draft' });
     });
 
     socket.on('mission:updated', (data: any) => {
@@ -202,7 +202,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     socket.on('build:bot-status', (data: any) => {
-      // Bot-level build status update; push to activity feed
       pushEvent({
         type: 'build:bot-status',
         botName: data.botName ?? data.bot ?? '',

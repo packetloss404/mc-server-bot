@@ -9,7 +9,6 @@ import type {
   Routine,
   MapOverlayMission, MapOverlayZone, MapOverlaySquad,
 } from './api';
-import type { DrawnZone } from '@/components/map/mapDrawing';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -235,13 +234,10 @@ export const useControlStore = create<ControlStore>((set) => ({
       if (idx >= 0) {
         const next = [...state.commandHistory];
         next[idx] = { ...next[idx], ...command };
-        next.sort((a, b) => b.createdAt - a.createdAt);
         return { commandHistory: next };
       }
       return {
-        commandHistory: [command, ...state.commandHistory]
-          .sort((a, b) => b.createdAt - a.createdAt)
-          .slice(0, 100),
+        commandHistory: [command, ...state.commandHistory].slice(0, 200),
       };
     }),
 }));
@@ -311,6 +307,18 @@ export const useFleetStore = create<FleetStore>((set) => ({
 
 // ─── World Planning Store (markers, zones, routes) ───
 
+/** Zone geometry in world coordinates (used by map drawing). */
+export interface DrawnZone {
+  shape: 'rectangle' | 'circle';
+  x1?: number;
+  z1?: number;
+  x2?: number;
+  z2?: number;
+  cx?: number;
+  cz?: number;
+  radius?: number;
+}
+
 interface WorldPlanningStore {
   markers: MarkerRecord[];
   zones: ZoneRecord[];
@@ -358,7 +366,7 @@ export const useWorldStore = create<WorldPlanningStore>((set) => ({
   setPendingZone: (zone) => set({ pendingZone: zone }),
 }));
 
-// ─── Routine Store (agent 2-1) ───
+// ─── Routine Store ───
 
 interface RoutineStore {
   routines: Routine[];
@@ -482,6 +490,56 @@ export const useMissionStore = create<MissionStore>((set, get) => ({
         mission.assigneeIds.some((id) => id.toLowerCase() === lower),
     );
   },
+}));
+
+// ─── Build Store ───
+
+interface BuildStore {
+  builds: BuildJob[];
+  upsertBuild: (build: BuildJob) => void;
+  setBuilds: (builds: BuildJob[]) => void;
+}
+
+export const useBuildStore = create<BuildStore>((set) => ({
+  builds: [],
+
+  upsertBuild: (build) =>
+    set((state) => {
+      const idx = state.builds.findIndex((b) => b.id === build.id);
+      if (idx >= 0) {
+        const updated = [...state.builds];
+        updated[idx] = build;
+        return { builds: updated };
+      }
+      return { builds: [build, ...state.builds].slice(0, 100) };
+    }),
+
+  setBuilds: (builds) => set({ builds }),
+}));
+
+// ─── Supply Chain Store ───
+
+interface ChainStore {
+  chains: SupplyChain[];
+  upsertChain: (chain: SupplyChain) => void;
+  setChains: (chains: SupplyChain[]) => void;
+}
+
+export const useChainStore = create<ChainStore>((set) => ({
+  chains: [],
+
+  upsertChain: (chain) =>
+    set((state) => {
+      const idx = state.chains.findIndex((c) => c.id === chain.id);
+      if (idx >= 0) {
+        const updated = [...state.chains];
+        updated[idx] = chain;
+        return { chains: updated };
+      }
+      return { chains: [chain, ...state.chains].slice(0, 100) };
+    }),
+
+  setChains: (chains) => set({ chains }),
 }));
 
 // ─── Schematic Placement Store ───

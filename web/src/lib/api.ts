@@ -133,6 +133,67 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// World marker/zone/route types
+export interface Marker {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  z: number;
+  icon?: string;
+  color?: string;
+  createdBy?: string;
+}
+
+export interface Zone {
+  id: string;
+  name: string;
+  type: 'guard' | 'build' | 'farm' | 'restricted' | 'custom';
+  shape: 'rect' | 'circle';
+  x1: number;
+  z1: number;
+  x2: number;
+  z2: number;
+  radius?: number;
+  color?: string;
+  createdBy?: string;
+}
+
+export interface Route {
+  id: string;
+  name: string;
+  waypoints: { x: number; y: number; z: number }[];
+  color?: string;
+  loop?: boolean;
+  createdBy?: string;
+}
+
+export interface Command {
+  id: string;
+  type: string;
+  botName: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  params?: Record<string, any>;
+  createdAt: number;
+}
+
+export interface Mission {
+  id: string;
+  name: string;
+  type: string;
+  botName: string;
+  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
+  params?: Record<string, any>;
+  createdAt: number;
+}
+
+export interface Squad {
+  id: string;
+  name: string;
+  members: string[];
+  color?: string;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -205,60 +266,41 @@ export const api = {
       body: JSON.stringify({ x, y, z }),
     }),
 
-  // Commander
-  parseCommanderInput: (input: string) =>
-    fetchJSON<any>('/api/commander/parse', { method: 'POST', body: JSON.stringify({ input }) }),
-  clarifyCommanderInput: (originalInput: string, clarifications: Record<string, string>) =>
-    fetchJSON<any>('/api/commander/clarify', { method: 'POST', body: JSON.stringify({ originalInput, clarifications }) }),
-  executeCommanderPlan: (planId: string) =>
-    fetchJSON<any>('/api/commander/execute', { method: 'POST', body: JSON.stringify({ planId }) }),
-  getCommanderHistory: (opts?: { limit?: number }) =>
-    fetchJSON<any>(`/api/commander/history${opts?.limit ? `?limit=${opts.limit}` : ''}`).catch(() => ({ entries: [] })),
-  getCommanderDrafts: () => fetchJSON<any>('/api/commander/drafts').catch(() => ({ drafts: [] })),
-  saveCommanderDraft: (draft: any) =>
-    fetchJSON<any>('/api/commander/drafts', { method: 'POST', body: JSON.stringify(draft) }),
-  deleteCommanderDraft: (id: string) =>
-    fetchJSON<any>(`/api/commander/drafts/${id}`, { method: 'DELETE' }),
-  getCommanderSuggestions: () => fetchJSON<any>('/api/commander/suggestions').catch(() => ({ suggestions: [] })),
+  // Markers
+  getMarkers: () => fetchJSON<{ markers: Marker[] }>('/api/markers').catch(() => ({ markers: [] })),
+  createMarker: (marker: Omit<Marker, 'id'>) =>
+    fetchJSON<{ marker: Marker }>('/api/markers', { method: 'POST', body: JSON.stringify(marker) }),
+  deleteMarker: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/markers/${id}`, { method: 'DELETE' }),
+
+  // Zones
+  getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones').catch(() => ({ zones: [] })),
+  createZone: (zone: Omit<Zone, 'id'>) =>
+    fetchJSON<{ zone: Zone }>('/api/zones', { method: 'POST', body: JSON.stringify(zone) }),
+  updateZone: (id: string, patch: Partial<Zone>) =>
+    fetchJSON<{ zone: Zone }>(`/api/zones/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
+  deleteZone: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
+
+  // Routes
+  getRoutes: () => fetchJSON<{ routes: Route[] }>('/api/routes').catch(() => ({ routes: [] })),
+  createRoute: (route: Omit<Route, 'id'>) =>
+    fetchJSON<{ route: Route }>('/api/routes', { method: 'POST', body: JSON.stringify(route) }),
+  deleteRoute: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
+
+  // Commands
+  getCommands: () => fetchJSON<{ commands: Command[] }>('/api/commands').catch(() => ({ commands: [] })),
+  createCommand: (cmd: { type: string; botName: string; params?: Record<string, any> }) =>
+    fetchJSON<{ command: Command }>('/api/commands', { method: 'POST', body: JSON.stringify(cmd) }),
+  cancelCommand: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/commands/${id}/cancel`, { method: 'POST' }),
+
+  // Missions
+  getMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
+  createMission: (mission: { name: string; type: string; botName: string; params?: Record<string, any> }) =>
+    fetchJSON<{ mission: Mission }>('/api/missions', { method: 'POST', body: JSON.stringify(mission) }),
+
+  // Squads
+  getSquads: () => fetchJSON<{ squads: Squad[] }>('/api/squads').catch(() => ({ squads: [] })),
 };
-
-// ── Commander types (used by the commander page) ──
-
-export interface CommanderPlan {
-  id: string;
-  input: string;
-  intent: string;
-  parsedIntent?: string;
-  confidence: number;
-  warnings: string[];
-  requiresConfirmation: boolean;
-  commands: Array<{ type: string; targets: string[]; payload: Record<string, unknown> }>;
-  missions: Array<{ type: string; title: string; description?: string; assigneeIds: string[] }>;
-  clarificationQuestions: ClarificationQuestion[];
-  needsClarification: boolean;
-  suggestedCommands: string[];
-  createdAt: string;
-}
-
-export interface ClarificationQuestion {
-  id: string;
-  question: string;
-  options: string[];
-  field: string;
-}
-
-export interface CommanderResult {
-  commands: Array<{ type: string; targets: string[]; status: string; error?: string; id?: string }>;
-  missions: Array<{ type: string; title: string; assigneeIds?: string[]; status: string; error?: string; id?: string }>;
-  commandResults: Array<{ command: { type: string; targets: string[] }; success: boolean; error?: string }>;
-  missionsCreated: Array<{ title: string; assigneeIds: string[] }>;
-}
-
-export interface CommanderDraft {
-  id: string;
-  input: string;
-  plan?: CommanderPlan;
-  notes?: string;
-  createdAt: string;
-  updatedAt: string;
-}

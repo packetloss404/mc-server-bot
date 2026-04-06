@@ -1,38 +1,12 @@
 import { Bot } from 'mineflayer';
-import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
 
 export async function walkTo(bot: Bot, x: number, y: number, z: number, range = 2): Promise<ActionResult> {
-  return new Promise((resolve) => {
-    let resolved = false;
-    const cleanup = () => {
-      if (resolved) return;
-      resolved = true;
-      clearTimeout(timeout);
-      bot.removeListener('goal_reached', onReached);
-      bot.removeListener('path_update', onPathUpdate);
-    };
+  const reached = await moveNearWithCleanup(bot, { x, y, z, range }, 30000);
 
-    const timeout = setTimeout(() => {
-      cleanup();
-      bot.pathfinder.stop();
-      resolve({ success: false, message: 'Pathfinding timeout' });
-    }, 30000);
-
-    const onReached = () => {
-      cleanup();
-      resolve({ success: true, message: `Reached ${Math.round(x)}, ${Math.round(y)}, ${Math.round(z)}` });
-    };
-
-    const onPathUpdate = (r: any) => {
-      if (r.status === 'noPath') {
-        cleanup();
-        resolve({ success: false, message: 'No path found' });
-      }
-    };
-
-    bot.once('goal_reached', onReached);
-    bot.on('path_update', onPathUpdate);
-    bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
-  });
+  if (reached) {
+    return { success: true, message: `Reached ${Math.round(x)}, ${Math.round(y)}, ${Math.round(z)}` };
+  }
+  return { success: false, message: 'Pathfinding failed or timed out' };
 }

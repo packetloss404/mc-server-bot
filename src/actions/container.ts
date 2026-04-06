@@ -1,22 +1,10 @@
 import { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
-import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
 
 async function moveNear(bot: Bot, x: number, y: number, z: number, range = 3, timeoutMs = 15000): Promise<boolean> {
-  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
-  return new Promise<boolean>((resolve) => {
-    const onReached = () => {
-      clearTimeout(timeout);
-      resolve(true);
-    };
-    const timeout = setTimeout(() => {
-      bot.removeListener('goal_reached', onReached as any);
-      bot.pathfinder.stop();
-      resolve(false);
-    }, timeoutMs);
-    bot.once('goal_reached' as any, onReached);
-  });
+  return moveNearWithCleanup(bot, { x, y, z, range }, timeoutMs);
 }
 
 function resolveContainerBlock(bot: Bot, blockName: string): any | null {

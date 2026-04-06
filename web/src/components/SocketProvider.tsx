@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useCallback } from 'react';
 import { getSocket } from '@/lib/socket';
 import { useBotStore } from '@/lib/store';
 import { api } from '@/lib/api';
@@ -13,11 +13,15 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     incrementUnreadChats,
   } = useBotStore();
 
-  useEffect(() => {
-    // Initial fetch
+  const fetchAll = useCallback(() => {
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+  }, [setBots, setWorld, setPlayers]);
+
+  useEffect(() => {
+    // Initial fetch
+    fetchAll();
 
     // Poll bots every 5s as a fallback
     const pollInterval = setInterval(() => {
@@ -37,7 +41,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // Socket.IO
     const socket = getSocket();
 
-    socket.on('connect', () => setConnected(true));
+    socket.on('connect', () => {
+      setConnected(true);
+      // Re-fetch all state on reconnection to avoid stale data
+      fetchAll();
+    });
     socket.on('disconnect', () => setConnected(false));
 
     socket.on('bot:position', (data: { bot: string; x: number; y: number; z: number }) => {
@@ -108,7 +116,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
     setPlayers, updatePlayerPosition, addPlayer, removePlayer,
-    incrementUnreadChats,
+    incrementUnreadChats, fetchAll,
   ]);
 
   return <>{children}</>;

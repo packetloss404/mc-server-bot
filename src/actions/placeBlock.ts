@@ -1,7 +1,7 @@
 import { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
-import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
 
 const FACE_VECTORS = [
   new Vec3(0, 1, 0),
@@ -43,11 +43,7 @@ export async function placeBlock(
   const initialCount = item.count;
 
   // Walk near the target location
-  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, 3));
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => { bot.pathfinder.stop(); resolve(); }, 15000);
-    bot.once('goal_reached', () => { clearTimeout(timeout); resolve(); });
-  });
+  await moveNearWithCleanup(bot, { x, y, z, range: 3 }, 15000);
 
   let lastError = 'No block to place against';
   for (const faceVector of FACE_VECTORS) {

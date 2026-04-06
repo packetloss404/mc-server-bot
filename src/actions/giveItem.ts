@@ -1,5 +1,6 @@
 import { Bot } from 'mineflayer';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
 
 export async function giveItem(bot: Bot, playerName: string, itemName: string, count = 1): Promise<ActionResult> {
   const mcData = require('minecraft-data')(bot.version);
@@ -21,12 +22,8 @@ export async function giveItem(bot: Bot, playerName: string, itemName: string, c
   // Walk to the player first
   const dist = bot.entity.position.distanceTo(player.entity.position);
   if (dist > 3) {
-    const { goals } = require('mineflayer-pathfinder');
-    bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, 2), true);
-    await new Promise<void>((resolve) => {
-      const timeout = setTimeout(() => { bot.pathfinder.stop(); resolve(); }, 10000);
-      bot.once('goal_reached', () => { clearTimeout(timeout); resolve(); });
-    });
+    const pos = player.entity.position;
+    await moveNearWithCleanup(bot, { x: pos.x, y: pos.y, z: pos.z, range: 2 }, 10000);
   }
 
   try {

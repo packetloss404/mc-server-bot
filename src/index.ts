@@ -62,8 +62,18 @@ async function main() {
   // Restore previously saved bots
   await botManager.loadSavedBots();
 
-  // Start HTTP API server with Socket.IO
-  const { httpServer, io, eventLog } = createAPIServer(botManager);
+  // Start HTTP API server with Socket.IO — pass llmClient for CommanderService
+  const {
+    httpServer,
+    io,
+    eventLog,
+    markerStore,
+    squadManager,
+    roleManager,
+    commandCenter,
+    missionManager,
+    commanderService,
+  } = createAPIServer(botManager, llmClient);
 
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
@@ -152,6 +162,14 @@ async function main() {
       clearInterval(memoryInterval);
       memoryInterval = null;
     }
+
+    // Shut down control platform managers (flush pending writes)
+    commandCenter.destroy();
+    markerStore.shutdown();
+    squadManager.shutdown();
+    roleManager.shutdown();
+    commanderService.shutdown();
+
     io.close();
     await botManager.removeAllBots();
     process.exit(0);

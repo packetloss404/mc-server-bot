@@ -1,56 +1,91 @@
 import { LLMClient, LLMResponse } from './LLMClient';
 import { logger } from '../util/logger';
 
+/**
+ * Simple concurrency limiter. Tracks active requests and queues
+ * callers when the limit is reached.
+ */
+class Semaphore {
+  private active = 0;
+  private waiting: Array<() => void> = [];
+
+  constructor(private readonly max: number) {}
+
+  async acquire(): Promise<void> {
+    if (this.active < this.max) {
+      this.active++;
+      return;
+    }
+    await new Promise<void>((resolve) => this.waiting.push(resolve));
+  }
+
+  release(): void {
+    this.active--;
+    const next = this.waiting.shift();
+    if (next) {
+      this.active++;
+      next();
+    }
+  }
+}
+
 export class GeminiClient implements LLMClient {
   private apiKey: string;
   private model: string;
   private temperature: number;
   private defaultMaxTokens: number;
   private baseUrl = 'https://generativelanguage.googleapis.com/v1beta/models/';
+  private semaphore: Semaphore;
 
-  constructor(opts: { apiKey: string; model: string; temperature: number; maxTokens: number }) {
+  constructor(opts: { apiKey: string; model: string; temperature: number; maxTokens: number; maxConcurrentRequests?: number }) {
     this.apiKey = opts.apiKey;
     this.model = opts.model;
     this.temperature = opts.temperature;
     this.defaultMaxTokens = opts.maxTokens;
+    this.semaphore = new Semaphore(opts.maxConcurrentRequests ?? 3);
   }
 
   async chat(systemPrompt: string, contents: any[], maxTokens?: number): Promise<LLMResponse> {
-    const url = `${this.baseUrl}${this.model}:generateContent?key=${this.apiKey}`;
+    await this.semaphore.acquire();
+    try {
+      const url = `${this.baseUrl}${this.model}:generateContent?key=${this.apiKey}`;
 
-    const body: any = {
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents,
-      generationConfig: {
-        temperature: this.temperature,
-        maxOutputTokens: maxTokens || this.defaultMaxTokens,
-        thinkingConfig: {
-          thinkingBudget: 128, // Minimal thinking for fast chat responses
+      const body: any = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents,
+        generationConfig: {
+          temperature: this.temperature,
+          maxOutputTokens: maxTokens || this.defaultMaxTokens,
+          thinkingConfig: {
+            thinkingBudget: 128, // Minimal thinking for fast chat responses
+          },
         },
-      },
-    };
+      };
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(60000),
-    });
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(60000),
+      });
 
-    if (!resp.ok) {
-      const errBody = await resp.text();
-      throw new Error(`Gemini API ${resp.status}: ${errBody}`);
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini API ${resp.status}: ${errBody}`);
+      }
+
+      const json: any = await resp.json();
+      const text = this.extractText(json);
+      const usage = json.usageMetadata;
+
+      return {
+        text,
+        inputTokens: usage?.promptTokenCount,
+        outputTokens: usage?.candidatesTokenCount,
+      };
+    } finally {
+      this.semaphore.release();
     }
-
-    const json: any = await resp.json();
-    const text = this.extractText(json);
-    const usage = json.usageMetadata;
-
-    return {
-      text,
-      inputTokens: usage?.promptTokenCount,
-      outputTokens: usage?.candidatesTokenCount,
-    };
   }
 
   async generate(systemPrompt: string, userMessage: string, maxTokens?: number): Promise<LLMResponse> {
@@ -63,68 +98,78 @@ export class GeminiClient implements LLMClient {
    * where reasoning improves output quality.
    */
   async generateWithThinking(systemPrompt: string, userMessage: string, maxTokens?: number): Promise<LLMResponse> {
-    const url = `${this.baseUrl}${this.model}:generateContent?key=${this.apiKey}`;
+    await this.semaphore.acquire();
+    try {
+      const url = `${this.baseUrl}${this.model}:generateContent?key=${this.apiKey}`;
 
-    const body = {
-      systemInstruction: { parts: [{ text: systemPrompt }] },
-      contents: [{ role: 'user', parts: [{ text: userMessage }] }],
-      generationConfig: {
-        temperature: this.temperature,
-        maxOutputTokens: maxTokens || this.defaultMaxTokens,
-        thinkingConfig: {
-          thinkingBudget: 2048,
+      const body = {
+        systemInstruction: { parts: [{ text: systemPrompt }] },
+        contents: [{ role: 'user', parts: [{ text: userMessage }] }],
+        generationConfig: {
+          temperature: this.temperature,
+          maxOutputTokens: maxTokens || this.defaultMaxTokens,
+          thinkingConfig: {
+            thinkingBudget: 2048,
+          },
         },
-      },
-    };
+      };
 
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: AbortSignal.timeout(120000),
-    });
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(120000),
+      });
 
-    if (!resp.ok) {
-      const errBody = await resp.text();
-      throw new Error(`Gemini API ${resp.status}: ${errBody}`);
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini API ${resp.status}: ${errBody}`);
+      }
+
+      const json: any = await resp.json();
+      const text = this.extractText(json);
+      const usage = json.usageMetadata;
+
+      return {
+        text,
+        inputTokens: usage?.promptTokenCount,
+        outputTokens: usage?.candidatesTokenCount,
+      };
+    } finally {
+      this.semaphore.release();
     }
-
-    const json: any = await resp.json();
-    const text = this.extractText(json);
-    const usage = json.usageMetadata;
-
-    return {
-      text,
-      inputTokens: usage?.promptTokenCount,
-      outputTokens: usage?.candidatesTokenCount,
-    };
   }
 
   async embed(texts: string[]): Promise<number[][]> {
     if (texts.length === 0) return [];
-    const url = `${this.baseUrl}gemini-embedding-001:batchEmbedContents?key=${this.apiKey}`;
-    const requests = texts.map((text) => ({
-      model: 'models/gemini-embedding-001',
-      content: { parts: [{ text }] },
-      taskType: 'RETRIEVAL_DOCUMENT',
-      outputDimensionality: 256,
-    }));
-    const resp = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ requests }),
-      signal: AbortSignal.timeout(30000),
-    });
-    if (!resp.ok) {
-      const errBody = await resp.text();
-      throw new Error(`Gemini Embedding API ${resp.status}: ${errBody}`);
+    await this.semaphore.acquire();
+    try {
+      const url = `${this.baseUrl}gemini-embedding-001:batchEmbedContents?key=${this.apiKey}`;
+      const requests = texts.map((text) => ({
+        model: 'models/gemini-embedding-001',
+        content: { parts: [{ text }] },
+        taskType: 'RETRIEVAL_DOCUMENT',
+        outputDimensionality: 256,
+      }));
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ requests }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!resp.ok) {
+        const errBody = await resp.text();
+        throw new Error(`Gemini Embedding API ${resp.status}: ${errBody}`);
+      }
+      const json: any = await resp.json();
+      const embeddings = json.embeddings;
+      if (!embeddings || !Array.isArray(embeddings)) {
+        throw new Error('No embeddings in Gemini response');
+      }
+      return embeddings.map((e: any) => e.values);
+    } finally {
+      this.semaphore.release();
     }
-    const json: any = await resp.json();
-    const embeddings = json.embeddings;
-    if (!embeddings || !Array.isArray(embeddings)) {
-      throw new Error('No embeddings in Gemini response');
-    }
-    return embeddings.map((e: any) => e.values);
   }
 
   private extractText(json: any): string {

@@ -16,6 +16,7 @@ function buildLLMClient(config: ReturnType<typeof loadConfig>): LLMClient | null
     model: config.llm.model,
     temperature: config.llm.temperature,
     maxTokens: config.llm.chatMaxTokens,
+    maxConcurrentRequests: config.llm.maxConcurrentRequests,
   };
 
   if (config.llm.provider === 'anthropic') {

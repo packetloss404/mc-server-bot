@@ -133,66 +133,69 @@ export interface TerrainData {
   blocks: string[];
 }
 
-// World marker/zone/route types
-export interface Marker {
+// Control platform types
+export interface SquadRecord {
   id: string;
   name: string;
-  x: number;
-  y: number;
-  z: number;
-  icon?: string;
-  color?: string;
-  createdBy?: string;
+  botNames: string[];
+  defaultRole?: string;
+  activeMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
 }
 
-export interface Zone {
+export interface RoleAssignmentRecord {
   id: string;
-  name: string;
-  type: 'guard' | 'build' | 'farm' | 'restricted' | 'custom';
-  shape: 'rect' | 'circle';
-  x1: number;
-  z1: number;
-  x2: number;
-  z2: number;
-  radius?: number;
-  color?: string;
-  createdBy?: string;
+  botName: string;
+  role: string;
+  autonomyLevel: 'manual' | 'assisted' | 'autonomous';
+  homeMarkerId?: string;
+  allowedZoneIds?: string[];
+  interruptPolicy?: string;
+  preferredMissionTypes?: string[];
+  loadoutPolicy?: Record<string, unknown>;
+  createdAt: string;
 }
 
-export interface Route {
+export interface RoleOverrideRecord {
+  botName: string;
+  reason: string;
+  at: number;
+}
+
+export interface RoleApprovalRecord {
   id: string;
-  name: string;
-  waypoints: { x: number; y: number; z: number }[];
-  color?: string;
-  loop?: boolean;
-  createdBy?: string;
+  botName: string;
+  role: string;
+  status: 'pending' | 'approved' | 'rejected';
+  missionDraft: { title: string; description: string };
+  expiresAt: number;
 }
 
-export interface Command {
+export interface CommandRecord {
   id: string;
   type: string;
   botName: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
-  params?: Record<string, any>;
+  params: Record<string, unknown>;
+  status: string;
   createdAt: number;
+  updatedAt: number;
 }
 
-export interface Mission {
+export interface MissionRecord {
   id: string;
-  name: string;
   type: string;
-  botName: string;
-  status: 'pending' | 'running' | 'paused' | 'completed' | 'failed' | 'cancelled';
-  params?: Record<string, any>;
+  title: string;
+  description: string;
+  status: string;
+  assigneeIds: string[];
+  blockedReason?: string;
   createdAt: number;
+  updatedAt: number;
 }
 
-export interface Squad {
-  id: string;
-  name: string;
-  members: string[];
-  color?: string;
-}
+export type MarkerRecord = Marker;
+export type ZoneRecord = Zone;
 
 // API functions
 export const api = {
@@ -267,40 +270,39 @@ export const api = {
     }),
 
   // Markers
-  getMarkers: () => fetchJSON<{ markers: Marker[] }>('/api/markers').catch(() => ({ markers: [] })),
-  createMarker: (marker: Omit<Marker, 'id'>) =>
-    fetchJSON<{ marker: Marker }>('/api/markers', { method: 'POST', body: JSON.stringify(marker) }),
-  deleteMarker: (id: string) =>
-    fetchJSON<{ success: boolean }>(`/api/markers/${id}`, { method: 'DELETE' }),
-
-  // Zones
-  getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones').catch(() => ({ zones: [] })),
-  createZone: (zone: Omit<Zone, 'id'>) =>
-    fetchJSON<{ zone: Zone }>('/api/zones', { method: 'POST', body: JSON.stringify(zone) }),
-  updateZone: (id: string, patch: Partial<Zone>) =>
-    fetchJSON<{ zone: Zone }>(`/api/zones/${id}`, { method: 'PATCH', body: JSON.stringify(patch) }),
-  deleteZone: (id: string) =>
-    fetchJSON<{ success: boolean }>(`/api/zones/${id}`, { method: 'DELETE' }),
-
-  // Routes
-  getRoutes: () => fetchJSON<{ routes: Route[] }>('/api/routes').catch(() => ({ routes: [] })),
-  createRoute: (route: Omit<Route, 'id'>) =>
-    fetchJSON<{ route: Route }>('/api/routes', { method: 'POST', body: JSON.stringify(route) }),
-  deleteRoute: (id: string) =>
-    fetchJSON<{ success: boolean }>(`/api/routes/${id}`, { method: 'DELETE' }),
-
-  // Commands
-  getCommands: () => fetchJSON<{ commands: Command[] }>('/api/commands').catch(() => ({ commands: [] })),
-  createCommand: (cmd: { type: string; botName: string; params?: Record<string, any> }) =>
-    fetchJSON<{ command: Command }>('/api/commands', { method: 'POST', body: JSON.stringify(cmd) }),
-  cancelCommand: (id: string) =>
-    fetchJSON<{ success: boolean }>(`/api/commands/${id}/cancel`, { method: 'POST' }),
-
-  // Missions
-  getMissions: () => fetchJSON<{ missions: Mission[] }>('/api/missions').catch(() => ({ missions: [] })),
-  createMission: (mission: { name: string; type: string; botName: string; params?: Record<string, any> }) =>
-    fetchJSON<{ mission: Mission }>('/api/missions', { method: 'POST', body: JSON.stringify(mission) }),
+  getMarkers: () => fetchJSON<{ markers: Marker[] }>('/api/markers'),
+  getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones'),
 
   // Squads
-  getSquads: () => fetchJSON<{ squads: Squad[] }>('/api/squads').catch(() => ({ squads: [] })),
+  getSquads: () => fetchJSON<{ squads: SquadRecord[] }>('/api/squads'),
+
+  // Missions
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+
+  // Roles
+  getRoleAssignments: () => fetchJSON<{ assignments: RoleAssignmentRecord[] }>('/api/roles/assignments'),
+  createRoleAssignment: (data: Partial<RoleAssignmentRecord>) =>
+    fetchJSON<{ assignment: RoleAssignmentRecord }>('/api/roles/assignments', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRoleAssignment: (id: string, data: Partial<RoleAssignmentRecord>) =>
+    fetchJSON<{ assignment: RoleAssignmentRecord }>(`/api/roles/assignments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteRoleAssignment: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/assignments/${id}`, { method: 'DELETE' }),
+  approveRoleApproval: (id: string, data?: { decidedBy?: string }) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/approvals/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  rejectRoleApproval: (id: string, data?: { decidedBy?: string }) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/approvals/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  clearBotOverride: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/override`, { method: 'DELETE' }),
 };

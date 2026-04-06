@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import Image from 'next/image';
 import { api } from '@/lib/api';
@@ -15,11 +15,30 @@ import {
 
 export default function RolesPage() {
   const assignments = useRoleStore((s) => s.assignments);
+  const setAssignments = useRoleStore((s) => s.setAssignments);
   const overrides = useRoleStore((s) => s.overrides);
   const approvals = useRoleStore((s) => s.approvals);
+  const setApprovals = useRoleStore((s) => s.setApprovals);
   const bots = useBotStore((s) => s.botList);
   const [editingBot, setEditingBot] = useState<string | null>(null);
   const [now, setNow] = useState(0);
+  const [loading, setLoading] = useState(true);
+
+  const fetchRoleData = useCallback(async () => {
+    try {
+      const { assignments: data } = await api.getRoleAssignments();
+      setAssignments(data);
+    } catch {
+      // ignore fetch errors
+    } finally {
+      setLoading(false);
+    }
+  }, [setAssignments]);
+
+  // Fetch role assignments on mount
+  useEffect(() => {
+    fetchRoleData();
+  }, [fetchRoleData]);
 
   useEffect(() => {
     const interval = setInterval(() => setNow(Date.now()), 1000);
@@ -32,11 +51,13 @@ export default function RolesPage() {
 
   const handleSave = () => {
     setEditingBot(null);
+    fetchRoleData();
   };
 
   const handleDelete = async (assignmentId: string) => {
     try {
       await api.deleteRoleAssignment(assignmentId);
+      fetchRoleData();
     } catch {
       // ignore
     }
@@ -45,6 +66,7 @@ export default function RolesPage() {
   const handleClearOverride = async (botName: string) => {
     try {
       await api.clearBotOverride(botName);
+      fetchRoleData();
     } catch {
       // ignore
     }
@@ -53,6 +75,8 @@ export default function RolesPage() {
   const handleApprove = async (approvalId: string) => {
     try {
       await api.approveRoleApproval(approvalId, { decidedBy: 'dashboard' });
+      setApprovals(approvals.filter((a) => a.id !== approvalId));
+      fetchRoleData();
     } catch {
       // ignore
     }
@@ -61,6 +85,8 @@ export default function RolesPage() {
   const handleReject = async (approvalId: string) => {
     try {
       await api.rejectRoleApproval(approvalId, { decidedBy: 'dashboard' });
+      setApprovals(approvals.filter((a) => a.id !== approvalId));
+      fetchRoleData();
     } catch {
       // ignore
     }
@@ -71,8 +97,6 @@ export default function RolesPage() {
   for (const a of assignments) {
     roleCounts[a.role] = (roleCounts[a.role] || 0) + 1;
   }
-
-  const loading = useMemo(() => bots.length === 0 && assignments.length === 0, [bots.length, assignments.length]);
 
   if (loading) {
     return (

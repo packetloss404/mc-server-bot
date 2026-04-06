@@ -1,12 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { motion } from 'framer-motion';
 import Link from 'next/link';
 import { useBotStore, useControlStore, useFleetStore, type BotLiveData, type Squad } from '@/lib/store';
 import { BotCard } from '@/components/BotCard';
-import { FleetSelectionBar } from '@/components/FleetSelectionBar';
-// getPersonalityColor, STATE_COLORS, STATE_LABELS are used by BotCard internally
+import { getPersonalityColor, STATE_COLORS, STATE_LABELS, PERSONALITY_ICONS } from '@/lib/constants';
 import { api } from '@/lib/api';
 
 export default function FleetPage() {
@@ -17,16 +16,23 @@ export default function FleetPage() {
 
   const squads = useFleetStore((s) => s.squads);
   const [missionTitles, setMissionTitles] = useState<Record<string, string>>({});
+  const missionTitlesRef = useRef(missionTitles);
+
+  // Keep ref in sync to avoid stale closure
+  useEffect(() => {
+    missionTitlesRef.current = missionTitles;
+  }, [missionTitles]);
 
   const selectedBots = bots.filter((b) => selectedBotIds.has(b.name.toLowerCase()));
   const unselectedBots = bots.filter((b) => !selectedBotIds.has(b.name.toLowerCase()));
   const selectionCount = selectedBots.length;
 
-  // Resolve activeMissionId to titles
+  // Resolve activeMissionId to titles -- uses ref to avoid stale closure
   useEffect(() => {
+    const currentTitles = missionTitlesRef.current;
     const idsToResolve = squads
       .map((s) => s.activeMissionId)
-      .filter((id): id is string => !!id && !missionTitles[id]);
+      .filter((id): id is string => !!id && !currentTitles[id]);
 
     if (idsToResolve.length === 0) return;
 
@@ -50,7 +56,7 @@ export default function FleetPage() {
         setMissionTitles((prev) => ({ ...prev, ...newTitles }));
       }
     });
-  }, [squads]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [squads]);
 
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-[1400px]">
@@ -85,9 +91,6 @@ export default function FleetPage() {
           )}
         </div>
       </motion.div>
-
-      {/* Fleet Selection Bar */}
-      <FleetSelectionBar />
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

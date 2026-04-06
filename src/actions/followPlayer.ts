@@ -17,26 +17,33 @@ export async function followPlayer(
 
   return new Promise((resolve) => {
     let settled = false;
-
-    const settle = (result: ActionResult) => {
+    const done = (result: ActionResult) => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      bot.removeListener('playerLeft', onPlayerLeft);
+      clearTimeout(timeout);
       bot.pathfinder.stop();
+      bot.removeListener('playerLeft', onPlayerLeft);
+      bot.removeListener('path_update' as any, onPathUpdate);
       resolve(result);
     };
 
-    const timer = setTimeout(() => {
-      settle({ success: true, message: 'Follow duration ended' });
+    const timeout = setTimeout(() => {
+      done({ success: true, message: 'Follow duration ended' });
     }, duration);
 
     const onPlayerLeft = (p: { username: string }) => {
       if (p.username === playerName) {
-        settle({ success: true, message: 'Player left' });
+        done({ success: true, message: 'Player left' });
+      }
+    };
+
+    const onPathUpdate = (r: any) => {
+      if (r?.status === 'noPath') {
+        done({ success: false, message: `No path to player ${playerName}` });
       }
     };
 
     bot.on('playerLeft', onPlayerLeft);
+    bot.on('path_update' as any, onPathUpdate);
   });
 }

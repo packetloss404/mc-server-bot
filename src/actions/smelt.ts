@@ -9,17 +9,35 @@ function inventorySummary(bot: Bot): string {
 async function moveNear(bot: Bot, x: number, y: number, z: number, range = 3, timeoutMs = 15000): Promise<boolean> {
   bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
   return new Promise<boolean>((resolve) => {
-    const onReached = () => {
+    let settled = false;
+    const done = (result: boolean) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
-      resolve(true);
-    };
-    const timeout = setTimeout(() => {
       bot.removeListener('goal_reached', onReached as any);
-      bot.pathfinder.stop();
-      resolve(false);
-    }, timeoutMs);
+      bot.removeListener('path_update' as any, onPathUpdate);
+      if (!result) bot.pathfinder.stop();
+      resolve(result);
+    };
+    const onReached = () => done(true);
+    const onPathUpdate = (r: any) => {
+      if (r?.status === 'noPath') done(false);
+    };
+    const timeout = setTimeout(() => done(false), timeoutMs);
     bot.once('goal_reached' as any, onReached);
+    bot.on('path_update' as any, onPathUpdate);
   });
+}
+
+const FURNACE_OPEN_TIMEOUT = 10000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
 }
 
 export async function smelt(bot: Bot, itemName: string, fuelName: string, count = 1): Promise<ActionResult> {
@@ -42,8 +60,8 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
     return { success: false, message: `Found furnace for ${itemName} but could not reach it` };
   }
 
-  const furnace = await (bot as any).openFurnace(furnaceBlock);
   try {
+    const furnace: any = await withTimeout((bot as any).openFurnace(furnaceBlock), FURNACE_OPEN_TIMEOUT, 'openFurnace');
     let smelted = 0;
 
     for (let i = 0; i < count; i++) {
@@ -62,6 +80,8 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
       smelted++;
     }
 
+    furnace.close();
+
     if (smelted === 0) {
       return {
         success: false,
@@ -79,7 +99,5 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
       success: false,
       message: `Smelting ${itemName} failed: ${err.message}. Inventory: ${inventorySummary(bot)}`,
     };
-  } finally {
-    furnace.close();
   }
 }

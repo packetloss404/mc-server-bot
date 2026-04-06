@@ -8,6 +8,17 @@ function inventorySummary(bot: Bot): string {
 
 async function moveToCraftingTable(bot: Bot, craftingTable: any): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const done = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      bot.removeListener('goal_reached', onReached as any);
+      bot.removeListener('path_update' as any, onPathUpdate);
+      if (!result) bot.pathfinder.stop();
+      resolve(result);
+    };
+
     const GoalLookAtBlock = (goals as any).GoalLookAtBlock;
     const goal = GoalLookAtBlock
       ? new GoalLookAtBlock(craftingTable.position, bot.world)
@@ -15,18 +26,15 @@ async function moveToCraftingTable(bot: Bot, craftingTable: any): Promise<boolea
 
     bot.pathfinder.setGoal(goal);
 
-    const onReached = () => {
-      clearTimeout(timeout);
-      resolve(true);
+    const onReached = () => done(true);
+    const onPathUpdate = (r: any) => {
+      if (r?.status === 'noPath') done(false);
     };
 
-    const timeout = setTimeout(() => {
-      bot.removeListener('goal_reached', onReached as any);
-      bot.pathfinder.stop();
-      resolve(false);
-    }, 15000);
+    const timeout = setTimeout(() => done(false), 15000);
 
     bot.once('goal_reached' as any, onReached);
+    bot.on('path_update' as any, onPathUpdate);
   });
 }
 

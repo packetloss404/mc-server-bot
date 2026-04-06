@@ -6,17 +6,35 @@ import { ActionResult } from './types';
 async function moveNear(bot: Bot, x: number, y: number, z: number, range = 3, timeoutMs = 15000): Promise<boolean> {
   bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
   return new Promise<boolean>((resolve) => {
-    const onReached = () => {
+    let settled = false;
+    const done = (result: boolean) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timeout);
-      resolve(true);
-    };
-    const timeout = setTimeout(() => {
       bot.removeListener('goal_reached', onReached as any);
-      bot.pathfinder.stop();
-      resolve(false);
-    }, timeoutMs);
+      bot.removeListener('path_update' as any, onPathUpdate);
+      if (!result) bot.pathfinder.stop();
+      resolve(result);
+    };
+    const onReached = () => done(true);
+    const onPathUpdate = (r: any) => {
+      if (r?.status === 'noPath') done(false);
+    };
+    const timeout = setTimeout(() => done(false), timeoutMs);
     bot.once('goal_reached' as any, onReached);
+    bot.on('path_update' as any, onPathUpdate);
   });
+}
+
+const CONTAINER_OPEN_TIMEOUT = 10000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms)
+    ),
+  ]);
 }
 
 function resolveContainerBlock(bot: Bot, blockName: string): any | null {
@@ -34,7 +52,7 @@ export async function inspectContainer(bot: Bot, blockName: string, position?: V
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {
-    const container = await (bot as any).openContainer(containerBlock);
+    const container: any = await withTimeout((bot as any).openContainer(containerBlock), CONTAINER_OPEN_TIMEOUT, 'openContainer');
     const items = (container.containerItems?.() || [])
       .filter((item: any) => item)
       .reduce((acc: Record<string, number>, item: any) => {
@@ -63,7 +81,7 @@ export async function withdrawFromContainer(bot: Bot, blockName: string, itemNam
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {
-    const container = await (bot as any).openContainer(containerBlock);
+    const container: any = await withTimeout((bot as any).openContainer(containerBlock), CONTAINER_OPEN_TIMEOUT, 'openContainer');
     await container.withdraw(item.id, null, count);
     container.close();
     return { success: true, message: `Withdrew ${count} ${itemName} from ${blockName}` };
@@ -84,7 +102,7 @@ export async function depositToContainer(bot: Bot, blockName: string, itemName: 
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {
-    const container = await (bot as any).openContainer(containerBlock);
+    const container: any = await withTimeout((bot as any).openContainer(containerBlock), CONTAINER_OPEN_TIMEOUT, 'openContainer');
     await container.deposit(item.id, null, count);
     container.close();
     return { success: true, message: `Deposited ${count} ${itemName} into ${blockName}` };

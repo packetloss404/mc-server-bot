@@ -1,7 +1,11 @@
 'use client';
 
 import { create } from 'zustand';
-import type { BotStatus, BotEvent, WorldState } from './api';
+import type {
+  BotStatus, BotEvent, WorldState,
+  SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
+  CommandRecord, MissionRecord,
+} from './api';
 
 export interface BotLiveData extends BotStatus {
   health?: number;
@@ -138,4 +142,137 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+}));
+
+// ─── Control Store (multi-bot selection & command history) ───
+
+interface ControlStore {
+  selectedBotIds: Set<string>;
+  commandHistory: CommandRecord[];
+  toggleBotSelection: (botName: string) => void;
+  selectBot: (botName: string) => void;
+  deselectBot: (botName: string) => void;
+  clearSelection: () => void;
+  selectAll: (botNames: string[]) => void;
+  setSelection: (botNames: string[]) => void;
+  setCommands: (commands: CommandRecord[]) => void;
+  upsertCommand: (command: CommandRecord) => void;
+}
+
+export const useControlStore = create<ControlStore>((set) => ({
+  selectedBotIds: new Set(),
+  commandHistory: [],
+  toggleBotSelection: (botName) =>
+    set((state) => {
+      const next = new Set(state.selectedBotIds);
+      const key = botName.toLowerCase();
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return { selectedBotIds: next };
+    }),
+  selectBot: (botName) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      if (state.selectedBotIds.has(key)) return state;
+      const next = new Set(state.selectedBotIds);
+      next.add(key);
+      return { selectedBotIds: next };
+    }),
+  deselectBot: (botName) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      if (!state.selectedBotIds.has(key)) return state;
+      const next = new Set(state.selectedBotIds);
+      next.delete(key);
+      return { selectedBotIds: next };
+    }),
+  clearSelection: () => set({ selectedBotIds: new Set() }),
+  selectAll: (botNames) => set({ selectedBotIds: new Set(botNames.map((n) => n.toLowerCase())) }),
+  setSelection: (botNames) => set({ selectedBotIds: new Set(botNames.map((n) => n.toLowerCase())) }),
+  setCommands: (commands) => set({ commandHistory: commands }),
+  upsertCommand: (command) =>
+    set((state) => {
+      const idx = state.commandHistory.findIndex((c) => c.id === command.id);
+      if (idx >= 0) {
+        const next = [...state.commandHistory];
+        next[idx] = { ...next[idx], ...command };
+        next.sort((a, b) => b.createdAt - a.createdAt);
+        return { commandHistory: next };
+      }
+      return {
+        commandHistory: [command, ...state.commandHistory]
+          .sort((a, b) => b.createdAt - a.createdAt)
+          .slice(0, 100),
+      };
+    }),
+}));
+
+// ─── Fleet Store (squads) ───
+
+export type Squad = SquadRecord;
+
+interface FleetStore {
+  squads: Squad[];
+  selectedSquadId: string | null;
+  setSquads: (squads: Squad[]) => void;
+  upsertSquad: (squad: Squad) => void;
+  removeSquad: (id: string) => void;
+  selectSquad: (id: string | null) => void;
+}
+
+export const useFleetStore = create<FleetStore>((set) => ({
+  squads: [],
+  selectedSquadId: null,
+  setSquads: (squads) => set({ squads }),
+  upsertSquad: (squad) =>
+    set((state) => {
+      const idx = state.squads.findIndex((s) => s.id === squad.id);
+      if (idx >= 0) {
+        const next = [...state.squads];
+        next[idx] = squad;
+        return { squads: next };
+      }
+      return { squads: [...state.squads, squad] };
+    }),
+  removeSquad: (id) =>
+    set((state) => ({
+      squads: state.squads.filter((s) => s.id !== id),
+      selectedSquadId: state.selectedSquadId === id ? null : state.selectedSquadId,
+    })),
+  selectSquad: (id) => set({ selectedSquadId: id }),
+}));
+
+// ─── Role Store (role assignments, overrides, approvals) ───
+
+interface RoleStore {
+  assignments: RoleAssignmentRecord[];
+  overrides: Record<string, RoleOverrideRecord>;
+  approvals: RoleApprovalRecord[];
+  setAssignments: (assignments: RoleAssignmentRecord[]) => void;
+  setOverrides: (overrides: Record<string, RoleOverrideRecord>) => void;
+  setApprovals: (approvals: RoleApprovalRecord[]) => void;
+  upsertAssignment: (assignment: RoleAssignmentRecord) => void;
+  removeAssignment: (id: string) => void;
+}
+
+export const useRoleStore = create<RoleStore>((set) => ({
+  assignments: [],
+  overrides: {},
+  approvals: [],
+
+  setAssignments: (assignments) => set({ assignments }),
+  setOverrides: (overrides) => set({ overrides }),
+  setApprovals: (approvals) => set({ approvals }),
+  upsertAssignment: (assignment) =>
+    set((s) => {
+      const idx = s.assignments.findIndex((a) => a.id === assignment.id);
+      if (idx >= 0) {
+        const next = [...s.assignments];
+        next[idx] = assignment;
+        return { assignments: next };
+      }
+      return { assignments: [...s.assignments, assignment] };
+    }),
+  removeAssignment: (id) =>
+    set((s) => ({ assignments: s.assignments.filter((a) => a.id !== id) })),
 }));

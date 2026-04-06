@@ -2,6 +2,8 @@ import { Bot } from 'mineflayer';
 import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
 
+const FLEE_HEALTH_THRESHOLD = 8; // 4 hearts
+
 export async function attack(bot: Bot, entityName: string, maxDuration = 30000): Promise<ActionResult> {
   if (typeof entityName !== 'string') {
     return { success: false, message: 'killMob requires entityName to be a string' };
@@ -27,29 +29,41 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     let hits = 0;
     const startTime = Date.now();
     let droppedItem: any = null;
+    let finished = false;
 
-    const onEntityGone = (entity: any) => {
+    const onEntityDead = (entity: any) => {
       if (entity === target) {
         cleanup();
-        finish(true, `${entityName} removed from world after ${hits} hits`);
+        finish(true, `${entityName} killed after ${hits} hits`);
       }
     };
 
-    const onItemDrop = (item: any) => {
-      if (target.position && item.position && target.position.distanceTo(item.position) <= 1.5) {
-        droppedItem = item;
+    const onEntitySpawn = (entity: any) => {
+      // Filter for item drops near the target's last known position
+      if (entity.type === 'object' && entity.objectType === 'Item' &&
+          target.position && entity.position &&
+          target.position.distanceTo(entity.position) <= 3) {
+        droppedItem = entity;
       }
+    };
+
+    const onBotDeath = () => {
+      cleanup();
+      reject(new Error(`Bot died while fighting ${entityName}`));
     };
 
     const cleanup = () => {
       clearInterval(attackInterval);
       clearTimeout(timeoutId);
       bot.pathfinder.stop();
-      bot.removeListener('entityGone' as any, onEntityGone);
-      bot.removeListener('itemDrop' as any, onItemDrop);
+      bot.removeListener('entityDead', onEntityDead);
+      bot.removeListener('entitySpawn', onEntitySpawn);
+      bot.removeListener('death', onBotDeath);
     };
 
     const finish = async (success: boolean, message: string) => {
+      if (finished) return;
+      finished = true;
       if (success && droppedItem) {
         try {
           await (bot as any).collectBlock.collect(droppedItem, { ignoreNoPath: true });
@@ -66,8 +80,9 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
       }
     };
 
-    bot.on('entityGone' as any, onEntityGone);
-    bot.on('itemDrop' as any, onItemDrop);
+    bot.on('entityDead', onEntityDead);
+    bot.on('entitySpawn', onEntitySpawn);
+    bot.on('death', onBotDeath);
 
     const timeoutId = setTimeout(() => {
       cleanup();
@@ -76,6 +91,27 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
 
     const attackInterval = setInterval(() => {
       if (Date.now() - startTime > maxDuration) {
+        return;
+      }
+
+      // Flee if health is critically low
+      if (bot.health < FLEE_HEALTH_THRESHOLD) {
+        cleanup();
+        bot.pathfinder.stop();
+        // Move away from target
+        const pos = bot.entity.position;
+        const away = pos.offset(
+          pos.x - target.position.x,
+          0,
+          pos.z - target.position.z
+        ).normalize().scale(16);
+        const fleePos = pos.plus(away);
+        bot.pathfinder.setGoal(new goals.GoalNear(fleePos.x, fleePos.y, fleePos.z, 2));
+        resolve({
+          success: false,
+          message: `Fleeing from ${entityName} - health critically low (${bot.health.toFixed(1)})`,
+          data: { hits },
+        });
         return;
       }
 

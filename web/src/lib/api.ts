@@ -133,6 +133,70 @@ export interface TerrainData {
   blocks: string[];
 }
 
+// Control platform types
+export interface SquadRecord {
+  id: string;
+  name: string;
+  botNames: string[];
+  defaultRole?: string;
+  activeMissionId?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RoleAssignmentRecord {
+  id: string;
+  botName: string;
+  role: string;
+  autonomyLevel: 'manual' | 'assisted' | 'autonomous';
+  homeMarkerId?: string;
+  allowedZoneIds?: string[];
+  interruptPolicy?: string;
+  preferredMissionTypes?: string[];
+  loadoutPolicy?: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface RoleOverrideRecord {
+  botName: string;
+  reason: string;
+  at: number;
+}
+
+export interface RoleApprovalRecord {
+  id: string;
+  botName: string;
+  role: string;
+  status: 'pending' | 'approved' | 'rejected';
+  missionDraft: { title: string; description: string };
+  expiresAt: number;
+}
+
+export interface CommandRecord {
+  id: string;
+  type: string;
+  botName: string;
+  params: Record<string, unknown>;
+  status: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface MissionRecord {
+  id: string;
+  type: string;
+  title: string;
+  description: string;
+  status: string;
+  assigneeIds: string[];
+  blockedReason?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export type MarkerRecord = Marker;
+export type ZoneRecord = Zone;
+
 // API functions
 export const api = {
   // Bots
@@ -204,4 +268,41 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ x, y, z }),
     }),
+
+  // Markers
+  getMarkers: () => fetchJSON<{ markers: Marker[] }>('/api/markers'),
+  getZones: () => fetchJSON<{ zones: Zone[] }>('/api/zones'),
+
+  // Squads
+  getSquads: () => fetchJSON<{ squads: SquadRecord[] }>('/api/squads'),
+
+  // Missions
+  getMission: (id: string) => fetchJSON<{ mission: MissionRecord }>(`/api/missions/${id}`),
+
+  // Roles
+  getRoleAssignments: () => fetchJSON<{ assignments: RoleAssignmentRecord[] }>('/api/roles/assignments'),
+  createRoleAssignment: (data: Partial<RoleAssignmentRecord>) =>
+    fetchJSON<{ assignment: RoleAssignmentRecord }>('/api/roles/assignments', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateRoleAssignment: (id: string, data: Partial<RoleAssignmentRecord>) =>
+    fetchJSON<{ assignment: RoleAssignmentRecord }>(`/api/roles/assignments/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteRoleAssignment: (id: string) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/assignments/${id}`, { method: 'DELETE' }),
+  approveRoleApproval: (id: string, data?: { decidedBy?: string }) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/approvals/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  rejectRoleApproval: (id: string, data?: { decidedBy?: string }) =>
+    fetchJSON<{ success: boolean }>(`/api/roles/approvals/${id}/reject`, {
+      method: 'POST',
+      body: JSON.stringify(data ?? {}),
+    }),
+  clearBotOverride: (botName: string) =>
+    fetchJSON<{ success: boolean }>(`/api/bots/${botName}/override`, { method: 'DELETE' }),
 };

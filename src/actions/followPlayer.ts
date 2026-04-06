@@ -16,20 +16,34 @@ export async function followPlayer(
   bot.pathfinder.setGoal(new goals.GoalFollow(player.entity, followDistance), true);
 
   return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
+    let settled = false;
+    const done = (result: ActionResult) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
       bot.pathfinder.stop();
-      resolve({ success: true, message: 'Follow duration ended' });
+      bot.removeListener('playerLeft', onPlayerLeft);
+      bot.removeListener('path_update' as any, onPathUpdate);
+      resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+      done({ success: true, message: 'Follow duration ended' });
     }, duration);
 
     const onPlayerLeft = (p: { username: string }) => {
       if (p.username === playerName) {
-        clearTimeout(timeout);
-        bot.pathfinder.stop();
-        bot.removeListener('playerLeft', onPlayerLeft);
-        resolve({ success: true, message: 'Player left' });
+        done({ success: true, message: 'Player left' });
+      }
+    };
+
+    const onPathUpdate = (r: any) => {
+      if (r?.status === 'noPath') {
+        done({ success: false, message: `No path to player ${playerName}` });
       }
     };
 
     bot.on('playerLeft', onPlayerLeft);
+    bot.on('path_update' as any, onPathUpdate);
   });
 }

@@ -6,7 +6,7 @@ async function pickUpNearbyItem(bot) {
       y,
       z
     } = item.position;
-    await moveTo(x, y, z, 0, 15);
-    await bot.waitForTicks(20);
+    await moveTo(x, y, z, 1, 15);
+    await bot.waitForTicks(10);
   }
 }

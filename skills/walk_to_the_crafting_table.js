@@ -1,3 +1,3 @@
 async function walkToCraftingTable(bot) {
-  await moveTo(739, 82, 303, 1, 120);
+  await moveTo(768, 80, 285, 2, 60);
 }

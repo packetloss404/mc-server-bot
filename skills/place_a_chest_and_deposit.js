@@ -1,49 +1,42 @@
 async function placeChestAndDepositUselessItems(bot) {
-  let chestItem = bot.inventory.items().find(i => i.name === 'chest');
-  if (!chestItem) {
-    const planks = bot.inventory.items().find(i => i.name.endsWith('_planks'));
-    if (!planks || planks.count < 8) {
-      const logs = bot.inventory.items().find(i => i.name.endsWith('_log'));
-      if (logs) {
-        await craftItem(logs.name.replace('_log', '_planks'), 2);
-      } else {
+  let chest = bot.inventory.items().find(i => i.name === 'chest');
+  if (!chest) {
+    let planks = bot.inventory.items().find(i => i.name.endsWith('_planks') && i.count >= 8);
+    if (!planks) {
+      let logs = bot.inventory.items().find(i => i.name.endsWith('_log'));
+      if (!logs) {
         await mineBlock('oak_log', 2);
-        await craftItem('oak_planks', 2);
+        logs = bot.inventory.items().find(i => i.name.endsWith('_log'));
       }
+      await craftItem(logs.name.replace('_log', '_planks'), 2);
     }
     await craftItem('chest', 1);
+    chest = bot.inventory.items().find(i => i.name === 'chest');
   }
-  let chestBlock = bot.findBlock({
-    matching: b => b.name === 'chest',
-    maxDistance: 4
-  });
-  if (!chestBlock) {
-    const pos = bot.entity.position.floored();
-    const offsets = [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1], [1, 0, 1], [1, 0, -1]];
-    let placed = false;
-    for (const offset of offsets) {
-      const p = pos.offset(offset[0], offset[1], offset[2]);
-      const block = bot.blockAt(p);
-      const below = bot.blockAt(p.offset(0, -1, 0));
-      if (block && block.name === 'air' && below && below.name !== 'air') {
-        await placeItem('chest', p.x, p.y, p.z);
-        placed = true;
-        break;
+  const pos = bot.entity.position.floored();
+  let placePos = null;
+  for (let x = -2; x <= 2; x++) {
+    for (let z = -2; z <= 2; z++) {
+      for (let y = -1; y <= 1; y++) {
+        const p = pos.offset(x, y, z);
+        const block = bot.blockAt(p);
+        const below = bot.blockAt(p.offset(0, -1, 0));
+        if (block && block.name === 'air' && below && below.name !== 'air' && !['water', 'lava', 'chest'].includes(below.name)) {
+          placePos = p;
+          break;
+        }
       }
+      if (placePos) break;
     }
-    if (!placed) {
-      await placeItem('chest', pos.x + 1, pos.y, pos.z);
-    }
+    if (placePos) break;
   }
-  const uselessItems = ['cobblestone', 'stone', 'dirt', 'gravel', 'andesite', 'diorite', 'granite', 'tuff', 'stone_bricks', 'stone_brick_stairs', 'spruce_planks', 'oak_planks'];
+  if (!placePos) placePos = pos.offset(1, 0, 1);
+  await placeItem('chest', placePos.x, placePos.y, placePos.z);
+  const uselessItems = ['cobblestone', 'cobblestone_stairs', 'andesite', 'diorite', 'granite', 'stonecutter', 'dirt', 'gravel', 'oak_door', 'stick'];
   for (const itemName of uselessItems) {
-    const itemInInv = bot.inventory.items().find(i => i.name === itemName);
-    if (itemInInv && itemInInv.count > 0) {
-      try {
-        await depositItem('chest', itemName, itemInInv.count);
-      } catch (e) {
-        continue;
-      }
+    const itemsToDeposit = bot.inventory.items().filter(i => i.name === itemName);
+    for (const item of itemsToDeposit) {
+      await depositItem('chest', item.name, item.count);
     }
   }
 }

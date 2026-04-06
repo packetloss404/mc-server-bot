@@ -1,4 +1,4 @@
-async function mineThreeCopperOreBlocks(bot) {
+async function mine3CopperOreBlocks(bot) {
   const findCopper = () => bot.findBlock({
     matching: block => ['copper_ore', 'deepslate_copper_ore'].includes(block.name),
     maxDistance: 32

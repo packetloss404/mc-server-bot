@@ -1,8 +1,7 @@
-async function mineOneBirchLog(bot) {
-  const targetBlock = 'birch_log';
-  const count = 1;
+async function mineBirchLog(bot) {
+  const target = 'birch_log';
   const birchLog = bot.findBlock({
-    matching: b => b.name === targetBlock,
+    matching: b => b.name === target,
     maxDistance: 32
   });
   if (!birchLog) {
@@ -12,10 +11,10 @@ async function mineOneBirchLog(bot) {
       z: 1
     }, 60, () => {
       return bot.findBlock({
-        matching: b => b.name === targetBlock,
+        matching: b => b.name === target,
         maxDistance: 32
       });
     });
   }
-  await mineBlock(targetBlock, count);
+  await mineBlock(target, 1);
 }

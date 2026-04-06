@@ -1,17 +1,20 @@
 async function mineThreeBirchLogs(bot) {
-  const targetBlock = 'birch_log';
-  const count = 3;
-  const birchLog = bot.findBlock({
-    matching: b => b.name === targetBlock,
+  const itemName = 'birch_log';
+  const targetCount = 3;
+  const getCount = () => bot.inventory.items().filter(i => i.name === itemName).reduce((acc, i) => acc + i.count, 0);
+  let currentCount = getCount();
+  if (currentCount >= targetCount) return;
+  let block = bot.findBlock({
+    matching: b => b.name === itemName,
     maxDistance: 32
   });
-  if (!birchLog) {
+  if (!block) {
     await exploreUntil('north', 60, () => {
-      return bot.findBlock({
-        matching: b => b.name === targetBlock,
+      return !!bot.findBlock({
+        matching: b => b.name === itemName,
         maxDistance: 32
       });
     });
   }
-  await mineBlock(targetBlock, count);
+  await mineBlock(itemName, targetCount - currentCount);
 }

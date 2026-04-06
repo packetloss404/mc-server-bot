@@ -41,7 +41,7 @@ export class BotManager {
     this.llmClient = llmClient;
     this.affinityManager = new AffinityManager(config.affinity, path.join(process.cwd(), 'data'));
     this.conversationManager = new ConversationManager();
-    this.socialMemory = new SocialMemory();
+    this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = new BotComms();
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
   }

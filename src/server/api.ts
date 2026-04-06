@@ -15,6 +15,8 @@ export interface APIServerResult {
   io: SocketIOServer;
   eventLog: EventLog;
   commanderService: CommanderService;
+  buildCoordinator?: any;
+  chainCoordinator?: any;
 }
 
 export function createAPIServer(botManager: BotManager): APIServerResult {

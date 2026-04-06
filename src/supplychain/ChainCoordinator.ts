@@ -269,15 +269,15 @@ export class ChainCoordinator {
     chain.updatedAt = Date.now();
     this.save();
 
-    this.io.emit('chain:started', { chainId: chain.id, name: chain.name });
+    this.io.emit('chain:started', { id: chain.id, name: chain.name });
     this.eventLog.push({
       type: 'chain:started',
       botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
       description: `Supply chain started: ${chain.name}`,
-      metadata: { chainId: chain.id },
+      metadata: { id: chain.id },
     });
 
-    logger.info({ chainId: chain.id, name: chain.name }, 'Supply chain started');
+    logger.info({ id: chain.id, name: chain.name }, 'Supply chain started');
 
     this.advanceStage(chain);
     return true;
@@ -291,15 +291,15 @@ export class ChainCoordinator {
     chain.updatedAt = Date.now();
     this.save();
 
-    this.io.emit('chain:paused', { chainId: chain.id });
+    this.io.emit('chain:paused', { id: chain.id });
     this.eventLog.push({
       type: 'chain:paused',
       botName: chain.stages[chain.currentStageIndex]?.botName ?? '',
       description: `Supply chain paused: ${chain.name}`,
-      metadata: { chainId: chain.id },
+      metadata: { id: chain.id },
     });
 
-    logger.info({ chainId: chain.id, name: chain.name }, 'Supply chain paused');
+    logger.info({ id: chain.id, name: chain.name }, 'Supply chain paused');
     return true;
   }
 
@@ -320,15 +320,15 @@ export class ChainCoordinator {
     chain.updatedAt = Date.now();
     this.save();
 
-    this.io.emit('chain:cancelled', { chainId: chain.id });
+    this.io.emit('chain:cancelled', { id: chain.id });
     this.eventLog.push({
       type: 'chain:cancelled',
       botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
       description: `Supply chain cancelled: ${chain.name}`,
-      metadata: { chainId: chain.id },
+      metadata: { id: chain.id },
     });
 
-    logger.info({ chainId: chain.id, name: chain.name }, 'Supply chain cancelled');
+    logger.info({ id: chain.id, name: chain.name }, 'Supply chain cancelled');
     return true;
   }
 
@@ -344,15 +344,15 @@ export class ChainCoordinator {
       chain.updatedAt = Date.now();
       this.save();
 
-      this.io.emit('chain:completed', { chainId: chain.id, name: chain.name });
+      this.io.emit('chain:completed', { id: chain.id, name: chain.name });
       this.eventLog.push({
         type: 'chain:completed',
         botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
         description: `Supply chain completed: ${chain.name}`,
-        metadata: { chainId: chain.id },
+        metadata: { id: chain.id },
       });
 
-      logger.info({ chainId: chain.id, name: chain.name }, 'Supply chain completed');
+      logger.info({ id: chain.id, name: chain.name }, 'Supply chain completed');
       return;
     }
 
@@ -364,8 +364,8 @@ export class ChainCoordinator {
       chain.updatedAt = Date.now();
       this.save();
 
-      this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
-      this.io.emit('chain:failed', { chainId: chain.id, name: chain.name, error: stage.error });
+      this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
+      this.io.emit('chain:failed', { id: chain.id, name: chain.name, error: stage.error });
       return;
     }
 
@@ -377,8 +377,8 @@ export class ChainCoordinator {
       chain.updatedAt = Date.now();
       this.save();
 
-      this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
-      this.io.emit('chain:failed', { chainId: chain.id, name: chain.name, error: stage.error });
+      this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
+      this.io.emit('chain:failed', { id: chain.id, name: chain.name, error: stage.error });
       return;
     }
 
@@ -390,8 +390,8 @@ export class ChainCoordinator {
       chain.updatedAt = Date.now();
       this.save();
 
-      this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
-      this.io.emit('chain:failed', { chainId: chain.id, name: chain.name, error: stage.error });
+      this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
+      this.io.emit('chain:failed', { id: chain.id, name: chain.name, error: stage.error });
       return;
     }
 
@@ -405,7 +405,7 @@ export class ChainCoordinator {
     chain.updatedAt = Date.now();
     this.save();
 
-    this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
+    this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
 
     logger.info(
       { chainId: chain.id, stageIndex, botName: stage.botName, task: taskDescription },
@@ -483,7 +483,7 @@ export class ChainCoordinator {
         chain.updatedAt = Date.now();
         this.save();
 
-        this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
+        this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
 
         logger.info(
           { chainId: chain.id, stageIndex, botName: stage.botName },
@@ -492,7 +492,7 @@ export class ChainCoordinator {
 
         // Check if chain should loop
         if (chain.currentStageIndex >= chain.stages.length && chain.loop) {
-          logger.info({ chainId: chain.id, name: chain.name }, 'Supply chain looping');
+          logger.info({ id: chain.id, name: chain.name }, 'Supply chain looping');
           for (const s of chain.stages) {
             s.status = 'pending';
             s.startedAt = undefined;
@@ -521,7 +521,7 @@ export class ChainCoordinator {
           chain.updatedAt = Date.now();
           this.save();
 
-          this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
+          this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
 
           // Re-queue the task
           const retryDesc = this.taskDescriptionMap.get(stage.id) ?? this.buildTaskDescription(stage);
@@ -538,7 +538,7 @@ export class ChainCoordinator {
           chain.updatedAt = Date.now();
           this.save();
 
-          this.io.emit('chain:stage-update', { chainId: chain.id, stageIndex, stage });
+          this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
           this.io.emit('chain:failed', {
             chainId: chain.id,
             name: chain.name,

@@ -598,6 +598,7 @@ export class CommandCenter {
       targets: command.targets,
       error: command.error,
       result: command.result,
+      createdAt: command.createdAt,
     });
   }
 

@@ -437,7 +437,7 @@ export class BuildCoordinator {
     this.jobs.set(jobId, job);
 
     // Emit started event
-    this.io.emit('build:started', { job });
+    this.io.emit('build:started', job);
     this.eventLog.push({
       type: 'build:started',
       botName: botNames.join(', '),
@@ -454,7 +454,7 @@ export class BuildCoordinator {
     this.executeBuild(jobId, blocks, assignments).catch((err) => {
       logger.error({ jobId, err }, 'Build execution failed');
       job.status = 'failed';
-      this.io.emit('build:completed', { job, error: err.message });
+      this.io.emit('build:completed', { ...job, error: err.message });
     });
 
     return job;
@@ -620,7 +620,7 @@ export class BuildCoordinator {
       const allCompleted = assignments.every((a) => a.status === 'completed');
       job.status = allCompleted ? 'completed' : 'failed';
 
-      this.io.emit('build:completed', { job });
+      this.io.emit('build:completed', job);
       this.eventLog.push({
         type: 'build:completed',
         botName: assignments.map((a) => a.botName).join(', '),

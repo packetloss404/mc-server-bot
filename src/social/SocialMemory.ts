@@ -164,6 +164,10 @@ export class SocialMemory {
     return `${Math.floor(ms / 86400000)}d`;
   }
 
+  shutdown(): void {
+    this.save();
+  }
+
   private save(): void {
     const dir = path.dirname(this.savePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });

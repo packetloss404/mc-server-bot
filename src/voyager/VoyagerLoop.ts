@@ -249,6 +249,27 @@ export class VoyagerLoop {
     });
   }
 
+  queuePlayerTaskFront(description: string, requestedBy: string): void {
+    const keywords = description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
+    this.playerTaskQueue.unshift({ description, keywords });
+    logger.info({ bot: this.botName, task: description, requestedBy }, 'Player task prepended to front of queue');
+  }
+
+  reorderQueue(orderedDescriptions: string[]): void {
+    const byDesc = new Map(this.playerTaskQueue.map((t) => [t.description, t]));
+    const reordered = orderedDescriptions.map((d) => byDesc.get(d)).filter(Boolean) as typeof this.playerTaskQueue;
+    const remaining = this.playerTaskQueue.filter((t) => !orderedDescriptions.includes(t.description));
+    this.playerTaskQueue.length = 0;
+    this.playerTaskQueue.push(...reordered, ...remaining);
+    logger.info({ bot: this.botName, count: reordered.length }, 'Player task queue reordered');
+  }
+
+  clearQueue(): void {
+    const count = this.playerTaskQueue.length;
+    this.playerTaskQueue.length = 0;
+    logger.info({ bot: this.botName, cleared: count }, 'Player task queue cleared');
+  }
+
   private async decomposeAndQueue(description: string, requestedBy: string): Promise<void> {
     const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
     for (const task of subtasks) {

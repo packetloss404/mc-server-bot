@@ -675,7 +675,7 @@ export class BotInstance {
       // Build conversation history (current message appended by buildContentsArray)
       const contents = await this.conversationManager.buildContentsArray(this.name, playerName, message);
 
-      const response = await this.llmClient.chat(systemPrompt, contents, this.config.llm.chatMaxTokens);
+      const response = await this.llmClient.chat(systemPrompt, contents, this.config.llm.chatMaxTokens, { taskType: 'chat', botName: this.name });
 
       // Check if LLM decided not to respond (empty/blank response = silence)
       const trimmed = response.text.trim();

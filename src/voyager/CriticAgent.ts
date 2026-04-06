@@ -199,7 +199,7 @@ export class CriticAgent {
 
       const userMessage = lines.join('\n');
 
-      const response = await this.llmClient!.generate(CRITIC_SYSTEM_PROMPT, userMessage, 1000);
+      const response = await this.llmClient!.generate(CRITIC_SYSTEM_PROMPT, userMessage, 1000, { taskType: 'critic' });
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(cleaned);
 

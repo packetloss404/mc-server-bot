@@ -54,6 +54,17 @@ export interface Config {
     chatMaxTokens: number;
     codeGenMaxTokens: number;
     maxConcurrentRequests: number;
+    routes?: Record<string, {
+      provider: string;
+      model?: string;
+      temperature?: number;
+      maxTokens?: number;
+      useThinking?: boolean;
+      fallback?: string[];
+    }>;
+    providers?: Record<string, {
+      maxConcurrentRequests?: number;
+    }>;
   };
   skills: { directory: string; maxSkills: number };
   logging: { level: string };

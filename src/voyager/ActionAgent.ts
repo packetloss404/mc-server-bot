@@ -107,7 +107,7 @@ ${bestSkillCode ? `\nBest matching saved skill:\n${this.truncateText(bestSkillCo
 
 Write the function:`;
 
-      const response = await this.llmClient.generate(ACTION_SYSTEM_PROMPT, userMessage, this.maxTokens);
+      const response = await this.llmClient.generate(ACTION_SYSTEM_PROMPT, userMessage, this.maxTokens, { taskType: 'codegen' });
       lastRaw = response.text;
 
       logger.info({

@@ -445,7 +445,7 @@ Last task: ${this.lastTask || 'none'}
 
 Propose the next task:`;
 
-      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000);
+      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000, { taskType: "curriculum" as const });
       logger.debug({ rawResponse: response.text.slice(0, 500) }, 'Curriculum LLM raw response');
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       let parsed: any;
@@ -548,6 +548,7 @@ Propose the next task:`;
             'Answer briefly with 1-2 sentences grounded in the provided Minecraft state.',
             `Question: ${question}\nState: ${baseContext}`,
             120,
+            { taskType: 'curriculum' },
           );
           answer = response.text.trim();
           await this.storeCachedAnswer(question, answer);
@@ -578,6 +579,7 @@ Propose the next task:`;
         'Generate 3 short Minecraft curriculum questions tailored to the bot state. Output only a JSON array of strings.',
         `Personality: ${personality}\nBiome: ${biome}\nInventory: ${obs.inventory}\nNearby blocks: ${obs.nearbyBlocks}\nKnown world memory: ${worldMemory}\nCompleted tasks: ${this.completedTasks.slice(-8).join(', ') || 'none'}`,
         160,
+        { taskType: 'curriculum' },
       );
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const parsed = JSON.parse(cleaned);
@@ -601,6 +603,7 @@ Propose the next task:`;
         'Answer with concise task context for a Minecraft agent. Focus on prerequisites, likely tools, and useful nearby resources. 2-3 sentences max.',
         `Question: ${question}\nInventory: ${obs.inventory}\nNearby blocks: ${obs.nearbyBlocks}\nKnown world memory: ${this.worldMemory.summary()}\nKnown blockers: ${this.blockerMemory.summarize()}\nCompleted tasks: ${this.completedTasks.slice(-8).join(', ') || 'none'}`,
         140,
+        { taskType: 'curriculum' },
       );
       const answer = response.text.trim();
       await this.storeCachedAnswer(question, answer);
@@ -719,7 +722,7 @@ Goal: ${description}
 
 Decompose into ordered subtasks:`;
 
-      const response = await this.llmClient.generate(systemPrompt, userMessage, 1000);
+      const response = await this.llmClient.generate(systemPrompt, userMessage, 1000, { taskType: 'curriculum' });
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       const subtasks: string[] = JSON.parse(cleaned);
 

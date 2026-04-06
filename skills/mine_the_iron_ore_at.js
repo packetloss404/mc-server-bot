@@ -1,17 +1,20 @@
-async function mineIronOreAtSpecificLocation(bot) {
+async function mineIronOreAt955(bot) {
   const pickaxe = bot.inventory.items().find(i => i.name.includes('pickaxe'));
   if (pickaxe) {
     await bot.equip(pickaxe, 'hand');
   }
-  await moveTo(945, 48, 363, 3, 60);
-  const ironOre = bot.findBlock({
+  const targetX = 955;
+  const targetY = 45;
+  const targetZ = 368;
+  await moveTo(targetX, targetY, targetZ, 2, 60);
+  const ironBlock = bot.findBlock({
     matching: b => b.name === 'iron_ore' || b.name === 'deepslate_iron_ore',
     maxDistance: 32
   });
-  if (ironOre) {
-    await mineBlock(ironOre.name, 1);
+  if (ironBlock) {
+    await mineBlock(ironBlock.name, 1);
   } else {
-    await exploreUntil('north', 30, () => {
+    await exploreUntil('horizontal', 30, () => {
       return bot.findBlock({
         matching: b => b.name === 'iron_ore' || b.name === 'deepslate_iron_ore',
         maxDistance: 32

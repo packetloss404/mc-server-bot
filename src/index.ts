@@ -6,41 +6,33 @@ import { loadConfig } from './config';
 import { BotManager } from './bot/BotManager';
 import { createAPIServer } from './server/api';
 import { logger } from './util/logger';
-import { AnthropicClient } from './ai/AnthropicClient';
-import { GeminiClient } from './ai/GeminiClient';
-import { LLMClient } from './ai/LLMClient';
+import type { LLMClient } from './ai/LLMClient';
+import { buildProviderClients } from './ai/ProviderRegistry';
+import { ModelRouter } from './ai/ModelRouter';
+import { TokenLedger } from './ai/TokenLedger';
 import { setupSocketEvents } from './server/socketEvents';
 
-function buildLLMClient(config: ReturnType<typeof loadConfig>): LLMClient | null {
-  const common = {
-    model: config.llm.model,
-    temperature: config.llm.temperature,
-    maxTokens: config.llm.chatMaxTokens,
-    maxConcurrentRequests: config.llm.maxConcurrentRequests,
-  };
+function buildModelRouter(config: ReturnType<typeof loadConfig>): { client: LLMClient | null; ledger: TokenLedger } {
+  const ledger = new TokenLedger();
+  const clients = buildProviderClients(config);
 
-  if (config.llm.provider === 'anthropic') {
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      logger.warn('ANTHROPIC_API_KEY not set - AI chat disabled');
-      return null;
-    }
-
-    return new AnthropicClient({ apiKey, ...common });
+  if (clients.size === 0) {
+    return { client: null, ledger };
   }
 
-  if (config.llm.provider === 'gemini') {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    if (!apiKey) {
-      logger.warn('GOOGLE_API_KEY not set - AI chat disabled');
-      return null;
-    }
-
-    return new GeminiClient({ apiKey, ...common });
+  // If no routes configured, use single-provider mode (backward compatible)
+  if (!config.llm.routes) {
+    const defaultClient = clients.get(config.llm.provider) ?? clients.values().next().value;
+    // Wrap in router anyway for token tracking
+    const router = new ModelRouter(clients, { defaultProvider: config.llm.provider }, ledger);
+    return { client: router, ledger };
   }
 
-  logger.warn({ provider: config.llm.provider }, 'Unsupported LLM provider - AI chat disabled');
-  return null;
+  const router = new ModelRouter(clients, {
+    defaultProvider: config.llm.provider,
+    routes: config.llm.routes,
+  }, ledger);
+  return { client: router, ledger };
 }
 
 async function main() {
@@ -48,10 +40,10 @@ async function main() {
 
   const config = loadConfig();
 
-  // Initialize LLM client (optional - bots work without it, just no chat AI)
-  const llmClient = buildLLMClient(config);
+  // Initialize LLM router (optional - bots work without it, just no AI)
+  const { client: llmClient, ledger: tokenLedger } = buildModelRouter(config);
   if (llmClient) {
-    logger.info({ model: config.llm.model }, 'LLM client initialized');
+    logger.info({ model: config.llm.model, routes: Object.keys(config.llm.routes ?? {}) }, 'LLM ModelRouter initialized');
   }
 
   const botManager = new BotManager(config, llmClient);
@@ -154,7 +146,8 @@ async function main() {
       memoryInterval = null;
     }
 
-    // Flush event log to disk
+    // Flush token ledger and event log
+    tokenLedger.shutdown();
     eventLog.shutdown();
 
     // Flush supply chain coordinator (stops polling + saves)

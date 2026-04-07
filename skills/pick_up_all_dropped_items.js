@@ -1,5 +1,5 @@
 async function pickUpAllItemsWithinFifteenMeters(bot) {
-  while (true) {
+  for (let iter = 0; iter < 20; iter++) {
     const itemEntity = bot.nearestEntity(entity => {
       const isItem = entity.name === 'item' || entity.type === 'item' || entity.objectType === 'Item';
       if (!isItem) return false;

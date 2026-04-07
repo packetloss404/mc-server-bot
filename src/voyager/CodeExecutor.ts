@@ -305,9 +305,35 @@ export class CodeExecutor {
           });
         });
       },
-      exploreUntil: async (direction: { x: number; y: number; z: number }, maxTime = 60, callback: () => any) => {
+      exploreUntil: async (direction: { x: number; y: number; z: number } | string, maxTime = 60, callback: () => any) => {
         throwIfInterrupted();
         const cleanupTrace = addMovementTrace('exploreUntil');
+        // Translate common string directions ('north', 'forward', etc.) into the {x,y,z} form.
+        // The LLM-generated skill library frequently passes strings here, and rejecting them
+        // breaks ~25% of the saved skills. Map known names; pick a random horizontal for unknowns.
+        if (typeof direction === 'string') {
+          const map: Record<string, { x: number; y: number; z: number }> = {
+            north: { x: 0, y: 0, z: -1 },
+            south: { x: 0, y: 0, z: 1 },
+            east: { x: 1, y: 0, z: 0 },
+            west: { x: -1, y: 0, z: 0 },
+            up: { x: 0, y: 1, z: 0 },
+            down: { x: 0, y: -1, z: 0 },
+            forward: { x: 1, y: 0, z: 0 },
+            backward: { x: -1, y: 0, z: 0 },
+            horizontal: { x: 1, y: 0, z: 0 },
+            outward: { x: 1, y: 0, z: 0 },
+          };
+          const key = direction.toLowerCase();
+          const mapped = map[key];
+          if (mapped) {
+            pushLog(`[primitive] exploreUntil: translated string direction "${direction}" to ${JSON.stringify(mapped)}`);
+            direction = mapped;
+          } else {
+            pushLog(`[primitive] exploreUntil: unknown string direction "${direction}", defaulting to {x:1,y:0,z:0}`);
+            direction = { x: 1, y: 0, z: 0 };
+          }
+        }
         pushLog(`[primitive] exploreUntil(${JSON.stringify(direction)}, ${maxTime}s)`);
         pushEvent('primitive_start', 'exploreUntil started', { primitive: 'exploreUntil', direction, maxTime });
         if (!direction || typeof direction.x !== 'number' || typeof direction.y !== 'number' || typeof direction.z !== 'number') {

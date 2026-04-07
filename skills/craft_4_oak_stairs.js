@@ -13,7 +13,7 @@ async function craft4OakStairs(bot) {
         maxDistance: 32
       });
       if (!logBlock) {
-        await exploreUntil(new (require('vec3').Vec3)(1, 0, 0), 60, () => bot.findBlock({
+        await exploreUntil({ x: 1, y: 0, z: 0 }, 60, () => bot.findBlock({
           matching: b => b.name === 'oak_log',
           maxDistance: 32
         }));

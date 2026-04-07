@@ -1,5 +1,5 @@
 async function pickUpItemsWithinTenMeters(bot) {
-  while (true) {
+  for (let iter = 0; iter < 20; iter++) {
     const itemEntity = bot.nearestEntity(entity => entity.name === 'item' && bot.entity.position.distanceTo(entity.position) <= 10);
     if (!itemEntity) break;
     const {

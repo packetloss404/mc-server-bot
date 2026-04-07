@@ -4,7 +4,7 @@ async function findWaterBlock(bot) {
     maxDistance: 32
   });
   if (!waterBlock) {
-    waterBlock = await exploreUntil(new (require('vec3'))(1, 0, 0), 60, () => bot.findBlock({
+    waterBlock = await exploreUntil({ x: 1, y: 0, z: 0 }, 60, () => bot.findBlock({
       matching: b => b.name === 'water',
       maxDistance: 32
     }));

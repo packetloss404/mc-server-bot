@@ -44,7 +44,6 @@ export class BotManager {
   private playerIntentModel: PlayerIntentModel;
   private botReputation: BotReputation;
   private watchdogInterval: NodeJS.Timeout | null = null;
-  private dungeonMasterInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -57,60 +56,12 @@ export class BotManager {
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = new BotComms();
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
-    this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data'));
+    this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data', 'shared_world.json'));
     this.swarmCoordinator = new SwarmCoordinator(this.blackboardManager);
     this.dungeonMaster = new DungeonMaster();
     this.difficultyBalancer = new DifficultyBalancer();
     this.playerIntentModel = new PlayerIntentModel();
     this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
-
-    // DungeonMaster: tick every 90s, evaluate world state, fan out tasks for new events.
-    this.dungeonMasterInterval = setInterval(() => this.tickDungeonMaster(), 90_000);
-  }
-
-  /**
-   * Build a world snapshot and ask DungeonMaster if a new event should fire.
-   * If one does, queue its tasks on each connected worker.
-   */
-  private tickDungeonMaster(): void {
-    if (this.workers.size === 0) return;
-    try {
-      const sharedState = this.sharedWorldModel.getSnapshot();
-      const bots = [...this.workers.values()];
-      const totalHealth = bots.reduce((sum, w) => sum + ((w.lastStatus?.health as number) ?? 20), 0);
-      const snapshot = {
-        botCount: bots.length,
-        playerCount: 0,
-        serverTimeOfDay: sharedState.serverTime,
-        weather: sharedState.weather,
-        totalResources: sharedState.resources.reduce<Record<string, number>>((acc, r) => {
-          acc[r.name] = (acc[r.name] ?? 0) + 1;
-          return acc;
-        }, {}),
-        recentCompletedTasks: 0,
-        exploredChunkCount: sharedState.exploredChunks.size,
-        activeThreatCount: sharedState.threats.length,
-        averageBotHealth: bots.length > 0 ? totalHealth / bots.length : 20,
-      };
-
-      const event = this.dungeonMaster.evaluateAndGenerate(snapshot);
-      if (!event) return;
-
-      logger.info({ eventId: event.id, type: event.type, title: event.title }, 'DungeonMaster fanning event tasks to workers');
-      // Queue the highest-priority task on each worker. Bots can pick it up via the
-      // normal player-task path; lower-priority tasks fall out as the event ages.
-      const task = event.tasks[0];
-      if (!task) return;
-      for (const worker of bots) {
-        try {
-          worker.sendCommand('queueTask', { description: task.description, source: 'dungeon_master' });
-        } catch (err: any) {
-          logger.warn({ bot: worker.botName, err: err.message }, 'Failed to queue DungeonMaster task');
-        }
-      }
-    } catch (err: any) {
-      logger.warn({ err: err.message }, 'DungeonMaster tick failed');
-    }
   }
 
   async spawnBot(
@@ -194,10 +145,6 @@ export class BotManager {
 
   /** Flush all pending debounced writes across every data manager. */
   shutdownPersistence(): void {
-    if (this.dungeonMasterInterval) {
-      clearInterval(this.dungeonMasterInterval);
-      this.dungeonMasterInterval = null;
-    }
     this.affinityManager.shutdown();
     this.socialMemory.shutdown();
     this.blackboardManager.shutdown();

@@ -86,6 +86,26 @@ ipc.onCommand((type, cmdData) => {
     case 'swarmDirective':
       instance.getVoyagerLoop()?.overrideWithSwarmDirective(cmdData.description, cmdData.requestedBy);
       break;
+    case 'chat':
+      try { (instance as any).bot?.chat(cmdData.message); } catch (err: any) {
+        logger.warn({ bot: data.botName, err: err?.message }, 'chat command failed');
+      }
+      break;
+    case 'setBotState':
+      try { (instance as any).state = cmdData.state; } catch {}
+      break;
+    case 'pauseVoyager':
+      instance.getVoyagerLoop()?.pause(cmdData.reason || 'external');
+      break;
+    case 'resumeVoyager':
+      instance.getVoyagerLoop()?.resume();
+      break;
+    case 'stopMovement':
+      try {
+        (instance as any).bot?.pathfinder?.stop();
+        (instance as any).bot?.clearControlStates();
+      } catch {}
+      break;
   }
 });
 
@@ -106,6 +126,17 @@ ipc.onRequest(async (type, args) => {
       const lib = instance.getVoyagerLoop()?.getSkillLibrary();
       return lib ? lib.getCode(args[0]) : null;
     }
+    case 'getBotVersion':
+      return (instance as any).bot?.version ?? null;
+    case 'getBlockAt': {
+      const bot = (instance as any).bot;
+      if (!bot) return null;
+      const { Vec3 } = require('vec3');
+      const b = bot.blockAt(new Vec3(args[0], args[1], args[2]));
+      return b ? { name: b.name } : null;
+    }
+    case 'isBotConnected':
+      return !!(instance as any).bot?.entity;
     default:
       throw new Error(`Unknown request type in worker: ${type}`);
   }

@@ -67,10 +67,15 @@ export class BuildCoordinator {
 
   // ── Schematic listing ───────────────────────────────────
 
-  private getBotVersion(): string {
+  private async getBotVersion(): Promise<string> {
     const bots = this.botManager.getAllWorkers() as any[];
-    const connected = bots.find((b) => b.bot);
-    return connected?.bot?.version ?? '1.21.11';
+    for (const b of bots) {
+      if (typeof b.getBotVersion === 'function') {
+        const v = await b.getBotVersion();
+        if (v) return v;
+      }
+    }
+    return '1.21.11';
   }
 
   async listSchematics(): Promise<SchematicInfo[]> {
@@ -121,7 +126,7 @@ export class BuildCoordinator {
     let schematic: any;
     try {
       const buffer = fs.readFileSync(fullPath);
-      schematic = await Schematic.read(buffer, this.getBotVersion());
+      schematic = await Schematic.read(buffer, await this.getBotVersion());
     } catch (err: any) {
       logger.warn({ filename, err: err.message }, 'Failed to parse schematic');
       return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };
@@ -176,11 +181,14 @@ export class BuildCoordinator {
       throw new Error(`Schematic file not found: ${schematicFile}`);
     }
 
-    // Validate bots exist and are connected
+    // Validate bots exist and are connected (via worker IPC)
     for (const name of botNames) {
-      const instance = this.botManager.getWorker(name) as any;
-      if (!instance) throw new Error(`Bot not found: ${name}`);
-      if (!instance.bot) throw new Error(`Bot not connected: ${name}`);
+      const handle = this.botManager.getWorker(name) as any;
+      if (!handle) throw new Error(`Bot not found: ${name}`);
+      const connected = typeof handle.isBotConnected === 'function'
+        ? await handle.isBotConnected()
+        : !!handle.bot;
+      if (!connected) throw new Error(`Bot not connected: ${name}`);
     }
 
     // Check file size before loading to prevent OOM
@@ -191,7 +199,7 @@ export class BuildCoordinator {
 
     // Load schematic
     const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer, this.getBotVersion());
+    const schematic = await Schematic.read(buffer, await this.getBotVersion());
 
     // Check volume before iterating — reject if too large
     const schSize = schematic.size;
@@ -238,13 +246,17 @@ export class BuildCoordinator {
     const fillFoundation = options?.fillFoundation !== false; // default true
     const snapToGround = options?.snapToGround === true; // default false
 
-    // Find a connected bot to query world blocks
-    const probeInstance = (botNames
-      .map((n) => this.botManager.getWorker(n)) as any[])
-      .find((inst: any) => inst?.bot);
-    const probeBot = probeInstance?.bot;
+    // Find a connected bot handle to query world blocks via IPC
+    let probeHandle: any = null;
+    for (const n of botNames) {
+      const h = this.botManager.getWorker(n) as any;
+      if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+        probeHandle = h;
+        break;
+      }
+    }
 
-    if (snapToGround && probeBot) {
+    if (snapToGround && probeHandle) {
       // Build a grid of sample points across the footprint
       const footprintXZ = new Map<string, { wx: number; wz: number }>();
       for (const b of blocks) {
@@ -260,7 +272,7 @@ export class BuildCoordinator {
         const col = allColumns[i];
         // Scan downward from origin Y + 10 to find the first solid block
         for (let y = oy + 10; y >= oy - 30; y--) {
-          const wb = probeBot.blockAt(new Vec3(col.wx, y, col.wz));
+          const wb = await probeHandle.getBlockAt(col.wx, y, col.wz);
           if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
             samples.push(y + 1); // ground surface is top of this block
             break;
@@ -293,7 +305,7 @@ export class BuildCoordinator {
     }
 
     // ── Foundation filling: add support blocks under schematic footprint ──
-    if (fillFoundation && probeBot) {
+    if (fillFoundation && probeHandle) {
       const MAX_FILL_DEPTH = 20;
 
       // For each (wx, wz) column, find the lowest schematic block Y
@@ -318,7 +330,7 @@ export class BuildCoordinator {
         // Scan downward from minBlockY - 1 to find ground
         let filledCount = 0;
         for (let y = minBlockY - 1; y >= minBlockY - MAX_FILL_DEPTH; y--) {
-          const wb = probeBot.blockAt(new Vec3(wx, y, wz));
+          const wb = await probeHandle.getBlockAt(wx, y, wz);
           if (!wb) {
             // Bot too far to query — skip this column
             skippedOutOfRange++;
@@ -361,7 +373,7 @@ export class BuildCoordinator {
       } else {
         logger.info('Foundation fill: no gaps detected, no fill needed');
       }
-    } else if (fillFoundation && !probeBot) {
+    } else if (fillFoundation && !probeHandle) {
       logger.warn('Foundation fill requested but no connected bot available to probe terrain');
     }
 
@@ -471,8 +483,8 @@ export class BuildCoordinator {
     for (const assignment of job.assignments) {
       if (assignment.status === 'building' || assignment.status === 'waiting') {
         assignment.status = 'failed';
-        const instance = this.botManager.getWorker(assignment.botName) as any;
-        if (instance) instance.state = BotState.IDLE;
+        const handle = this.botManager.getWorker(assignment.botName) as any;
+        if (handle && typeof handle.setBotState === 'function') handle.setBotState(BotState.IDLE);
       }
     }
 
@@ -534,34 +546,41 @@ export class BuildCoordinator {
       // Check for cancellation
       if (this.cancelledJobs.has(jobId)) return;
 
-      // Get the mineflayer bot instance
-      const instance = this.botManager.getWorker(assignment.botName) as any;
-      if (!instance || !instance.bot) {
+      // Get the worker handle (worker thread is the source of truth for the mineflayer bot)
+      const handle = this.botManager.getWorker(assignment.botName) as any;
+      const connected = handle && typeof handle.isBotConnected === 'function'
+        ? await handle.isBotConnected()
+        : !!handle?.bot;
+      if (!handle || !connected) {
         assignment.status = 'failed';
         logger.error({ jobId, bot: assignment.botName }, 'Bot not available for building');
         return;
       }
 
       // Pause voyager loop so the bot doesn't wander off
-      const voyager = instance.getVoyagerLoop();
-      if (voyager) voyager.pause('building');
+      handle.pauseVoyager('building');
 
       // Stop any current pathfinding/movement
-      try {
-        instance.bot.pathfinder.stop();
-        instance.bot.clearControlStates();
-      } catch {}
+      handle.stopMovement();
 
       // Set creative mode so bot can't die during build, then teleport to site
       try {
-        const opBot = (this.botManager.getAllWorkers() as any[]).find((b: any) => b.bot && b.name !== assignment.botName);
+        const opHandles = (this.botManager.getAllWorkers() as any[])
+          .filter((h: any) => h && h.botName !== assignment.botName);
+        let opHandle: any = null;
+        for (const oh of opHandles) {
+          if (typeof oh.isBotConnected === 'function' && (await oh.isBotConnected())) {
+            opHandle = oh;
+            break;
+          }
+        }
         const cmds = [
           `/gamemode creative ${assignment.botName}`,
           `/tp ${assignment.botName} ${job.origin.x} ${job.origin.y + 50} ${job.origin.z}`,
         ];
         for (const cmd of cmds) {
-          if (opBot?.bot) opBot.bot.chat(cmd);
-          instance.bot.chat(cmd);
+          if (opHandle) opHandle.chat(cmd);
+          handle.chat(cmd);
           await this.sleep(500);
         }
         await this.sleep(1000);
@@ -571,7 +590,7 @@ export class BuildCoordinator {
       }
 
       // Set bot state to BUILDING
-      instance.state = BotState.BUILDING;
+      handle.setBotState(BotState.BUILDING);
       assignment.status = 'building';
 
       this.io.emit('build:bot-status', {
@@ -591,7 +610,7 @@ export class BuildCoordinator {
       if (i > 0) await new Promise((r) => setTimeout(r, i * 2000));
 
       try {
-        await this.executeBotAssignment(jobId, job, assignment, instance.bot, botBlocks);
+        await this.executeBotAssignment(jobId, job, assignment, handle, botBlocks);
         assignment.status = 'completed';
       } catch (err: any) {
         assignment.status = 'failed';
@@ -600,10 +619,10 @@ export class BuildCoordinator {
 
       // Switch back to survival and reset bot state
       try {
-        instance.bot.chat(`/gamemode survival ${assignment.botName}`);
+        handle.chat(`/gamemode survival ${assignment.botName}`);
       } catch {}
-      instance.state = BotState.IDLE;
-      if (voyager) voyager.resume();
+      handle.setBotState(BotState.IDLE);
+      handle.resumeVoyager();
 
       this.io.emit('build:bot-status', {
         jobId,
@@ -657,7 +676,7 @@ export class BuildCoordinator {
     jobId: string,
     job: BuildJob,
     assignment: BotAssignment,
-    bot: any,
+    handle: any,
     blocks: BlockEntry[],
   ): Promise<void> {
     for (const block of blocks) {
@@ -672,7 +691,7 @@ export class BuildCoordinator {
 
       // Place block using /setblock command
       const blockSpec = block.stateStr ? `${block.name}[${block.stateStr}]` : block.name;
-      bot.chat(
+      handle.chat(
         `/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`,
       );
 

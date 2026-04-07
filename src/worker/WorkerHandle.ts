@@ -270,6 +270,58 @@ export class WorkerHandle {
     return this.ipc.request(type, args);
   }
 
+  // ── Build coordinator helpers (forward to worker via IPC) ──
+
+  /** Send a chat / command message through the bot. */
+  chat(message: string): void {
+    this.sendCommand('chat', { message });
+  }
+
+  /** Set the bot's high-level state (e.g. BUILDING, IDLE). */
+  setBotState(state: string): void {
+    this.sendCommand('setBotState', { state });
+  }
+
+  pauseVoyager(reason?: string): void {
+    this.sendCommand('pauseVoyager', { reason });
+  }
+
+  resumeVoyager(): void {
+    this.sendCommand('resumeVoyager', {});
+  }
+
+  stopMovement(): void {
+    this.sendCommand('stopMovement', {});
+  }
+
+  /** Returns true if the worker thinks the underlying mineflayer bot is connected and spawned. */
+  async isBotConnected(): Promise<boolean> {
+    if (!this.ipc) return false;
+    try {
+      return await this.sendRequest('isBotConnected', []);
+    } catch {
+      return false;
+    }
+  }
+
+  async getBotVersion(): Promise<string | null> {
+    if (!this.ipc) return null;
+    try {
+      return await this.sendRequest('getBotVersion', []);
+    } catch {
+      return null;
+    }
+  }
+
+  async getBlockAt(x: number, y: number, z: number): Promise<{ name: string } | null> {
+    if (!this.ipc) return null;
+    try {
+      return await this.sendRequest('getBlockAt', [x, y, z]);
+    } catch {
+      return null;
+    }
+  }
+
   getCachedStatus(): any {
     return this.lastStatus;
   }

@@ -2,6 +2,7 @@ import type { Config } from '../config';
 import type { LLMClient } from './LLMClient';
 import { GeminiClient } from './GeminiClient';
 import { AnthropicClient } from './AnthropicClient';
+import { OllamaClient } from './OllamaClient';
 import { logger } from '../util/logger';
 
 /**
@@ -38,6 +39,20 @@ export function buildProviderClients(config: Config): Map<string, LLMClient> {
       maxConcurrentRequests: anthropicConf.maxConcurrentRequests ?? config.llm.maxConcurrentRequests,
     }));
     logger.info({ provider: 'anthropic' }, 'Anthropic client initialized');
+  }
+
+  // Ollama (local, no API key required — opt in via OLLAMA_BASE_URL)
+  if (process.env.OLLAMA_BASE_URL) {
+    const ollamaConf = providerConfigs.ollama ?? {};
+    clients.set('ollama', new OllamaClient({
+      baseUrl: process.env.OLLAMA_BASE_URL,
+      chatModel: process.env.OLLAMA_CHAT_MODEL || ollamaConf.chatModel || 'llama3.2:3b',
+      codeModel: process.env.OLLAMA_CODE_MODEL || ollamaConf.codeModel || 'qwen2.5-coder:3b',
+      temperature: config.llm.temperature,
+      maxTokens: config.llm.chatMaxTokens,
+      timeoutMs: ollamaConf.timeoutMs ?? 30000,
+    }));
+    logger.info({ provider: 'ollama', baseUrl: process.env.OLLAMA_BASE_URL }, 'Ollama client initialized');
   }
 
   if (clients.size === 0) {

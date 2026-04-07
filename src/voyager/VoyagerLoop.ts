@@ -29,6 +29,7 @@ import { SkillAttribution } from './SkillAttribution';
 import { TradeNegotiator } from './TradeNegotiator';
 import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
 import { DependencyResolver, FlatStep } from './DependencyResolver';
+import { SharedWorldModel } from './SharedWorldModel';
 
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
@@ -74,6 +75,8 @@ export class VoyagerLoop {
   private tradeNegotiator: TradeNegotiator | null = null;
   private reputationNotify: ((event: any) => void) | null = null;
   private dependencyResolver: DependencyResolver | null = null;
+  private sharedWorldModel: SharedWorldModel | null = null;
+  private lastSharedWorldUpdateAt = 0;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -224,6 +227,10 @@ export class VoyagerLoop {
 
   setBlackboardManager(manager: BlackboardManager): void {
     this.blackboardManager = manager;
+  }
+
+  setSharedWorldModel(model: SharedWorldModel): void {
+    this.sharedWorldModel = model;
   }
 
   getBlackboardManager(): BlackboardManager | null {
@@ -409,6 +416,48 @@ export class VoyagerLoop {
           `Threat level ${threatAssessment.overallThreatLevel}: ${threatAssessment.threats[0]?.description || 'unknown'}`,
           threatAssessment.suggestedAction, { level: threatAssessment.overallThreatLevel, threats: threatAssessment.threats.length });
       }
+    }
+
+    // Feed observations into the cross-bot SharedWorldModel.
+    // Throttled to once per 5 seconds per bot to keep IPC traffic reasonable.
+    if (this.sharedWorldModel && Date.now() - this.lastSharedWorldUpdateAt > 5000) {
+      this.lastSharedWorldUpdateAt = Date.now();
+      try {
+        const pos = this.bot.entity?.position;
+        if (pos) {
+          this.sharedWorldModel.updateBotState({
+            name: this.botName,
+            position: { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) },
+            state: this.currentTask ? 'working' : 'idle',
+            currentTask: this.currentTask ?? undefined,
+            health: this.bot.health ?? 20,
+            food: this.bot.food ?? 20,
+            updatedAt: Date.now(),
+          });
+          this.sharedWorldModel.markChunkExplored(Math.floor(pos.x / 16), Math.floor(pos.z / 16));
+        }
+        if (typeof this.bot.time?.timeOfDay === 'number') {
+          this.sharedWorldModel.updateServerState(
+            this.bot.time.timeOfDay,
+            this.bot.isRaining ? 'rain' : 'clear',
+          );
+        }
+        // Forward high-priority threats so other bots can avoid the area
+        if (threatAssessment) {
+          for (const t of threatAssessment.threats) {
+            if (t.dangerLevel < 5 || !t.position) continue;
+            this.sharedWorldModel.reportThreat(this.botName, {
+              type: t.type,
+              source: t.source,
+              position: t.position,
+              dangerLevel: t.dangerLevel,
+              reportedBy: this.botName,
+              reportedAt: Date.now(),
+              expiresAt: Date.now() + 5 * 60 * 1000,
+            });
+          }
+        }
+      } catch { /* ignore feed errors */ }
     }
 
     // Proactive communication: announce discoveries and threats

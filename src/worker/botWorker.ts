@@ -8,6 +8,7 @@ import { LLMClientProxy } from './proxies/LLMClientProxy';
 import { BlackboardProxy } from './proxies/BlackboardProxy';
 import { AffinityProxy } from './proxies/AffinityProxy';
 import { ConversationProxy } from './proxies/ConversationProxy';
+import { SharedWorldProxy } from './proxies/SharedWorldProxy';
 import { logger } from '../util/logger';
 
 interface WorkerData {
@@ -32,6 +33,7 @@ const llmProxy = new LLMClientProxy(ipc);
 const blackboardProxy = new BlackboardProxy(ipc);
 const affinityProxy = new AffinityProxy(ipc);
 const conversationProxy = new ConversationProxy(ipc);
+const sharedWorldProxy = new SharedWorldProxy(ipc);
 
 const botMode = data.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
@@ -45,6 +47,7 @@ const instance = new BotInstance({
   affinityManager: affinityProxy as any,
   conversationManager: conversationProxy as any,
   blackboardManager: blackboardProxy as any,
+  sharedWorldModel: sharedWorldProxy as any,
   onSwarmDirective: (description, requestedBy) => {
     ipc.notify('swarm.directive', { description, requestedBy });
   },

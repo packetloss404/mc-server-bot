@@ -1,3 +1,14 @@
+// TODO: NOT YET WIRED. The class is instantiated by BotManager and exposed via
+// GET /api/players/:name/intent, but no producer feeds it player actions, so
+// predictIntent() always returns 'unknown'. To wire it up:
+//   1. In src/server/socketEvents.ts (or wherever player chat/move events land),
+//      call botManager.getPlayerIntentModel().recordAction(playerName, action)
+//      on each block_placed / block_broken / item_crafted / chat / death event.
+//   2. In src/voyager/GoalGenerator.ts, read predictIntent(playerName) for any
+//      nearby player and bias goal selection toward suggestedTask when the
+//      prediction confidence is high.
+//   3. Once those producers exist, delete this comment block.
+
 import { logger } from '../util/logger';
 
 export type PlayerIntent =

@@ -27,6 +27,7 @@ import { StatsTracker } from '../voyager/StatsTracker';
 import { renderObservation } from '../voyager/Observation';
 import { PERSONALITIES } from '../personality/PersonalityType';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import { SharedWorldModel } from '../voyager/SharedWorldModel';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
 
@@ -40,6 +41,7 @@ export interface BotOptions {
   affinityManager: AffinityManager;
   conversationManager: ConversationManager;
   blackboardManager: BlackboardManager;
+  sharedWorldModel?: SharedWorldModel;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
 }
@@ -65,6 +67,7 @@ export class BotInstance {
   private affinityManager: AffinityManager;
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
+  private sharedWorldModel: SharedWorldModel | null;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private onReputationEvent?: (event: any) => void;
   private chatCooldowns: Map<string, number> = new Map();
@@ -93,6 +96,7 @@ export class BotInstance {
     this.affinityManager = options.affinityManager;
     this.conversationManager = options.conversationManager;
     this.blackboardManager = options.blackboardManager;
+    this.sharedWorldModel = options.sharedWorldModel ?? null;
     this.onSwarmDirective = options.onSwarmDirective;
     this.onReputationEvent = options.onReputationEvent;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
@@ -816,6 +820,9 @@ export class BotInstance {
       this.llmClient
     );
     this.voyagerLoop.setBlackboardManager(this.blackboardManager);
+    if (this.sharedWorldModel) {
+      this.voyagerLoop.setSharedWorldModel(this.sharedWorldModel);
+    }
     this.voyagerLoop.setSocialMemory(this.socialMemory);
     this.voyagerLoop.setBotComms(this.botComms);
 

@@ -285,11 +285,6 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json(botManager.getSharedWorldModel().getSnapshot());
   });
 
-  // Resource economy / market values
-  app.get('/api/economy', (_req: Request, res: Response) => {
-    res.json({ values: botManager.getResourceValuation().getAllValues() });
-  });
-
   // Bot reputation scores
   app.get('/api/reputation', (_req: Request, res: Response) => {
     res.json({ scores: botManager.getBotReputation().getAllReputations() });
@@ -308,16 +303,6 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Difficulty state
   app.get('/api/difficulty', (_req: Request, res: Response) => {
     res.json(botManager.getDifficultyBalancer().calculateDifficulty());
-  });
-
-  // Settlement plans
-  app.get('/api/settlement', (_req: Request, res: Response) => {
-    res.json({ plans: (botManager.getSettlementPlanner() as any).plans ?? [] });
-  });
-
-  // Governance state
-  app.get('/api/governance', (_req: Request, res: Response) => {
-    res.json(botManager.getGovernanceSimulation().getGovernanceState());
   });
 
   // Swarm coordination plans

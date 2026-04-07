@@ -5,6 +5,7 @@ import { LLMClient } from '../ai/LLMClient';
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
+import { SharedWorldModel } from '../voyager/SharedWorldModel';
 import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
 import { logger } from '../util/logger';
 
@@ -43,6 +44,7 @@ export class WorkerHandle {
   private affinityManager: AffinityManager;
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
+  private sharedWorldModel: SharedWorldModel;
   private onSwarmDirective: (description: string, requestedBy: string) => void;
 
   constructor(
@@ -51,6 +53,7 @@ export class WorkerHandle {
     affinityManager: AffinityManager,
     conversationManager: ConversationManager,
     blackboardManager: BlackboardManager,
+    sharedWorldModel: SharedWorldModel,
     onSwarmDirective: (description: string, requestedBy: string) => void,
   ) {
     this.botName = data.botName;
@@ -61,6 +64,7 @@ export class WorkerHandle {
     this.affinityManager = affinityManager;
     this.conversationManager = conversationManager;
     this.blackboardManager = blackboardManager;
+    this.sharedWorldModel = sharedWorldModel;
     this.onSwarmDirective = onSwarmDirective;
 
     // Provide a basic cached status while worker boots
@@ -204,6 +208,13 @@ export class WorkerHandle {
     if (type === 'conversation.addPlayerMessage') { this.conversationManager.addPlayerMessage(data[0], data[1], data[2]); return; }
     if (type === 'conversation.addBotResponse') { this.conversationManager.addBotResponse(data[0], data[1], data[2]); return; }
     if (type === 'conversation.clearBot') { this.conversationManager.clearBot(data[0]); return; }
+
+    // Fire-and-forget SharedWorldModel updates
+    if (type === 'sharedWorld.reportResource') { this.sharedWorldModel.reportResource(data[0], data[1]); return; }
+    if (type === 'sharedWorld.reportThreat') { this.sharedWorldModel.reportThreat(data[0], data[1]); return; }
+    if (type === 'sharedWorld.updateBotState') { this.sharedWorldModel.updateBotState(data[0]); return; }
+    if (type === 'sharedWorld.markChunkExplored') { this.sharedWorldModel.markChunkExplored(data[0], data[1]); return; }
+    if (type === 'sharedWorld.updateServerState') { this.sharedWorldModel.updateServerState(data[0], data[1]); return; }
   }
 
   private setupWorkerEvents(): void {

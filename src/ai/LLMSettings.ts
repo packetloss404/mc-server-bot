@@ -5,6 +5,7 @@ import type { LLMClient } from './LLMClient';
 import type { RouteConfig, TaskType } from './TaskType';
 import { GeminiClient } from './GeminiClient';
 import { AnthropicClient } from './AnthropicClient';
+import { OllamaClient } from './OllamaClient';
 import { ModelRouter } from './ModelRouter';
 import type { TokenLedger } from './TokenLedger';
 
@@ -105,7 +106,9 @@ export class LLMSettings {
     const clients = new Map<string, LLMClient>();
 
     for (const p of this.settings.providers) {
-      if (!p.enabled || !p.apiKey) continue;
+      if (!p.enabled) continue;
+      // Ollama is local-only and does not require an API key
+      if (p.name !== 'ollama' && !p.apiKey) continue;
 
       try {
         if (p.name === 'gemini') {
@@ -123,6 +126,15 @@ export class LLMSettings {
             temperature: 0.7,
             maxTokens: 2048,
             maxConcurrentRequests: p.maxConcurrentRequests || 3,
+          }));
+        } else if (p.name === 'ollama') {
+          clients.set('ollama', new OllamaClient({
+            baseUrl: process.env.OLLAMA_BASE_URL || 'http://localhost:11434',
+            chatModel: p.model || 'llama3.2:3b',
+            codeModel: process.env.OLLAMA_CODE_MODEL || 'qwen2.5-coder:3b',
+            temperature: 0.7,
+            maxTokens: 2048,
+            timeoutMs: 30000,
           }));
         }
         logger.info({ provider: p.name, model: p.model }, 'Provider client rebuilt');
@@ -168,6 +180,17 @@ export class LLMSettings {
         apiKey: anthropicKey,
         model: 'claude-sonnet-4-20250514',
         maxConcurrentRequests: 3,
+        enabled: true,
+      });
+    }
+
+    // Ollama: enabled when OLLAMA_BASE_URL is set (no API key needed for local).
+    if (process.env.OLLAMA_BASE_URL) {
+      this.settings.providers.push({
+        name: 'ollama',
+        apiKey: '',
+        model: process.env.OLLAMA_CHAT_MODEL || 'llama3.2:3b',
+        maxConcurrentRequests: 1,
         enabled: true,
       });
     }

@@ -14,12 +14,9 @@ import { BotComms } from '../social/BotComms';
 import { BlackboardManager } from '../voyager/BlackboardManager';
 import { WorkerHandle } from '../worker/WorkerHandle';
 import { SharedWorldModel } from '../voyager/SharedWorldModel';
-import { ResourceValuation } from '../voyager/ResourceValuation';
 import { SwarmCoordinator } from '../voyager/SwarmCoordinator';
 import { DungeonMaster } from '../voyager/DungeonMaster';
 import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
-import { SettlementPlanner } from '../voyager/SettlementPlanner';
-import { GovernanceSimulation } from '../voyager/GovernanceSimulation';
 import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { BotReputation } from '../voyager/BotReputation';
 
@@ -41,15 +38,13 @@ export class BotManager {
   private botComms: BotComms;
   private blackboardManager: BlackboardManager;
   private sharedWorldModel: SharedWorldModel;
-  private resourceValuation: ResourceValuation;
   private swarmCoordinator: SwarmCoordinator;
   private dungeonMaster: DungeonMaster;
   private difficultyBalancer: DifficultyBalancer;
-  private settlementPlanner: SettlementPlanner;
-  private governanceSimulation: GovernanceSimulation;
   private playerIntentModel: PlayerIntentModel;
   private botReputation: BotReputation;
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private dungeonMasterInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -63,14 +58,59 @@ export class BotManager {
     this.botComms = new BotComms();
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
     this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data'));
-    this.resourceValuation = new ResourceValuation();
     this.swarmCoordinator = new SwarmCoordinator(this.blackboardManager);
     this.dungeonMaster = new DungeonMaster();
     this.difficultyBalancer = new DifficultyBalancer();
-    this.settlementPlanner = new SettlementPlanner();
-    this.governanceSimulation = new GovernanceSimulation('Elder');
     this.playerIntentModel = new PlayerIntentModel();
     this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
+
+    // DungeonMaster: tick every 90s, evaluate world state, fan out tasks for new events.
+    this.dungeonMasterInterval = setInterval(() => this.tickDungeonMaster(), 90_000);
+  }
+
+  /**
+   * Build a world snapshot and ask DungeonMaster if a new event should fire.
+   * If one does, queue its tasks on each connected worker.
+   */
+  private tickDungeonMaster(): void {
+    if (this.workers.size === 0) return;
+    try {
+      const sharedState = this.sharedWorldModel.getSnapshot();
+      const bots = [...this.workers.values()];
+      const totalHealth = bots.reduce((sum, w) => sum + ((w.lastStatus?.health as number) ?? 20), 0);
+      const snapshot = {
+        botCount: bots.length,
+        playerCount: 0,
+        serverTimeOfDay: sharedState.serverTime,
+        weather: sharedState.weather,
+        totalResources: sharedState.resources.reduce<Record<string, number>>((acc, r) => {
+          acc[r.name] = (acc[r.name] ?? 0) + 1;
+          return acc;
+        }, {}),
+        recentCompletedTasks: 0,
+        exploredChunkCount: sharedState.exploredChunks.size,
+        activeThreatCount: sharedState.threats.length,
+        averageBotHealth: bots.length > 0 ? totalHealth / bots.length : 20,
+      };
+
+      const event = this.dungeonMaster.evaluateAndGenerate(snapshot);
+      if (!event) return;
+
+      logger.info({ eventId: event.id, type: event.type, title: event.title }, 'DungeonMaster fanning event tasks to workers');
+      // Queue the highest-priority task on each worker. Bots can pick it up via the
+      // normal player-task path; lower-priority tasks fall out as the event ages.
+      const task = event.tasks[0];
+      if (!task) return;
+      for (const worker of bots) {
+        try {
+          worker.sendCommand('queueTask', { description: task.description, source: 'dungeon_master' });
+        } catch (err: any) {
+          logger.warn({ bot: worker.botName, err: err.message }, 'Failed to queue DungeonMaster task');
+        }
+      }
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'DungeonMaster tick failed');
+    }
   }
 
   async spawnBot(
@@ -106,6 +146,7 @@ export class BotManager {
       this.affinityManager,
       this.conversationManager,
       this.blackboardManager,
+      this.sharedWorldModel,
       (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
     );
 
@@ -153,6 +194,10 @@ export class BotManager {
 
   /** Flush all pending debounced writes across every data manager. */
   shutdownPersistence(): void {
+    if (this.dungeonMasterInterval) {
+      clearInterval(this.dungeonMasterInterval);
+      this.dungeonMasterInterval = null;
+    }
     this.affinityManager.shutdown();
     this.socialMemory.shutdown();
     this.blackboardManager.shutdown();
@@ -209,12 +254,9 @@ export class BotManager {
   }
 
   getSharedWorldModel(): SharedWorldModel { return this.sharedWorldModel; }
-  getResourceValuation(): ResourceValuation { return this.resourceValuation; }
   getSwarmCoordinator(): SwarmCoordinator { return this.swarmCoordinator; }
   getDungeonMaster(): DungeonMaster { return this.dungeonMaster; }
   getDifficultyBalancer(): DifficultyBalancer { return this.difficultyBalancer; }
-  getSettlementPlanner(): SettlementPlanner { return this.settlementPlanner; }
-  getGovernanceSimulation(): GovernanceSimulation { return this.governanceSimulation; }
   getPlayerIntentModel(): PlayerIntentModel { return this.playerIntentModel; }
   getBotReputation(): BotReputation { return this.botReputation; }
 
@@ -224,9 +266,36 @@ export class BotManager {
       handle.sendCommand('swarmDirective', { description, requestedBy });
     }
 
-    // Queue the directive as a player task on each worker so they actually work on it
-    for (const handle of this.workers.values()) {
-      handle.sendCommand('queueTask', { description, source: requestedBy });
+    // Build bot capabilities snapshot for SwarmCoordinator's role-aware assignment.
+    const capabilities = [...this.workers.values()].map((w) => {
+      const status: any = w.lastStatus ?? {};
+      return {
+        name: w.botName,
+        personality: w.personality,
+        position: status.position ?? { x: 0, y: 64, z: 0 },
+        inventory: (status.inventory as Record<string, number>) ?? {},
+        idle: !status.currentTask,
+        skills: [] as string[],
+      };
+    });
+
+    // Decompose into subtasks and let SwarmCoordinator post them to the blackboard.
+    // Workers will pick them up via their normal blackboardManager.claimBestTask() flow.
+    let decomposed = false;
+    try {
+      const plan = this.swarmCoordinator.decomposeGoal(description, capabilities);
+      decomposed = plan.tasks.length > 0;
+      logger.info({ planId: plan.id, taskCount: plan.tasks.length, requestedBy }, 'Swarm directive decomposed into plan');
+    } catch (err: any) {
+      logger.warn({ err: err.message, description }, 'SwarmCoordinator decompose failed, falling back to direct broadcast');
+    }
+
+    // Fallback (or supplement when decomposition produces no tasks): queue the raw
+    // directive on each worker so they at least try the literal request.
+    if (!decomposed) {
+      for (const handle of this.workers.values()) {
+        handle.sendCommand('queueTask', { description, source: requestedBy });
+      }
     }
   }
 

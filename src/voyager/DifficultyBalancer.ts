@@ -1,3 +1,16 @@
+// TODO: NOT YET WIRED. The class is instantiated by BotManager and exposed via
+// GET /api/difficulty, but no producer feeds it player join/death events, so
+// calculateDifficulty() always returns the default tier with empty profiles.
+// To wire it up:
+//   1. In src/server/api.ts player-join/player-leave handlers, call
+//      botManager.getDifficultyBalancer().recordPlayerJoin(name) /
+//      .recordPlayerDeath(name) so player profiles accumulate.
+//   2. In src/voyager/VoyagerLoop.ts (or BotInstance), read
+//      getBehaviorModifiers(personality) once per cycle and apply them to
+//      task selection (taskCooldownMultiplier), chat (chatProbability), and
+//      combat (combatAggressiveness).
+//   3. Once those producers + readers exist, delete this comment block.
+
 import { logger } from '../util/logger';
 
 export type DifficultyTier = 'peaceful' | 'easy' | 'normal' | 'hard' | 'challenge';

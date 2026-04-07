@@ -1300,27 +1300,35 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // ── Commands ──
+  // Flatten the structured command.error into a string for client safety —
+  // the dashboard renders cmd.error directly as a React child.
+  const flattenCmd = (c: any) => c && ({
+    ...c,
+    error: c.error
+      ? `${c.error.code ?? 'error'}: ${c.error.message ?? ''}`
+      : undefined,
+  });
   app.get('/api/commands', (req, res) => {
     const filters = req.query.status ? { status: String(req.query.status) as any } : undefined;
-    res.json({ commands: commandCenter.getCommands(filters) });
+    res.json({ commands: commandCenter.getCommands(filters).map(flattenCmd) });
   });
   app.post('/api/commands', async (req, res) => {
     try {
       const cmd = commandCenter.createCommand(req.body);
       await commandCenter.dispatchCommand(cmd, req.body.force === true);
-      res.status(201).json({ command: cmd });
+      res.status(201).json({ command: flattenCmd(cmd) });
     } catch (e: any) { res.status(400).json({ error: e.message }); }
   });
   app.get('/api/commands/:id', (req, res) => {
     const c = commandCenter.getCommand(req.params.id as string);
     if (!c) return res.status(404).json({ error: 'Command not found' });
-    res.json({ command: c });
+    res.json({ command: flattenCmd(c) });
   });
   app.post('/api/commands/:id/cancel', (req, res) => {
     const { reason } = req.body ?? {};
     const c = commandCenter.cancelCommand(req.params.id as string, reason);
     if (!c) return res.status(404).json({ error: 'Command not found' });
-    res.json({ command: c });
+    res.json({ command: flattenCmd(c) });
   });
 
   // ── Bot control shortcuts (dispatched through CommandCenter) ──
@@ -1340,7 +1348,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     app.post(routePath, async (req, res) => {
       try {
         const cmd = await botControlAction(req.params.name as string, type, req.body ?? {});
-        res.json({ success: true, command: cmd });
+        res.json({ success: true, command: flattenCmd(cmd) });
       } catch (e: any) { res.status(500).json({ error: e.message }); }
     });
   };

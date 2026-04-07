@@ -634,7 +634,11 @@ export class CommandCenter {
       type: command.type,
       status: command.status,
       targets: command.targets,
-      error: command.error,
+      // Flatten structured errors to a single readable string so the
+      // dashboard can render {cmd.error} without type/ReactChild drama.
+      error: command.error
+        ? `${command.error.code ?? 'error'}: ${command.error.message ?? ''}`
+        : undefined,
       result: command.result,
       createdAt: command.createdAt,
       startedAt: command.startedAt,

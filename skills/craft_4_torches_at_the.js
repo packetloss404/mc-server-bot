@@ -1,9 +1,4 @@
 async function craftFourTorchesAtCraftingTable(bot) {
-  const tablePos = {
-    x: 947,
-    y: 71,
-    z: 363
-  };
   let coal = bot.inventory.items().find(i => i.name === 'coal' || i.name === 'charcoal');
   if (!coal) {
     const coalOre = bot.findBlock({
@@ -41,16 +36,21 @@ async function craftFourTorchesAtCraftingTable(bot) {
     await craftItem('stick', 1);
     sticks = bot.inventory.items().find(i => i.name === 'stick');
   }
-  await moveTo(tablePos.x, tablePos.y, tablePos.z, 3);
-  const tableBlock = bot.findBlock({
+  let tableBlock = bot.findBlock({
     matching: b => b.name === 'crafting_table',
     maxDistance: 32
   });
   if (!tableBlock) {
-    const existingTable = bot.inventory.items().find(i => i.name === 'crafting_table');
-    if (existingTable) {
-      await placeItem('crafting_table', tablePos.x, tablePos.y, tablePos.z);
+    let existingTable = bot.inventory.items().find(i => i.name === 'crafting_table');
+    if (!existingTable) {
+      await craftItem('crafting_table', 1);
     }
+    const pos = bot.entity.position;
+    await placeItem('crafting_table', Math.floor(pos.x) + 1, Math.floor(pos.y), Math.floor(pos.z));
+    tableBlock = bot.findBlock({ matching: b => b.name === 'crafting_table', maxDistance: 8 });
+  }
+  if (tableBlock) {
+    await moveTo(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 30);
   }
   await craftItem('torch', 1);
 }

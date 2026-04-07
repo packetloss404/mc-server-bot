@@ -1,7 +1,4 @@
 async function placeFurnaceAtTarget(bot) {
-  const tx = 1027;
-  const ty = 65;
-  const tz = 410;
   let furnace = bot.inventory.items().find(i => i.name === 'furnace');
   if (!furnace) {
     const cobble = bot.inventory.items().find(i => i.name === 'cobblestone');
@@ -10,14 +7,10 @@ async function placeFurnaceAtTarget(bot) {
     }
     await craftItem('furnace', 1);
   }
-  await moveTo(tx, ty, tz, 3, 10);
-  const targetPos = bot.entity.position.clone();
-  targetPos.x = tx;
-  targetPos.y = ty;
-  targetPos.z = tz;
-  const block = bot.blockAt(targetPos);
-  if (block && block.name !== 'air' && block.name !== 'furnace') {
-    await mineBlock(block.name, 1);
-  }
+  // Place the furnace immediately in front of the bot, on the ground.
+  const pos = bot.entity.position;
+  const tx = Math.floor(pos.x) + 1;
+  const ty = Math.floor(pos.y);
+  const tz = Math.floor(pos.z);
   await placeItem('furnace', tx, ty, tz);
 }

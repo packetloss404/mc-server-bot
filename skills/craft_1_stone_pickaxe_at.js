@@ -1,21 +1,15 @@
 async function craftStonePickaxe(bot) {
-  const tablePos = {
-    x: 947,
-    y: 71,
-    z: 363
-  };
-  const chestPos = {
-    x: 949,
-    y: 69,
-    z: 362
-  };
   let cobblestone = bot.inventory.items().find(i => i.name === 'cobblestone');
   let cobblestoneCount = cobblestone ? cobblestone.count : 0;
   if (cobblestoneCount < 3) {
-    await moveTo(chestPos.x, chestPos.y, chestPos.z, 2);
-    await withdrawItem('chest', 'cobblestone', 3 - cobblestoneCount);
-    cobblestone = bot.inventory.items().find(i => i.name === 'cobblestone');
-    cobblestoneCount = cobblestone ? cobblestone.count : 0;
+    // Try to withdraw from a nearby chest first
+    const chestBlock = bot.findBlock({ matching: b => b.name === 'chest', maxDistance: 32 });
+    if (chestBlock) {
+      await moveTo(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2, 30);
+      try { await withdrawItem('chest', 'cobblestone', 3 - cobblestoneCount); } catch { /* chest may be empty */ }
+      cobblestone = bot.inventory.items().find(i => i.name === 'cobblestone');
+      cobblestoneCount = cobblestone ? cobblestone.count : 0;
+    }
   }
   if (cobblestoneCount < 3) {
     await mineBlock('stone', 3 - cobblestoneCount);
@@ -32,6 +26,18 @@ async function craftStonePickaxe(bot) {
     }
     await craftItem('stick', 1);
   }
-  await moveTo(tablePos.x, tablePos.y, tablePos.z, 2);
+  let tableBlock = bot.findBlock({ matching: b => b.name === 'crafting_table', maxDistance: 32 });
+  if (!tableBlock) {
+    let table = bot.inventory.items().find(i => i.name === 'crafting_table');
+    if (!table) {
+      await craftItem('crafting_table', 1);
+    }
+    const pos = bot.entity.position;
+    await placeItem('crafting_table', Math.floor(pos.x) + 1, Math.floor(pos.y), Math.floor(pos.z));
+    tableBlock = bot.findBlock({ matching: b => b.name === 'crafting_table', maxDistance: 8 });
+  }
+  if (tableBlock) {
+    await moveTo(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 2, 30);
+  }
   await craftItem('stone_pickaxe', 1);
 }

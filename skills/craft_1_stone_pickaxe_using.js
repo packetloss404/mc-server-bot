@@ -1,32 +1,20 @@
 async function craftStonePickaxe(bot) {
-  const craftingTablePos = {
-    x: 974,
-    y: 75,
-    z: 375
-  };
-
-  // 1. Ensure we have a crafting table placed or in inventory
+  // Find or place a crafting table near the bot's current position
   let tableBlock = bot.findBlock({
     matching: block => block.name === 'crafting_table',
     maxDistance: 32
   });
   if (!tableBlock) {
     const hasTableInInventory = bot.inventory.items().find(i => i.name === 'crafting_table');
-    if (hasTableInInventory) {
-      // Place it at the known workstation position or nearby
-      await moveTo(craftingTablePos.x, craftingTablePos.y, craftingTablePos.z, 1, 60);
-      await placeItem('crafting_table', craftingTablePos.x, craftingTablePos.y, craftingTablePos.z);
-      tableBlock = bot.blockAt(bot.entity.position.set(craftingTablePos.x, craftingTablePos.y, craftingTablePos.z));
-    } else {
-      // If no table, we'd need to craft one, but the prompt says we have materials
+    if (!hasTableInInventory) {
       await craftItem('crafting_table', 1);
-      const currentPos = bot.entity.position;
-      await placeItem('crafting_table', Math.floor(currentPos.x) + 1, Math.floor(currentPos.y), Math.floor(currentPos.z));
-      tableBlock = bot.findBlock({
-        matching: block => block.name === 'crafting_table',
-        maxDistance: 32
-      });
     }
+    const currentPos = bot.entity.position;
+    await placeItem('crafting_table', Math.floor(currentPos.x) + 1, Math.floor(currentPos.y), Math.floor(currentPos.z));
+    tableBlock = bot.findBlock({
+      matching: block => block.name === 'crafting_table',
+      maxDistance: 8
+    });
   }
 
   // 2. Move to the crafting table

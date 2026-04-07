@@ -1,10 +1,7 @@
 async function collectItemsFromChest(bot) {
-  const chestPos = {
-    x: 855,
-    y: 64,
-    z: 259
-  };
-  await moveTo(chestPos.x, chestPos.y, chestPos.z, 2, 60);
-  await withdrawItem('chest', 'wooden_pickaxe', 1);
-  await withdrawItem('chest', 'oak_door', 2);
+  const chestBlock = bot.findBlock({ matching: b => b.name === 'chest', maxDistance: 64 });
+  if (!chestBlock) return;
+  await moveTo(chestBlock.position.x, chestBlock.position.y, chestBlock.position.z, 2, 60);
+  try { await withdrawItem('chest', 'wooden_pickaxe', 1); } catch { /* may not contain item */ }
+  try { await withdrawItem('chest', 'oak_door', 2); } catch { /* may not contain item */ }
 }

@@ -1,10 +1,4 @@
 async function mineEightSandNearWater(bot) {
-  const waterPos = {
-    x: 1026,
-    y: 62,
-    z: 408
-  };
-  await moveTo(waterPos.x, waterPos.y, waterPos.z, 10, 60);
   const findSand = () => bot.findBlock({
     matching: b => b.name === 'sand',
     maxDistance: 32

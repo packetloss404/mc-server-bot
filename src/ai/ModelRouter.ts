@@ -9,6 +9,17 @@ const RETRYABLE_CODES = new Set([429, 500, 502, 503, 504]);
 interface ModelRouterConfig {
   defaultProvider: string;
   routes?: Record<string, RouteConfig>;
+  /** Returns false to refuse all LLM calls (global kill switch). */
+  isEnabled?: () => boolean;
+}
+
+/** Error type thrown when the AI kill switch is off. Callers should detect and skip. */
+export class AIDisabledError extends Error {
+  code = 'AI_DISABLED';
+  constructor() {
+    super('AI is disabled (kill switch)');
+    this.name = 'AIDisabledError';
+  }
 }
 
 /**
@@ -20,11 +31,13 @@ export class ModelRouter implements LLMClient {
   private routes: Map<TaskType, RouteConfig>;
   private defaultProvider: string;
   private ledger: TokenLedger;
+  private isEnabledFn: () => boolean;
 
   constructor(clients: Map<string, LLMClient>, config: ModelRouterConfig, ledger: TokenLedger) {
     this.clients = clients;
     this.defaultProvider = config.defaultProvider;
     this.ledger = ledger;
+    this.isEnabledFn = config.isEnabled ?? (() => true);
 
     this.routes = new Map();
     if (config.routes) {
@@ -77,6 +90,7 @@ export class ModelRouter implements LLMClient {
   }
 
   async embed(texts: string[]): Promise<number[][]> {
+    if (!this.isEnabledFn()) throw new AIDisabledError();
     // Find first provider with embed capability
     for (const [name, client] of this.clients) {
       if (client.embed) {
@@ -109,6 +123,7 @@ export class ModelRouter implements LLMClient {
     callFn: (client: LLMClient, maxTokens?: number) => Promise<LLMResponse>,
     maxTokens?: number,
   ): Promise<LLMResponse> {
+    if (!this.isEnabledFn()) throw new AIDisabledError();
     const taskType = options?.taskType ?? 'chat';
     const botName = options?.botName ?? '';
     const route = this.routes.get(taskType as TaskType);

@@ -47,6 +47,8 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [aiEnabled, setAiEnabled] = useState<boolean>(true);
+  const [togglingAi, setTogglingAi] = useState(false);
 
   // New provider form
   const [newProvider, setNewProvider] = useState({ name: 'gemini', apiKey: '', model: '', maxConcurrent: 3 });
@@ -56,19 +58,48 @@ export default function SettingsPage() {
 
   const fetchSettings = useCallback(async () => {
     try {
-      const [settingsRes, usageRes] = await Promise.all([
-        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/llm/providers`).then((r) => r.json()),
-        fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/llm/usage`).then((r) => r.json()),
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const [settingsRes, usageRes, enabledRes] = await Promise.all([
+        fetch(`${base}/api/llm/providers`).then((r) => r.json()),
+        fetch(`${base}/api/llm/usage`).then((r) => r.json()),
+        fetch(`${base}/api/llm/enabled`).then((r) => r.json()).catch(() => ({ enabled: true })),
       ]);
       setSettings(settingsRes);
       setUsage(usageRes.usage);
       setEditRoutes(settingsRes.routes || {});
+      setAiEnabled(enabledRes.enabled !== false);
     } catch {
       showFeedback('error', 'Failed to load settings');
     } finally {
       setLoading(false);
     }
   }, []);
+
+  const toggleAi = async () => {
+    setTogglingAi(true);
+    const newValue = !aiEnabled;
+    try {
+      const res = await fetch(
+        `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/llm/enabled`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled: newValue }),
+        },
+      );
+      const data = await res.json();
+      if (data.success) {
+        setAiEnabled(data.enabled);
+        showFeedback('success', newValue ? 'AI enabled — bots will resume' : 'AI disabled — all bots paused, no LLM spend');
+      } else {
+        showFeedback('error', data.error || 'Failed to toggle AI');
+      }
+    } catch {
+      showFeedback('error', 'Failed to toggle AI');
+    } finally {
+      setTogglingAi(false);
+    }
+  };
 
   useEffect(() => { fetchSettings(); }, [fetchSettings]);
 
@@ -193,6 +224,53 @@ export default function SettingsPage() {
             {feedback.message}
           </motion.div>
         )}
+
+        {/* ── AI Kill Switch ── */}
+        <section
+          className={`rounded-lg border p-5 ${
+            aiEnabled
+              ? 'bg-zinc-900 border-zinc-800'
+              : 'bg-red-950/40 border-red-800'
+          }`}
+        >
+          <div className="flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold flex items-center gap-2">
+                AI Enabled
+                <span
+                  className={`text-xs px-2 py-0.5 rounded ${
+                    aiEnabled
+                      ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
+                      : 'bg-red-900/60 text-red-200 border border-red-700'
+                  }`}
+                >
+                  {aiEnabled ? 'ONLINE' : 'KILL SWITCH ACTIVE'}
+                </span>
+              </h2>
+              <p className="text-zinc-400 text-sm mt-1">
+                {aiEnabled
+                  ? 'All bots are using the LLM. Toggle off to pause voyager loops and stop all LLM spend without disconnecting bots.'
+                  : 'LLM calls are blocked. All voyager loops paused. Bots stay connected but idle. No API spend.'}
+              </p>
+            </div>
+            <button
+              onClick={toggleAi}
+              disabled={togglingAi}
+              className={`relative inline-flex h-9 w-16 items-center rounded-full border-2 transition-colors ${
+                aiEnabled
+                  ? 'bg-emerald-600 border-emerald-500'
+                  : 'bg-zinc-700 border-zinc-600'
+              } disabled:opacity-50`}
+              aria-label="Toggle AI enabled"
+            >
+              <span
+                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                  aiEnabled ? 'translate-x-8' : 'translate-x-1'
+                }`}
+              />
+            </button>
+          </div>
+        </section>
 
         {/* ── Providers ── */}
         <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">

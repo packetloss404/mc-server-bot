@@ -95,4 +95,32 @@ export function registerLLMRoutes(
   app.get('/api/llm/usage', (_req: Request, res: Response) => {
     res.json({ usage: tokenLedger.getMetrics() });
   });
+
+  // ── Global AI kill switch ──
+  app.get('/api/llm/enabled', (_req: Request, res: Response) => {
+    res.json({ enabled: llmSettings.isAiEnabled() });
+  });
+
+  app.post('/api/llm/enabled', (req: Request, res: Response) => {
+    const { enabled } = req.body;
+    if (typeof enabled !== 'boolean') {
+      res.status(400).json({ error: 'enabled (boolean) is required' });
+      return;
+    }
+    llmSettings.setAiEnabled(enabled);
+
+    // Broadcast to every worker so each voyager loop pauses/resumes immediately
+    // instead of waiting for its next LLM call to notice.
+    for (const handle of botManager.getAllWorkers()) {
+      try {
+        if (enabled) handle.resumeVoyager();
+        else handle.pauseVoyager('ai-disabled');
+      } catch (err: any) {
+        logger.warn({ bot: handle.botName, err: err.message }, 'Failed to broadcast AI toggle to worker');
+      }
+    }
+
+    logger.warn({ enabled }, 'AI kill switch broadcast to all workers');
+    res.json({ success: true, enabled });
+  });
 }

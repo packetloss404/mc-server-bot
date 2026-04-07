@@ -23,12 +23,15 @@ export interface LLMSettingsData {
   providers: ProviderConfig[];
   routes: Record<string, RouteConfig>;
   defaultProvider: string;
+  /** Global kill switch — when false, all LLM calls throw AI_DISABLED without spending. */
+  aiEnabled: boolean;
 }
 
 const DEFAULT_SETTINGS: LLMSettingsData = {
   providers: [],
   routes: {},
   defaultProvider: 'gemini',
+  aiEnabled: true,
 };
 
 /**
@@ -101,6 +104,17 @@ export class LLMSettings {
     this.save();
   }
 
+  /** Global AI kill switch. */
+  isAiEnabled(): boolean {
+    return this.settings.aiEnabled !== false;
+  }
+
+  setAiEnabled(enabled: boolean): void {
+    this.settings.aiEnabled = enabled;
+    this.save();
+    logger.warn({ aiEnabled: enabled }, 'AI kill switch toggled');
+  }
+
   /** Build a new ModelRouter from current settings. Returns null if no providers have keys. */
   buildRouter(): ModelRouter | null {
     const clients = new Map<string, LLMClient>();
@@ -148,6 +162,7 @@ export class LLMSettings {
     this.currentRouter = new ModelRouter(clients, {
       defaultProvider: this.settings.defaultProvider,
       routes: Object.keys(this.settings.routes).length > 0 ? this.settings.routes : undefined,
+      isEnabled: () => this.isAiEnabled(),
     }, this.ledger);
 
     return this.currentRouter;

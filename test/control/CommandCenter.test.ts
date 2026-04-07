@@ -327,13 +327,37 @@ describe('CommandCenter', () => {
 
   // ── Cleanup: removes old commands ──
 
-  it.todo('cleanup removes commands older than 24 hours — cleanup() not implemented; persist() auto-trims to 500');
+  it('cleanup removes commands older than 24 hours', () => {
+    const old = cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
+    const fresh = cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
+    (old as any).createdAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
 
-  it.todo('cleanup caps at 500 commands — cleanup() not implemented; persist() auto-trims to 500');
+    const removed = cc.cleanup();
+    expect(removed).toBe(1);
+    expect(cc.getCommand(old.id)).toBeUndefined();
+    expect(cc.getCommand(fresh.id)).toBeDefined();
+  });
+
+  it('cleanup caps at 500 commands', () => {
+    for (let i = 0; i < 600; i++) {
+      cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
+    }
+    cc.cleanup();
+    expect(cc.getCommands({ limit: 1000 }).length).toBe(500);
+  });
 
   // ── Shutdown: cancels active commands ──
 
-  it.todo('shutdown cancels all active commands — shutdown() not implemented; use destroy() to stop timers');
+  it('shutdown cancels all active commands', () => {
+    const cmd = cc.createCommand({ type: 'pause_voyager', targets: ['TestBot'] });
+    (cmd as any).status = 'started';
+    (cmd as any).startedAt = new Date().toISOString();
+
+    cc.shutdown();
+    expect(cmd.status).toBe('cancelled');
+    expect(cmd.error?.code).toBe('CANCELLED');
+    expect(cmd.error?.message).toBe('shutdown');
+  });
 
   // ── Persistence ──
 

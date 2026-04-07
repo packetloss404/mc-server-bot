@@ -565,4 +565,53 @@ export class MissionManager {
   flush(): void {
     this.saveImmediate();
   }
+
+  /**
+   * Remove old completed/failed missions and cap the total at 200.
+   * Returns the number of missions removed.
+   */
+  cleanup(): number {
+    const now = Date.now();
+    const ONE_DAY = 24 * 60 * 60 * 1000;
+    let removed = 0;
+
+    for (const [id, m] of this.missions) {
+      if ((m.status === 'completed' || m.status === 'failed') && now - m.updatedAt > ONE_DAY) {
+        this.missions.delete(id);
+        removed++;
+      }
+    }
+
+    if (this.missions.size > 200) {
+      const sorted = Array.from(this.missions.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+      const keep = new Set(sorted.slice(0, 200).map((m) => m.id));
+      for (const id of Array.from(this.missions.keys())) {
+        if (!keep.has(id)) {
+          this.missions.delete(id);
+          removed++;
+        }
+      }
+    }
+
+    this.saveImmediate();
+    return removed;
+  }
+
+  /**
+   * Cancel all running and queued missions and flush state to disk.
+   * Used during graceful shutdown.
+   */
+  shutdown(): void {
+    const ids = Array.from(this.missions.values())
+      .filter((m) => m.status === 'running' || m.status === 'queued')
+      .map((m) => m.id);
+    for (const id of ids) {
+      this.cancelMission(id);
+    }
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    this.saveImmediate();
+  }
 }

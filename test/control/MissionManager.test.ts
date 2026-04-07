@@ -391,13 +391,88 @@ describe('MissionManager', () => {
 
   // ── Cleanup ──────────────────────────────────────
 
-  it.todo('cleanup removes old completed/failed missions — cleanup() not yet implemented on MissionManager');
+  it('cleanup removes old completed/failed missions', () => {
+    const oldDone = mm.createMission({
+      type: 'gather_items',
+      title: 'Old done',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
+    const oldFailed = mm.createMission({
+      type: 'gather_items',
+      title: 'Old failed',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
+    const recentDone = mm.createMission({
+      type: 'gather_items',
+      title: 'Recent done',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
 
-  it.todo('cleanup caps at 200 missions — cleanup() not yet implemented on MissionManager');
+    const oldTime = Date.now() - 25 * 60 * 60 * 1000;
+    const r1 = mm.getMission(oldDone.id)!;
+    r1.status = 'completed';
+    r1.updatedAt = oldTime;
+    const r2 = mm.getMission(oldFailed.id)!;
+    r2.status = 'failed';
+    r2.updatedAt = oldTime;
+    const r3 = mm.getMission(recentDone.id)!;
+    r3.status = 'completed';
+    r3.updatedAt = Date.now();
+
+    const removed = mm.cleanup();
+    expect(removed).toBe(2);
+    expect(mm.getMission(oldDone.id)).toBeUndefined();
+    expect(mm.getMission(oldFailed.id)).toBeUndefined();
+    expect(mm.getMission(recentDone.id)).toBeDefined();
+  });
+
+  it('cleanup caps at 200 missions', () => {
+    for (let i = 0; i < 250; i++) {
+      mm.createMission({
+        type: 'gather_items',
+        title: `Task ${i}`,
+        assigneeType: 'bot',
+        assigneeIds: ['TestBot'],
+      });
+    }
+    mm.cleanup();
+    expect(mm.getMissions()).toHaveLength(200);
+  });
 
   // ── Shutdown ──────────────────────────────────────
 
-  it.todo('shutdown cancels all running and queued missions — shutdown() not yet implemented on MissionManager');
+  it('shutdown cancels all running and queued missions', () => {
+    const m1 = mm.createMission({
+      type: 'gather_items',
+      title: 'Running task',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
+    const m2 = mm.createMission({
+      type: 'gather_items',
+      title: 'Queued task',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
+    const m3 = mm.createMission({
+      type: 'gather_items',
+      title: 'Done task',
+      assigneeType: 'bot',
+      assigneeIds: ['TestBot'],
+    });
+
+    mm.updateMissionStatus(m1.id, 'running');
+    mm.updateMissionStatus(m3.id, 'completed');
+
+    mm.shutdown();
+
+    expect(mm.getMission(m1.id)!.status).toBe('cancelled');
+    expect(mm.getMission(m2.id)!.status).toBe('cancelled');
+    expect(mm.getMission(m3.id)!.status).toBe('completed');
+  });
 
   // ── Persistence ──────────────────────────────────
 

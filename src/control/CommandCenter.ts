@@ -317,6 +317,44 @@ export class CommandCenter {
     return command;
   }
 
+  cleanup(): number {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const [id, cmd] of this.commands) {
+      if (new Date(cmd.createdAt).getTime() < cutoff) {
+        this.commands.delete(id);
+        removed++;
+      }
+    }
+    if (this.commands.size > MAX_PERSISTED) {
+      const sorted = [...this.commands.values()].sort((a, b) =>
+        b.createdAt.localeCompare(a.createdAt),
+      );
+      const keep = new Set(sorted.slice(0, MAX_PERSISTED).map((c) => c.id));
+      for (const id of [...this.commands.keys()]) {
+        if (!keep.has(id)) {
+          this.commands.delete(id);
+          removed++;
+        }
+      }
+    }
+    this.persist();
+    return removed;
+  }
+
+  shutdown(): void {
+    for (const cmd of this.commands.values()) {
+      if (cmd.status === 'queued' || cmd.status === 'started') {
+        this.cancelCommand(cmd.id, 'shutdown');
+      }
+    }
+    if (this.timeoutTimer) {
+      clearInterval(this.timeoutTimer);
+      this.timeoutTimer = null;
+    }
+    this.flush();
+  }
+
   // -- Timeout handling --
 
   checkTimeouts(): void {

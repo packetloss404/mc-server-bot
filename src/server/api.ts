@@ -415,10 +415,24 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         return;
       }
       const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-      const skills = Object.keys(index).map((name) => {
-        const skillPath = path.join(process.cwd(), 'skills', `${name}.js`);
-        const code = fs.existsSync(skillPath) ? fs.readFileSync(skillPath, 'utf-8').slice(0, 2000) : null;
-        return { name, code };
+      // index.json is an array of skill metadata objects (name, description, file, ...)
+      const entries: any[] = Array.isArray(index) ? index : Object.values(index);
+      const skills = entries.map((entry: any) => {
+        const name: string = entry?.name ?? '';
+        const fileName: string = entry?.file ?? `${name}.js`;
+        const skillPath = path.join(process.cwd(), 'skills', fileName);
+        const code = fs.existsSync(skillPath)
+          ? fs.readFileSync(skillPath, 'utf-8').slice(0, 2000)
+          : null;
+        return {
+          name,
+          description: entry?.description ?? null,
+          keywords: entry?.keywords ?? [],
+          quality: entry?.quality ?? null,
+          successCount: entry?.successCount ?? 0,
+          failureCount: entry?.failureCount ?? 0,
+          code,
+        };
       });
       res.json({ skills, count: skills.length });
     } catch {

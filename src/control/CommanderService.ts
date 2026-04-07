@@ -894,7 +894,13 @@ export class CommanderService {
 
           const record = this.commandCenter.createCommand(createParams);
           const dispatched = await this.commandCenter.dispatchCommand(record);
-          result.commands.push(dispatched);
+          // Flatten the structured error so the history blob stays safe to
+          // render directly in the dashboard (avoids React error #31).
+          const flat: any = { ...dispatched };
+          if (flat.error && typeof flat.error === 'object') {
+            flat.error = `${flat.error.code ?? 'error'}: ${flat.error.message ?? ''}`;
+          }
+          result.commands.push(flat);
           logger.info(
             { planId, commandId: record.id, type: cmd.type, targets: cmd.targets },
             'Commander dispatched command',

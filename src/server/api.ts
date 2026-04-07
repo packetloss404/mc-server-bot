@@ -325,6 +325,51 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ prediction });
   });
 
+  // Social memory for a bot
+  app.get('/api/bots/:name/memories', (req: Request, res: Response) => {
+    try {
+      const name = req.params.name as string;
+      const sm = botManager.getSocialMemory();
+      const memories = sm.getRecentMemories(name, 20);
+      const emotionalState = sm.getEmotionalState(name);
+      res.json({ memories, emotionalState });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Bot-to-bot messages received by a bot
+  app.get('/api/bots/:name/messages', (req: Request, res: Response) => {
+    try {
+      const name = req.params.name as string;
+      // peekUnread returns pending messages without marking them consumed
+      const messages = botManager.getBotComms().peekUnread(name);
+      res.json({ messages });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // Send a message from one bot to another
+  app.post('/api/bots/:name/bot-message', (req: Request, res: Response) => {
+    const { to, content } = req.body;
+    if (!to || !content) {
+      res.status(400).json({ error: 'to and content are required' });
+      return;
+    }
+    try {
+      botManager.getBotComms().sendMessage(
+        req.params.name as string,
+        to,
+        content,
+        'chat',
+      );
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Full social graph (all bots, all players) — direct from main thread
   app.get('/api/relationships', (_req: Request, res: Response) => {
     const allAffinities = botManager.getAffinityManager().getAll();
@@ -830,6 +875,22 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
   });
 
+  // Get a single schematic's metadata
+  app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
+    try {
+      const filename = decodeURIComponent(req.params.filename as string);
+      const info = await buildCoordinator.getSchematicInfoAsync(filename);
+      if (!info) {
+        res.status(404).json({ error: 'Schematic not found' });
+        return;
+      }
+      res.json({ schematic: info });
+    } catch (err: any) {
+      logger.error({ err: err.message }, 'Failed to fetch schematic');
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // List all build jobs
   app.get('/api/builds', (_req: Request, res: Response) => {
     res.json({ builds: buildCoordinator.getAllBuildJobs() });
@@ -976,61 +1037,72 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // ═══════════════════════════════════════
 
   // Scan blocks in a region around a position
-  app.get('/api/terrain', (req: Request, res: Response) => {
-    const x = parseInt(String(req.query.x ?? '0'));
-    const y = parseInt(String(req.query.y ?? '64'));
-    const z = parseInt(String(req.query.z ?? '0'));
-    const radius = Math.min(parseInt(String(req.query.radius ?? '4')), 16);
+  // Height-map probe around (cx, cz). Returns the top non-air block name at
+  // each grid cell as a flat string[], matching the TerrainData frontend shape.
+  app.get('/api/terrain', async (req: Request, res: Response) => {
+    const cx = parseInt(String(req.query.cx ?? req.query.x ?? '0'));
+    const cz = parseInt(String(req.query.cz ?? req.query.z ?? '0'));
+    const radius = Math.min(parseInt(String(req.query.radius ?? '16')), 64);
+    const step = Math.max(parseInt(String(req.query.step ?? '1')), 1);
 
-    // Find a connected bot to probe the world
-    const workers = botManager.getAllWorkers() as any[];
-    const probeWorker = workers.find((w: any) => w.isAlive() && w.bot);
-    if (!probeWorker) {
+    let probeHandle: any = null;
+    for (const h of botManager.getAllWorkers() as any[]) {
+      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+        probeHandle = h;
+        break;
+      }
+    }
+    if (!probeHandle) {
       res.status(503).json({ error: 'No connected bot available to scan terrain' });
       return;
     }
-    const bot = (probeWorker as any).bot;
 
-    const blocks: Array<{ x: number; y: number; z: number; name: string }> = [];
-    for (let dx = -radius; dx <= radius; dx++) {
-      for (let dy = -radius; dy <= radius; dy++) {
-        for (let dz = -radius; dz <= radius; dz++) {
-          try {
-            const block = bot.blockAt({ x: x + dx, y: y + dy, z: z + dz } as any);
-            if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-              blocks.push({ x: x + dx, y: y + dy, z: z + dz, name: block.name });
-            }
-          } catch { /* out of range */ }
+    const blocks: string[] = [];
+    const size = Math.floor((2 * radius) / step) + 1;
+    for (let dz = -radius; dz <= radius; dz += step) {
+      for (let dx = -radius; dx <= radius; dx += step) {
+        const wx = cx + dx, wz = cz + dz;
+        // Scan downward from Y=120 to Y=-60 looking for the first non-air block.
+        let found: string = 'air';
+        for (let y = 120; y >= -60; y -= 2) {
+          const b = await probeHandle.getBlockAt(wx, y, wz);
+          if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') {
+            found = b.name;
+            break;
+          }
         }
+        blocks.push(found);
       }
     }
-    res.json({ center: { x, y, z }, radius, blocks, count: blocks.length });
+    res.json({ cx, cz, radius, step, size, blocks });
   });
 
   // Get terrain height at a specific (x, z) column
-  app.get('/api/terrain/height', (req: Request, res: Response) => {
+  app.get('/api/terrain/height', async (req: Request, res: Response) => {
     const x = parseInt(String(req.query.x ?? '0'));
     const z = parseInt(String(req.query.z ?? '0'));
     const maxY = parseInt(String(req.query.maxY ?? '320'));
     const minY = parseInt(String(req.query.minY ?? '-64'));
 
-    const workers = botManager.getAllWorkers() as any[];
-    const probeWorker = workers.find((w: any) => w.isAlive() && w.bot);
-    if (!probeWorker) {
+    let probeHandle: any = null;
+    for (const h of botManager.getAllWorkers() as any[]) {
+      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+        probeHandle = h;
+        break;
+      }
+    }
+    if (!probeHandle) {
       res.status(503).json({ error: 'No connected bot available to scan terrain' });
       return;
     }
-    const bot = (probeWorker as any).bot;
 
     // Scan downward to find the first solid block
     for (let y = maxY; y >= minY; y--) {
-      try {
-        const block = bot.blockAt({ x, y, z } as any);
-        if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-          res.json({ x, z, height: y, surfaceBlock: block.name });
-          return;
-        }
-      } catch { /* out of range */ }
+      const block = await probeHandle.getBlockAt(x, y, z);
+      if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+        res.json({ x, z, height: y, surfaceBlock: block.name });
+        return;
+      }
     }
     res.json({ x, z, height: null, surfaceBlock: null });
   });

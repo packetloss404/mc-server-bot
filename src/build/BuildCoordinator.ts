@@ -300,9 +300,7 @@ export class BuildCoordinator {
     for (const name of botNames) {
       const handle = this.botManager.getWorker(name) as any;
       if (!handle) throw new Error(`Bot not found: ${name}`);
-      const connected = typeof handle.isBotConnected === 'function'
-        ? await handle.isBotConnected()
-        : !!handle.bot;
+      const connected = await handle.isBotConnected();
       if (!connected) throw new Error(`Bot not connected: ${name}`);
     }
 
@@ -668,9 +666,7 @@ export class BuildCoordinator {
 
       // Get the worker handle (worker thread is the source of truth for the mineflayer bot)
       const handle = this.botManager.getWorker(assignment.botName) as any;
-      const connected = handle && typeof handle.isBotConnected === 'function'
-        ? await handle.isBotConnected()
-        : !!handle?.bot;
+      const connected = handle ? await handle.isBotConnected() : false;
       if (!handle || !connected) {
         assignment.status = 'failed';
         logger.error({ jobId, bot: assignment.botName }, 'Bot not available for building');

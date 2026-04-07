@@ -13,6 +13,7 @@ import { MarkerStore } from '../control/MarkerStore';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
+import { RoutineManager } from '../control/RoutineManager';
 import { BuildCoordinator } from '../build/BuildCoordinator';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
@@ -29,6 +30,7 @@ export interface APIServerResult {
   squadManager: SquadManager;
   roleManager: RoleManager;
   templateManager: TemplateManager;
+  routineManager: RoutineManager;
   buildCoordinator: BuildCoordinator;
   chainCoordinator: ChainCoordinator;
 }
@@ -83,6 +85,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   const squadManager = new SquadManager(io);
   const roleManager = new RoleManager(io);
   const templateManager = new TemplateManager();
+  const routineManager = new RoutineManager(botManager);
   const commandCenter = new CommandCenter(botManager, io, markerStore);
   commandCenter.setRoleManager(roleManager);
   const missionManager = new MissionManager(botManager, io);
@@ -1321,29 +1324,75 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // ── Bot control shortcuts (dispatched through CommandCenter) ──
-  const botControlAction = async (botName: string, kind: string, payload: any = {}) => {
+  const botControlAction = async (botName: string, type: string, params: any = {}) => {
     const cmd = commandCenter.createCommand({
-      botName, kind: kind as any, payload, issuedBy: 'dashboard',
+      type: type as any,
+      scope: 'single',
+      priority: 'normal',
+      source: 'api',
+      targets: [botName],
+      params,
     } as any);
     await commandCenter.dispatchCommand(cmd);
     return cmd;
   };
-  const makeBotActionRoute = (path: string, kind: string) => {
-    app.post(path, async (req, res) => {
+  const makeBotActionRoute = (routePath: string, type: string) => {
+    app.post(routePath, async (req, res) => {
       try {
-        const cmd = await botControlAction(req.params.name as string, kind, req.body ?? {});
+        const cmd = await botControlAction(req.params.name as string, type, req.body ?? {});
         res.json({ success: true, command: cmd });
       } catch (e: any) { res.status(500).json({ error: e.message }); }
     });
   };
-  makeBotActionRoute('/api/bots/:name/pause', 'pause');
-  makeBotActionRoute('/api/bots/:name/resume', 'resume');
-  makeBotActionRoute('/api/bots/:name/stop', 'stop');
-  makeBotActionRoute('/api/bots/:name/follow', 'follow');
-  makeBotActionRoute('/api/bots/:name/walkto', 'walkto');
-  makeBotActionRoute('/api/bots/:name/return-to-base', 'returnToBase');
+  makeBotActionRoute('/api/bots/:name/pause', 'pause_voyager');
+  makeBotActionRoute('/api/bots/:name/resume', 'resume_voyager');
+  makeBotActionRoute('/api/bots/:name/stop', 'stop_movement');
+  makeBotActionRoute('/api/bots/:name/follow', 'follow_player');
+  makeBotActionRoute('/api/bots/:name/walkto', 'walk_to_coords');
+  makeBotActionRoute('/api/bots/:name/return-to-base', 'return_to_base');
   makeBotActionRoute('/api/bots/:name/unstuck', 'unstuck');
-  makeBotActionRoute('/api/bots/:name/equip-best', 'equipBest');
+  makeBotActionRoute('/api/bots/:name/equip-best', 'equip_best');
+
+  // ── Routines ──
+  app.get('/api/routines', (_req, res) => res.json({ routines: routineManager.list() }));
+  app.post('/api/routines', (req, res) => {
+    try { res.status(201).json({ routine: routineManager.create(req.body) }); }
+    catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  app.patch('/api/routines/:id', (req, res) => {
+    const r = routineManager.update(req.params.id as string, req.body);
+    if (!r) return res.status(404).json({ error: 'Routine not found' });
+    res.json({ routine: r });
+  });
+  app.delete('/api/routines/:id', (req, res) => {
+    const ok = routineManager.delete(req.params.id as string);
+    res.status(ok ? 200 : 404).json({ success: ok });
+  });
+  app.post('/api/routines/:id/execute', async (req, res) => {
+    try {
+      const { botNames } = req.body ?? {};
+      const execution = await routineManager.execute(req.params.id as string, botNames ?? []);
+      res.json({ execution });
+    } catch (e: any) { res.status(500).json({ error: e.message }); }
+  });
+  app.get('/api/routines/recording', (_req, res) => {
+    res.json({
+      isRecording: routineManager.isRecording(),
+      draft: routineManager.getRecordingDraft(),
+    });
+  });
+  app.post('/api/routines/recording/start', (req, res) => {
+    try {
+      const { name, startedBy } = req.body ?? {};
+      if (!name) return res.status(400).json({ error: 'name required' });
+      res.status(201).json({ draft: routineManager.startRecording(name, startedBy) });
+    } catch (e: any) { res.status(400).json({ error: e.message }); }
+  });
+  app.post('/api/routines/recording/stop', (req, res) => {
+    const { save } = req.body ?? {};
+    const saved = routineManager.stopRecording(save === true);
+    res.json({ routine: saved });
+  });
 
   // ── Templates ──
   app.get('/api/templates', (_req, res) => res.json({ templates: templateManager.getAll() }));
@@ -1372,7 +1421,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   return {
     app, httpServer, io, eventLog,
-    commanderService, commandCenter, missionManager, markerStore, squadManager, roleManager, templateManager,
+    commanderService, commandCenter, missionManager, markerStore, squadManager, roleManager, templateManager, routineManager,
     buildCoordinator, chainCoordinator,
   };
 }

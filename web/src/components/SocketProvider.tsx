@@ -2,7 +2,16 @@
 
 import { useEffect, useCallback } from 'react';
 import { getSocket } from '@/lib/socket';
-import { useBotStore } from '@/lib/store';
+import {
+  useBotStore,
+  useControlStore,
+  useFleetStore,
+  useRoleStore,
+  useWorldStore,
+  useMissionStore,
+  useBuildStore,
+  useChainStore,
+} from '@/lib/store';
 import { api } from '@/lib/api';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
@@ -94,6 +103,55 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       incrementUnreadChats();
     });
 
+    // ── Control platform events: on any change, refetch the affected list. ──
+    // Using zustand getState() avoids re-subscribing when setters change.
+    const refetchMarkers = () => api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {});
+    const refetchZones = () => api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {});
+    const refetchRoutes = () => api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {});
+    const refetchSquads = () => api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
+    const refetchMissions = () => api.getMissions().then((d) => useMissionStore.getState().setMissions(d.missions)).catch(() => {});
+    const refetchCommands = () => api.getCommands().then((d) => useControlStore.getState().setCommands(d.commands)).catch(() => {});
+    const refetchBuilds = () => api.getBuilds().then((d) => useBuildStore.getState().setBuilds(d.builds)).catch(() => {});
+    const refetchChains = () => api.getChains().then((d) => useChainStore.getState().setChains(d.chains)).catch(() => {});
+
+    socket.on('marker:created', refetchMarkers);
+    socket.on('marker:updated', refetchMarkers);
+    socket.on('marker:deleted', refetchMarkers);
+    socket.on('zone:created', refetchZones);
+    socket.on('zone:updated', refetchZones);
+    socket.on('zone:deleted', refetchZones);
+    socket.on('route:created', refetchRoutes);
+    socket.on('route:updated', refetchRoutes);
+    socket.on('route:deleted', refetchRoutes);
+
+    socket.on('squad:updated', refetchSquads);
+    socket.on('squad:deleted', refetchSquads);
+    socket.on('role:updated', () => useRoleStore.getState().setAssignments?.([]));
+
+    socket.on('mission:created', refetchMissions);
+    socket.on('mission:updated', refetchMissions);
+    socket.on('mission:completed', refetchMissions);
+    socket.on('mission:failed', refetchMissions);
+    socket.on('mission:cancelled', refetchMissions);
+
+    socket.on('command:created', refetchCommands);
+    socket.on('command:updated', refetchCommands);
+    socket.on('command:completed', refetchCommands);
+    socket.on('command:failed', refetchCommands);
+
+    socket.on('build:started', refetchBuilds);
+    socket.on('build:progress', refetchBuilds);
+    socket.on('build:completed', refetchBuilds);
+    socket.on('build:cancelled', refetchBuilds);
+    socket.on('build:bot-status', refetchBuilds);
+
+    socket.on('chain:started', refetchChains);
+    socket.on('chain:stage-update', refetchChains);
+    socket.on('chain:paused', refetchChains);
+    socket.on('chain:cancelled', refetchChains);
+    socket.on('chain:completed', refetchChains);
+    socket.on('chain:failed', refetchChains);
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -111,6 +169,19 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('player:join');
       socket.off('player:leave');
       socket.off('bot:chat');
+      socket.off('marker:created'); socket.off('marker:updated'); socket.off('marker:deleted');
+      socket.off('zone:created'); socket.off('zone:updated'); socket.off('zone:deleted');
+      socket.off('route:created'); socket.off('route:updated'); socket.off('route:deleted');
+      socket.off('squad:updated'); socket.off('squad:deleted');
+      socket.off('role:updated');
+      socket.off('mission:created'); socket.off('mission:updated'); socket.off('mission:completed');
+      socket.off('mission:failed'); socket.off('mission:cancelled');
+      socket.off('command:created'); socket.off('command:updated'); socket.off('command:completed');
+      socket.off('command:failed');
+      socket.off('build:started'); socket.off('build:progress'); socket.off('build:completed');
+      socket.off('build:cancelled'); socket.off('build:bot-status');
+      socket.off('chain:started'); socket.off('chain:stage-update'); socket.off('chain:paused');
+      socket.off('chain:cancelled'); socket.off('chain:completed'); socket.off('chain:failed');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

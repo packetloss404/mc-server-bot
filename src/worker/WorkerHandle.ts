@@ -313,6 +313,18 @@ export class WorkerHandle {
     }
   }
 
+  async getTerrainGrid(
+    cx: number, cz: number, radius: number, step: number,
+    yTop = 120, yBottom = -60,
+  ): Promise<string[] | null> {
+    if (!this.ipc) return null;
+    try {
+      return await this.sendRequest('getTerrainGrid', [cx, cz, radius, step, yTop, yBottom]);
+    } catch {
+      return null;
+    }
+  }
+
   async getPlayers(): Promise<Array<{ name: string; position: { x: number; y: number; z: number } | null; isOnline: boolean }>> {
     if (!this.ipc) return [];
     try {

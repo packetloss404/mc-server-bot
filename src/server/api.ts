@@ -1087,23 +1087,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
 
-    const blocks: string[] = [];
     const size = Math.floor((2 * radius) / step) + 1;
-    for (let dz = -radius; dz <= radius; dz += step) {
-      for (let dx = -radius; dx <= radius; dx += step) {
-        const wx = cx + dx, wz = cz + dz;
-        // Scan downward from Y=120 to Y=-60 looking for the first non-air block.
-        let found: string = 'air';
-        for (let y = 120; y >= -60; y -= 2) {
-          const b = await probeHandle.getBlockAt(wx, y, wz);
-          if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') {
-            found = b.name;
-            break;
-          }
-        }
-        blocks.push(found);
-      }
-    }
+    // Single IPC call — the worker iterates the grid internally for speed.
+    const blocks = (await probeHandle.getTerrainGrid(cx, cz, radius, step, 120, -60)) ?? [];
     res.json({ cx, cz, radius, step, size, blocks });
   });
 

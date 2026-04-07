@@ -137,6 +137,29 @@ ipc.onRequest(async (type, args) => {
     }
     case 'isBotConnected':
       return !!(instance as any).bot?.entity;
+    case 'getTerrainGrid': {
+      // args: [cx, cz, radius, step, yTop, yBottom]
+      const bot = (instance as any).bot;
+      if (!bot) return null;
+      const { Vec3 } = require('vec3');
+      const [cx, cz, radius, step, yTop, yBottom] = args;
+      const blocks: string[] = [];
+      for (let dz = -radius; dz <= radius; dz += step) {
+        for (let dx = -radius; dx <= radius; dx += step) {
+          const wx = cx + dx, wz = cz + dz;
+          let found = 'air';
+          for (let y = yTop; y >= yBottom; y--) {
+            const b = bot.blockAt(new Vec3(wx, y, wz));
+            if (b && b.name !== 'air' && b.name !== 'cave_air' && b.name !== 'void_air') {
+              found = b.name;
+              break;
+            }
+          }
+          blocks.push(found);
+        }
+      }
+      return blocks;
+    }
     case 'getPlayers': {
       const bot = (instance as any).bot;
       if (!bot?.players) return [];

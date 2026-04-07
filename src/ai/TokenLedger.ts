@@ -11,6 +11,7 @@ const MAX_RECORDS = 10000;
 const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
   // Gemini
   'gemini-3-flash-preview': { input: 0.15, output: 0.60 },
+  'gemini-2.5-flash': { input: 0.15, output: 0.60 },
   'gemini-2.5-flash-preview-05-20': { input: 0.15, output: 0.60 },
   'gemini-2.0-flash': { input: 0.10, output: 0.40 },
   'gemini-2.5-pro-preview-05-06': { input: 1.25, output: 10.0 },

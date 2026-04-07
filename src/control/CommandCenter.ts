@@ -122,6 +122,20 @@ export class CommandCenter {
   }
 
   async dispatchCommand(command: CommandRecord, force?: boolean): Promise<CommandRecord> {
+    // Expand the "__all__" sentinel into the current set of connected bots.
+    if (command.scope === 'all' && command.targets.includes('__all__')) {
+      const allBotNames = this.botManager
+        .getAllWorkers()
+        .map((w: any) => w.botName)
+        .filter((n: string) => !!n);
+      command.targets = allBotNames;
+      if (command.targets.length === 0) {
+        command.error = { code: 'NO_BOTS_ONLINE', message: 'No bots are currently connected' };
+        this.updateStatus(command, 'failed');
+        return command;
+      }
+    }
+
     // Fan-out for multi-target scopes
     if (
       (command.scope === 'squad' || command.scope === 'selection' || command.scope === 'all') &&

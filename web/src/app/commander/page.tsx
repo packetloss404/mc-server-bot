@@ -436,7 +436,7 @@ export default function CommanderPage() {
                 >
                   <span className="font-mono">{cr.command.type}</span>
                   <span className="text-zinc-500">{cr.command.targets.join(', ')}</span>
-                  {cr.error && <span className="ml-auto text-red-400">{cr.error}</span>}
+                  {cr.error && <span className="ml-auto text-red-400">{typeof cr.error === 'string' ? cr.error : ((cr.error as { message?: string }).message ?? JSON.stringify(cr.error))}</span>}
                 </div>
               ))}
             </div>

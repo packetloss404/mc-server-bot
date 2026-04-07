@@ -134,7 +134,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                     </div>
                   </div>
                   <p className="text-[10px] text-zinc-600 font-mono">{formatTime(cmd.createdAt)}</p>
-                  {cmd.error && <p className="text-[10px] text-red-400/70 mt-1">{cmd.error}</p>}
+                  {cmd.error && <p className="text-[10px] text-red-400/70 mt-1">{typeof cmd.error === 'string' ? cmd.error : ((cmd.error as { message?: string }).message ?? JSON.stringify(cmd.error))}</p>}
                 </div>
               ))}
             </div>
@@ -184,7 +184,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                       )}
                     </div>
                   </div>
-                  {m.error && <p className="text-[10px] text-red-400/70 mt-1">{m.error}</p>}
+                  {m.error && <p className="text-[10px] text-red-400/70 mt-1">{typeof m.error === 'string' ? m.error : ((m.error as { message?: string }).message ?? JSON.stringify(m.error))}</p>}
                 </div>
               ))}
             </div>

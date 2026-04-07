@@ -27,11 +27,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // CORS — allow the Next.js dev server and common local ports
   app.use(cors({
-    origin: [
-      'http://localhost:3000',
-      'http://127.0.0.1:3000',
-      'http://localhost:3001',
-    ],
+    origin: true,
     credentials: true,
   }));
 
@@ -54,10 +50,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Socket.IO
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-      ],
+      origin: true,
       methods: ['GET', 'POST'],
     },
   });
@@ -401,6 +394,26 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       return;
     }
     handle.sendCommand('queueChat', { playerName, message });
+    res.json({ success: true });
+  });
+
+  // Make a bot say raw chat (or run a server command if prefixed with /)
+  app.post('/api/bots/:name/say', (req: Request, res: Response) => {
+    const { message } = req.body;
+    if (!message) {
+      res.status(400).json({ error: 'message is required' });
+      return;
+    }
+    const handle = botManager.getWorker(req.params.name as string) as any;
+    if (!handle || !handle.isAlive()) {
+      res.status(404).json({ error: 'Bot not found or not connected' });
+      return;
+    }
+    if (typeof handle.chat !== 'function') {
+      res.status(500).json({ error: 'Bot handle does not support chat' });
+      return;
+    }
+    handle.chat(message);
     res.json({ success: true });
   });
 

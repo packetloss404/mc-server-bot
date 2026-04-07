@@ -182,6 +182,13 @@ async function main() {
     logger.info({ port: config.api.port, host: config.api.host }, 'DyoBot API server running (HTTP + WebSocket)');
   });
 
+  // Resume any persisted in-progress builds, after workers have had time to connect.
+  setTimeout(() => {
+    buildCoordinator.resumePendingJobs().catch((err) => {
+      logger.error({ err: err.message }, 'Failed to resume pending build jobs');
+    });
+  }, 20000);
+
   // Graceful shutdown — flush ALL managers before exiting
   const shutdown = async () => {
     logger.info('Shutting down DyoBot...');

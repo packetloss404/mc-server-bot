@@ -7,6 +7,7 @@ import { BotState } from '../bot/BotState';
 import { Server as SocketIOServer } from 'socket.io';
 import { EventLog } from '../server/EventLog';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -57,12 +58,126 @@ export class BuildCoordinator {
   private cancelledJobs: Set<string> = new Set();
   private pausedJobs: Set<string> = new Set();
   private schematicsDir: string;
+  private persistPath: string;
+  private persistTimer: NodeJS.Timeout | null = null;
+  /** Original options for each job, kept for resume. */
+  private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean }>();
 
   constructor(botManager: BotManager, io: SocketIOServer, eventLog: EventLog) {
     this.botManager = botManager;
     this.io = io;
     this.eventLog = eventLog;
     this.schematicsDir = path.join(process.cwd(), 'schematics');
+    this.persistPath = path.join(process.cwd(), 'data', 'builds.json');
+    this.loadPersistedJobs();
+  }
+
+  // ── Persistence ────────────────────────────────────────
+
+  private loadPersistedJobs(): void {
+    try {
+      if (!fs.existsSync(this.persistPath)) return;
+      const raw = fs.readFileSync(this.persistPath, 'utf-8');
+      const data = JSON.parse(raw);
+      if (!data || !Array.isArray(data.jobs)) return;
+      for (const entry of data.jobs) {
+        const job = entry.job as BuildJob;
+        this.jobs.set(job.id, job);
+        if (entry.options) this.jobOptions.set(job.id, entry.options);
+      }
+      logger.info({ count: data.jobs.length }, 'Loaded persisted build jobs');
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Failed to load persisted build jobs');
+    }
+  }
+
+  private persistJobs(): void {
+    try {
+      const jobs = [...this.jobs.values()].map((job) => ({
+        job,
+        options: this.jobOptions.get(job.id) || {},
+      }));
+      atomicWriteJsonSync(this.persistPath, { jobs });
+    } catch (err: any) {
+      logger.warn({ err: err.message }, 'Failed to persist build jobs');
+    }
+  }
+
+  /** Throttled persist — call frequently, writes at most once per 2s. */
+  private schedulePersist(): void {
+    if (this.persistTimer) return;
+    this.persistTimer = setTimeout(() => {
+      this.persistTimer = null;
+      this.persistJobs();
+    }, 2000);
+  }
+
+  /**
+   * Resume any jobs that were running/paused when the process was last killed.
+   * Must be called after the bot workers have had time to connect.
+   */
+  async resumePendingJobs(): Promise<void> {
+    const toResume = [...this.jobs.values()].filter(
+      (j) => j.status === 'running' || j.status === 'paused',
+    );
+    for (const job of toResume) {
+      try {
+        logger.info(
+          { jobId: job.id, schematic: job.schematicFile, placed: job.placedBlocks, total: job.totalBlocks },
+          'Resuming persisted build job',
+        );
+        await this.resumeJob(job);
+      } catch (err: any) {
+        logger.error({ jobId: job.id, err: err.message }, 'Failed to resume build job');
+        job.status = 'failed';
+        this.schedulePersist();
+      }
+    }
+  }
+
+  private async resumeJob(job: BuildJob): Promise<void> {
+    const { Schematic } = require('prismarine-schematic');
+    const fullPath = path.join(this.schematicsDir, job.schematicFile);
+    if (!fs.existsSync(fullPath)) {
+      throw new Error(`Schematic file missing for resume: ${job.schematicFile}`);
+    }
+    const buffer = fs.readFileSync(fullPath);
+    const schematic = await Schematic.read(buffer, await this.getBotVersion());
+    const ox = job.origin.x, oy = job.origin.y, oz = job.origin.z;
+    const start = schematic.start();
+    const end = schematic.end();
+    const sx = start.x, sy = start.y, sz = start.z;
+
+    // Re-collect blocks in the same deterministic order as startBuild.
+    const blocks: BlockEntry[] = [];
+    const tempPos = new Vec3(0, 0, 0);
+    for (let y = start.y; y <= end.y; y++) {
+      for (let z = start.z; z <= end.z; z++) {
+        for (let x = start.x; x <= end.x; x++) {
+          tempPos.x = x; tempPos.y = y; tempPos.z = z;
+          const block = schematic.getBlock(tempPos);
+          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+            const props = block.getProperties ? block.getProperties() : {};
+            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
+            blocks.push({
+              wx: ox + x - sx, wy: oy + y - sy, wz: oz + z - sz,
+              name: block.name,
+              stateStr,
+              localY: y - sy,
+            });
+          }
+        }
+      }
+    }
+
+    job.status = 'running';
+    this.io.emit('build:started', job);
+    this.executeBuild(job.id, blocks, job.assignments).catch((err) => {
+      logger.error({ jobId: job.id, err }, 'Resumed build execution failed');
+      job.status = 'failed';
+      this.io.emit('build:completed', { ...job, error: err.message });
+      this.schedulePersist();
+    });
   }
 
   // ── Schematic listing ───────────────────────────────────
@@ -447,6 +562,8 @@ export class BuildCoordinator {
     };
 
     this.jobs.set(jobId, job);
+    this.jobOptions.set(jobId, { fillFoundation: options?.fillFoundation, snapToGround: options?.snapToGround });
+    this.persistJobs();
 
     // Emit started event
     this.io.emit('build:started', job);
@@ -478,6 +595,7 @@ export class BuildCoordinator {
 
     this.cancelledJobs.add(jobId);
     job.status = 'cancelled';
+    this.schedulePersist();
 
     // Reset bot states
     for (const assignment of job.assignments) {
@@ -506,6 +624,7 @@ export class BuildCoordinator {
 
     this.pausedJobs.add(jobId);
     job.status = 'paused';
+    this.schedulePersist();
 
     this.io.emit('build:bot-status', { jobId, status: 'paused' });
     logger.info({ jobId }, 'Build paused');
@@ -518,6 +637,7 @@ export class BuildCoordinator {
 
     this.pausedJobs.delete(jobId);
     job.status = 'running';
+    this.schedulePersist();
 
     this.io.emit('build:bot-status', { jobId, status: 'running' });
     logger.info({ jobId }, 'Build resumed');
@@ -651,6 +771,7 @@ export class BuildCoordinator {
         { jobId, status: job.status, placed: job.placedBlocks, total: job.totalBlocks },
         'Build finished',
       );
+      this.persistJobs();
 
       // Remove bots that were created specifically for this build
       if (job.cleanupBotNames && job.cleanupBotNames.length > 0) {
@@ -679,7 +800,16 @@ export class BuildCoordinator {
     handle: any,
     blocks: BlockEntry[],
   ): Promise<void> {
-    for (const block of blocks) {
+    // Resume: skip blocks already placed in a prior run.
+    const startIdx = Math.min(assignment.blocksPlaced, blocks.length);
+    if (startIdx > 0) {
+      logger.info(
+        { jobId, bot: assignment.botName, skipping: startIdx, remaining: blocks.length - startIdx },
+        'Resuming bot assignment — skipping already-placed blocks',
+      );
+    }
+    for (let bi = startIdx; bi < blocks.length; bi++) {
+      const block = blocks[bi];
       // Check cancellation
       if (this.cancelledJobs.has(jobId)) return;
 
@@ -713,6 +843,8 @@ export class BuildCoordinator {
           botBlocksPlaced: assignment.blocksPlaced,
           botBlocksTotal: assignment.blocksTotal,
         });
+        // Throttled persist so a crash loses at most ~2s of progress
+        this.schedulePersist();
       }
     }
   }

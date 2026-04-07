@@ -137,6 +137,21 @@ ipc.onRequest(async (type, args) => {
     }
     case 'isBotConnected':
       return !!(instance as any).bot?.entity;
+    case 'getPlayers': {
+      const bot = (instance as any).bot;
+      if (!bot?.players) return [];
+      return Object.values(bot.players)
+        .filter((p: any) => p && p.username && p.entity)
+        .map((p: any) => ({
+          name: p.username,
+          position: {
+            x: Math.floor(p.entity.position.x),
+            y: Math.floor(p.entity.position.y),
+            z: Math.floor(p.entity.position.z),
+          },
+          isOnline: true,
+        }));
+    }
     default:
       throw new Error(`Unknown request type in worker: ${type}`);
   }

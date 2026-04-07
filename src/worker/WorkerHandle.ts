@@ -313,6 +313,15 @@ export class WorkerHandle {
     }
   }
 
+  async getPlayers(): Promise<Array<{ name: string; position: { x: number; y: number; z: number } | null; isOnline: boolean }>> {
+    if (!this.ipc) return [];
+    try {
+      return await this.sendRequest('getPlayers', []);
+    } catch {
+      return [];
+    }
+  }
+
   async getBlockAt(x: number, y: number, z: number): Promise<{ name: string } | null> {
     if (!this.ipc) return null;
     try {

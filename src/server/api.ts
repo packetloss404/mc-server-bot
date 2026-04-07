@@ -303,6 +303,22 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ plans: botManager.getSwarmCoordinator().getActivePlans() });
   });
 
+  // Online players with positions — queried via any connected worker bot
+  app.get('/api/players', async (_req: Request, res: Response) => {
+    try {
+      for (const handle of botManager.getAllWorkers() as any[]) {
+        if (typeof handle.isBotConnected === 'function' && (await handle.isBotConnected())) {
+          const players = await handle.getPlayers();
+          res.json({ players });
+          return;
+        }
+      }
+      res.json({ players: [] });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message, players: [] });
+    }
+  });
+
   // Player intent predictions
   app.get('/api/players/:name/intent', (req: Request, res: Response) => {
     const prediction = botManager.getPlayerIntentModel().predictIntent(req.params.name as string);

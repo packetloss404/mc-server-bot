@@ -360,6 +360,58 @@ export class CommanderService {
     return shuffled.slice(0, 4);
   }
 
+  // ── Parameter validation ───────────────────────────────
+
+  /**
+   * Walk each planned command and verify it has the params its handler
+   * requires. If anything's missing, append clarification questions to
+   * the plan and set needsClarification so execute() will refuse to run.
+   */
+  private validatePlanParams(plan: CommanderPlan): void {
+    type Rule = { fields: string[]; question: (cmd: any) => string };
+    const rules: Record<string, Rule> = {
+      walk_to_coords: {
+        fields: ['x', 'z'],
+        question: (cmd) => `Where should ${cmd.targets?.join(', ') || 'the bot'} walk to? (give x z or x y z, or a marker name)`,
+      },
+      follow_player: {
+        fields: ['player'],
+        question: (cmd) => `Which player should ${cmd.targets?.join(', ') || 'the bot'} follow?`,
+      },
+      move_to_marker: {
+        fields: ['markerId'],
+        question: (cmd) => `Which marker should ${cmd.targets?.join(', ') || 'the bot'} move to? (name or id)`,
+      },
+      guard_zone: {
+        fields: ['zoneId'],
+        question: (cmd) => `Which zone should ${cmd.targets?.join(', ') || 'the bot'} guard? (name or id)`,
+      },
+      patrol_route: {
+        fields: ['routeId'],
+        question: (cmd) => `Which route should ${cmd.targets?.join(', ') || 'the bot'} patrol? (name or id)`,
+      },
+    };
+    for (const cmd of plan.commands) {
+      const rule = rules[cmd.type];
+      if (!rule) continue;
+      const payload = (cmd as any).payload ?? (cmd as any).params ?? {};
+      const missing = rule.fields.filter((f) => payload[f] === undefined || payload[f] === null);
+      if (missing.length > 0) {
+        plan.clarificationQuestions.push({
+          id: `missing-${cmd.type}-${missing.join(',')}`,
+          question: rule.question(cmd),
+          field: missing.join(','),
+        } as any);
+        plan.warnings.push(
+          `Command ${cmd.type} for ${cmd.targets?.join(', ') || 'bot'} is missing required field(s): ${missing.join(', ')}`,
+        );
+      }
+    }
+    if (plan.clarificationQuestions.length > 0) {
+      plan.needsClarification = true;
+    }
+  }
+
   // ── Clarification generation ────────────────────────────
 
   private generateClarificationQuestions(
@@ -493,6 +545,7 @@ export class CommanderService {
     // Try LLM-based parsing first (falls back to regex below)
     const llmPlan = await this.llmParse(planId, trimmedInput, now);
     if (llmPlan && llmPlan.confidence > 0) {
+      this.validatePlanParams(llmPlan);
       this.plans.set(planId, llmPlan);
       this.upsertHistory({
         planId,
@@ -607,12 +660,13 @@ export class CommanderService {
       createdAt: now,
     };
 
+    this.validatePlanParams(plan);
     this.plans.set(planId, plan);
     this.upsertHistory({
       planId,
       input,
       plan,
-      status: needsClarification ? 'clarification_needed' : 'parsed',
+      status: plan.needsClarification ? 'clarification_needed' : 'parsed',
       createdAt: now,
     });
     this.trackParseMetrics(plan);

@@ -3,7 +3,7 @@ import { RoleApprovalRequestRecord, RoleAssignmentRecord, RoleType, AutonomyLeve
 import type { MissionManager } from './MissionManager';
 import type { MissionType } from './MissionTypes';
 import { logger } from '../util/logger';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { atomicWriteJsonSync, atomicWriteJson } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -236,7 +236,13 @@ export class RoleManager {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveImmediate();
+      atomicWriteJson(this.filePath, {
+        assignments: this.assignments,
+        approvalRequests: this.approvalRequests,
+        overrides: this.getOverrides(),
+      }).catch((err) => {
+        logger.error({ err }, 'RoleManager: failed to save roles.json');
+      });
     }, DEBOUNCE_MS);
   }
 

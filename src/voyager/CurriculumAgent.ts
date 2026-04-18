@@ -465,10 +465,15 @@ Propose the next task:`;
   }
 
   private persistTasksNow(): void {
-    fs.writeFileSync(this.completedTasksPath, JSON.stringify(this.completedTasks, null, 2));
-    fs.writeFileSync(this.failedTasksPath, JSON.stringify(this.failedTasks, null, 2));
-    fs.writeFileSync(this.qaCachePath, JSON.stringify(this.qaCache, null, 2));
-    fs.writeFileSync(this.qaEmbeddingPath, JSON.stringify(this.qaEmbeddings, null, 2));
+    const writes: Array<Promise<void>> = [
+      fs.promises.writeFile(this.completedTasksPath, JSON.stringify(this.completedTasks, null, 2)),
+      fs.promises.writeFile(this.failedTasksPath, JSON.stringify(this.failedTasks, null, 2)),
+      fs.promises.writeFile(this.qaCachePath, JSON.stringify(this.qaCache, null, 2)),
+      fs.promises.writeFile(this.qaEmbeddingPath, JSON.stringify(this.qaEmbeddings, null, 2)),
+    ];
+    Promise.all(writes).catch((err) => {
+      logger.warn({ err: err?.message }, 'CurriculumAgent persist failed');
+    });
   }
 
   private async buildCurriculumContext(bot: Bot, personality: string): Promise<string> {

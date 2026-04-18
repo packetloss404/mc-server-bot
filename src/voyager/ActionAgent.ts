@@ -105,8 +105,15 @@ if (threat) {
 7. Keep code concise and reusable. Do not assume the inventory already contains required items.
 8. Do NOT use bot.on() or bot.once() event listeners.
 9. Do NOT write infinite loops or recursive functions.
-10. maxDistance must always be 32 for bot.findBlock().
+10. maxDistance MUST be 32 (or smaller) for bot.findBlock(). Never use 64 or higher — it scans 8x more chunks and is a CPU hog.
 11. Output ONLY the function code. No explanation. No markdown fences.
+
+## Performance rules (avoid CPU waste)
+- **Snapshot inventory once.** Call \`const inv = bot.inventory.items();\` once at the top, then reuse \`inv.find(...)\` instead of calling \`bot.inventory.items()\` repeatedly.
+- **Snapshot world state before loops.** When iterating a region (e.g. checking a 5x5 footprint), batch \`bot.blockAt()\` calls into an array once before the loop. Do not call \`bot.blockAt()\` inside a tight nested loop more than once per position.
+- **Early-exit nested loops.** When searching for a target in a 3D region, return/break the moment you find a hit. Do not finish scanning the whole volume.
+- **Prefer findBlocks (count: N) over manual triple-nested scans.** \`bot.findBlocks({matching, maxDistance: 32, count: 8})\` is one call and is far cheaper than three nested for-loops calling blockAt.
+- **No verification re-scans.** After placing or mining, do not re-walk the region with blockAt to confirm. The primitives (mineBlock/placeItem) already verify.
 
 ## Primitive usage requirements
 - For mining or collecting tasks, use mineBlock(...). Do NOT use bot.dig(...) directly.

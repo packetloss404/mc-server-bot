@@ -61,9 +61,10 @@ export function setupSocketEvents(
         });
       }
 
-      // Inventory
+      // Inventory — items are already in slot order, so no need to re-sort each tick.
       if (detailed?.inventory) {
-        const invKey = detailed.inventory.map((i: any) => `${i.name}:${i.count}`).sort().join(',');
+        let invKey = '';
+        for (const i of detailed.inventory) invKey += `${i.name}:${i.count},`;
         if (prevInventory.get(name) !== invKey) {
           prevInventory.set(name, invKey);
           io.emit('bot:inventory', { bot: name, items: detailed.inventory });
@@ -87,21 +88,18 @@ export function setupSocketEvents(
     }
   }, 30000);
 
-  // Wire decision trace listeners on new workers (checked every 10s alongside state polling)
-  const trackedBots = new Set<string>();
-  setInterval(() => {
-    for (const handle of botManager.getAllWorkers()) {
-      if (!trackedBots.has(handle.botName)) {
-        trackedBots.add(handle.botName);
-        handle.setTraceListener((record) => {
-          io.emit('bot:decision', record);
-        });
-        handle.setReputationListener((event) => {
-          botManager.getBotReputation().recordEvent(event);
-        });
-      }
-    }
-  }, 10000);
+  // Wire decision trace listeners on new workers — event-driven, no polling.
+  // Also wire any bots that were spawned before this listener registered.
+  const wireBot = (handle: { setTraceListener: (cb: (r: any) => void) => void; setReputationListener: (cb: (e: any) => void) => void }) => {
+    handle.setTraceListener((record) => {
+      io.emit('bot:decision', record);
+    });
+    handle.setReputationListener((event) => {
+      botManager.getBotReputation().recordEvent(event);
+    });
+  };
+  for (const handle of botManager.getAllWorkers()) wireBot(handle);
+  botManager.onBotSpawned(wireBot);
 
   // Clean up tracked state when bots are removed
   setInterval(() => {
@@ -112,7 +110,6 @@ export function setupSocketEvents(
         prevHealth.delete(name);
         prevStates.delete(name);
         prevInventory.delete(name);
-        trackedBots.delete(name);
       }
     }
   }, 60000);

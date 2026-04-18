@@ -37,6 +37,10 @@ export class SkillLibrary {
   private docFreq: Map<string, number> = new Map();
   private embeddingClient: LLMClient | null;
   private allSkillCodeCache: string | null = null;
+  /** Per-skill source cache. Invalidated on save() of the same name. */
+  private codeCache: Map<string, string> = new Map();
+  /** Per-entry TF-IDF sparse vector cache. Wiped when corpus IDF changes. */
+  private vectorCache: Map<string, SparseVector> = new Map();
 
   constructor(skillsDir: string, maxSkills: number, embeddingClient: LLMClient | null = null) {
     this.skillsDir = skillsDir;
@@ -107,7 +111,7 @@ export class SkillLibrary {
       );
       if (matchedWords.length > 1) score += matchedWords.length * 2;
       if (entry.description.toLowerCase() === lower.trim()) score += 12;
-      const similarity = this.cosineSimilarity(queryVector, this.buildVector(this.buildSkillDocument(entry)));
+      const similarity = this.cosineSimilarity(queryVector, this.getEntryVector(entry));
       score += similarity * 20;
       if (queryEmbedding && entry.embedding) {
         score += this.cosineSimilarityDense(queryEmbedding, entry.embedding) * 25;
@@ -127,13 +131,18 @@ export class SkillLibrary {
 
   /** Get skill code by name */
   getCode(name: string): string | null {
+    const cached = this.codeCache.get(name);
+    if (cached !== undefined) return cached;
+
     const entry = this.index.find((s) => s.name === name);
     if (!entry) return null;
 
     const filePath = path.join(this.skillsDir, entry.file);
     if (!fs.existsSync(filePath)) return null;
 
-    return fs.readFileSync(filePath, 'utf-8');
+    const code = fs.readFileSync(filePath, 'utf-8');
+    this.codeCache.set(name, code);
+    return code;
   }
 
   /** Save a new skill to the library */
@@ -171,7 +180,8 @@ export class SkillLibrary {
       this.index.push(entry);
     }
 
-    this.allSkillCodeCache = null; // Invalidate cache
+    this.allSkillCodeCache = null; // Invalidate concat cache
+    this.codeCache.delete(name); // Invalidate per-file cache for this skill
     this.saveIndex();
     this.rebuildIndexStats();
     logger.info({ name, keywords }, 'Skill saved to library');
@@ -202,9 +212,16 @@ export class SkillLibrary {
   getAllSkillCode(): string {
     if (this.allSkillCodeCache !== null) return this.allSkillCodeCache;
     const parts: string[] = [];
+    // Iterate index directly (skip getCode's redundant index.find for each entry)
     for (const entry of this.index) {
-      const code = this.getCode(entry.name);
-      if (code) parts.push(code);
+      let code = this.codeCache.get(entry.name);
+      if (code === undefined) {
+        const filePath = path.join(this.skillsDir, entry.file);
+        if (!fs.existsSync(filePath)) continue;
+        code = fs.readFileSync(filePath, 'utf-8');
+        this.codeCache.set(entry.name, code);
+      }
+      parts.push(code);
     }
     this.allSkillCodeCache = parts.join('\n\n');
     return this.allSkillCodeCache;
@@ -294,6 +311,18 @@ export class SkillLibrary {
         this.docFreq.set(token, (this.docFreq.get(token) || 0) + 1);
       }
     }
+    // IDF just changed — invalidate per-entry vectors so they re-weight on next use.
+    this.vectorCache.clear();
+  }
+
+  /** Get the cached TF-IDF vector for an entry, building it on first access. */
+  private getEntryVector(entry: SkillEntry): SparseVector {
+    let v = this.vectorCache.get(entry.name);
+    if (v === undefined) {
+      v = this.buildVector(this.buildSkillDocument(entry));
+      this.vectorCache.set(entry.name, v);
+    }
+    return v;
   }
 
   private buildSkillDocument(entry: SkillEntry): string {

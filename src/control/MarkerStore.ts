@@ -2,7 +2,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { MarkerRecord, ZoneRecord, RouteRecord } from './WorldTypes';
 import { WORLD_EVENTS } from './FleetTypes';
 import { logger } from '../util/logger';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { atomicWriteJsonSync, atomicWriteJson } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
@@ -63,11 +63,9 @@ export class MarkerStore {
     if (this.markerSaveTimer) return;
     this.markerSaveTimer = setTimeout(() => {
       this.markerSaveTimer = null;
-      try {
-        atomicWriteJsonSync(this.markersPath, Array.from(this.markers.values()));
-      } catch (err) {
+      atomicWriteJson(this.markersPath, Array.from(this.markers.values())).catch((err) => {
         logger.error({ err, filePath: this.markersPath }, 'Failed to save markers');
-      }
+      });
     }, DEBOUNCE_MS);
   }
 
@@ -84,11 +82,9 @@ export class MarkerStore {
     if (this.zoneSaveTimer) return;
     this.zoneSaveTimer = setTimeout(() => {
       this.zoneSaveTimer = null;
-      try {
-        atomicWriteJsonSync(this.zonesPath, Array.from(this.zones.values()));
-      } catch (err) {
+      atomicWriteJson(this.zonesPath, Array.from(this.zones.values())).catch((err) => {
         logger.error({ err, filePath: this.zonesPath }, 'Failed to save zones');
-      }
+      });
     }, DEBOUNCE_MS);
   }
 
@@ -105,11 +101,9 @@ export class MarkerStore {
     if (this.routeSaveTimer) return;
     this.routeSaveTimer = setTimeout(() => {
       this.routeSaveTimer = null;
-      try {
-        atomicWriteJsonSync(this.routesPath, Array.from(this.routes.values()));
-      } catch (err) {
+      atomicWriteJson(this.routesPath, Array.from(this.routes.values())).catch((err) => {
         logger.error({ err, filePath: this.routesPath }, 'Failed to save routes');
-      }
+      });
     }, DEBOUNCE_MS);
   }
 

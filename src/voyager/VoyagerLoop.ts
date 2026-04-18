@@ -31,6 +31,8 @@ import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
 import { DependencyResolver, FlatStep } from './DependencyResolver';
 import { SharedWorldModel } from './SharedWorldModel';
 
+const AIR_BLOCKS: ReadonlySet<string> = new Set(['air', 'cave_air', 'void_air']);
+
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
   private static MAX_FAILURE_OUTPUT_CHARS = 1200;
@@ -311,8 +313,9 @@ export class VoyagerLoop {
 
   reorderQueue(orderedDescriptions: string[]): void {
     const byDesc = new Map(this.playerTaskQueue.map((t) => [t.description, t]));
+    const orderedSet = new Set(orderedDescriptions);
     const reordered = orderedDescriptions.map((d) => byDesc.get(d)).filter(Boolean) as typeof this.playerTaskQueue;
-    const remaining = this.playerTaskQueue.filter((t) => !orderedDescriptions.includes(t.description));
+    const remaining = this.playerTaskQueue.filter((t) => !orderedSet.has(t.description));
     this.playerTaskQueue.length = 0;
     this.playerTaskQueue.push(...reordered, ...remaining);
     logger.info({ bot: this.botName, count: reordered.length }, 'Player task queue reordered');
@@ -707,21 +710,20 @@ export class VoyagerLoop {
     if (blockName === 'cobblestone') {
       return { description: 'Mine 20 cobblestone', keywords: ['mine', 'cobblestone', 'stone'] };
     }
+    // Snapshot the inventory once so we don't iterate it three times across the wood branches.
+    const itemNames = new Set(this.bot.inventory.items().map((i) => i.name));
     if (blockName === 'oak_planks') {
-      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'oak_log');
-      return hasLogs
+      return itemNames.has('oak_log')
         ? { description: 'Craft 20 oak planks', keywords: ['craft', 'oak_planks', 'wood'] }
         : { description: 'Mine 6 oak logs', keywords: ['mine', 'oak_log', 'wood'] };
     }
     if (blockName === 'spruce_planks') {
-      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'spruce_log');
-      return hasLogs
+      return itemNames.has('spruce_log')
         ? { description: 'Craft 20 spruce planks', keywords: ['craft', 'spruce_planks', 'wood'] }
         : { description: 'Mine 6 spruce logs', keywords: ['mine', 'spruce_log', 'wood'] };
     }
     if (blockName === 'birch_planks') {
-      const hasLogs = this.bot.inventory.items().some((item) => item.name === 'birch_log');
-      return hasLogs
+      return itemNames.has('birch_log')
         ? { description: 'Craft 20 birch planks', keywords: ['craft', 'birch_planks', 'wood'] }
         : { description: 'Mine 6 birch logs', keywords: ['mine', 'birch_log', 'wood'] };
     }
@@ -735,7 +737,7 @@ export class VoyagerLoop {
     for (let y = Math.floor(base.y); y >= Math.max(1, Math.floor(base.y) - 20); y--) {
       const below = this.bot.blockAt(new Vec3(startX, y, startZ));
       const above = this.bot.blockAt(new Vec3(startX, y + 1, startZ));
-      if (below && !['air', 'cave_air', 'void_air'].includes(below.name) && (!above || ['air', 'cave_air', 'void_air'].includes(above.name))) {
+      if (below && !AIR_BLOCKS.has(below.name) && (!above || AIR_BLOCKS.has(above.name))) {
         return { x: startX, y: y + 1, z: startZ };
       }
     }
@@ -1170,7 +1172,8 @@ export class VoyagerLoop {
 
   private estimateSkillQuality(reason: string, code: string): number {
     let quality = 0.75;
-    if (reason.toLowerCase().includes('inventory changed') || reason.toLowerCase().includes('crafted') || reason.toLowerCase().includes('collected')) {
+    const lowerReason = reason.toLowerCase();
+    if (lowerReason.includes('inventory changed') || lowerReason.includes('crafted') || lowerReason.includes('collected')) {
       quality += 0.1;
     }
     if (code.length > 2000) {

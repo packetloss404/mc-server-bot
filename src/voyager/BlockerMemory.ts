@@ -51,7 +51,25 @@ export class BlockerMemory {
   }
 
   summarize(task?: Task): string {
-    const records = task ? this.getTaskBlockers(task) : this.records.slice().sort((a, b) => b.updatedAt - a.updatedAt).slice(0, 10);
+    let records: BlockerRecord[];
+    if (task) {
+      records = this.getTaskBlockers(task);
+    } else {
+      // Avoid copying the full array just to take the top 10. Iterate once and
+      // maintain a sorted top-N (bounded by 10).
+      const top: BlockerRecord[] = [];
+      for (const r of this.records) {
+        if (top.length < 10) {
+          top.push(r);
+          if (top.length === 10) top.sort((a, b) => b.updatedAt - a.updatedAt);
+        } else if (r.updatedAt > top[9].updatedAt) {
+          top[9] = r;
+          top.sort((a, b) => b.updatedAt - a.updatedAt);
+        }
+      }
+      if (top.length < 10) top.sort((a, b) => b.updatedAt - a.updatedAt);
+      records = top;
+    }
     if (records.length === 0) return 'none';
     return records.map((r) => `${r.task} -> ${r.blocker} (${r.count}): ${r.detail}`).join(' | ');
   }

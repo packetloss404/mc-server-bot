@@ -54,6 +54,15 @@ const instance = new BotInstance({
   onReputationEvent: (event) => {
     ipc.notify('reputation.recordEvent', event);
   },
+  onVoyagerLoopCreated: (loop) => {
+    loop.getDecisionTrace().setEmitter((record) => {
+      ipc.notify('decision.trace', record);
+    });
+    loop.getDecisionTrace().setReputationEmitter((event) => {
+      ipc.notify('reputation.recordEvent', event);
+    });
+    logger.info({ bot: data.botName }, 'Decision trace + reputation notifier wired');
+  },
 });
 
 // Handle commands from main thread
@@ -180,32 +189,28 @@ ipc.onRequest(async (type, args) => {
   }
 });
 
-// Push status to main thread periodically
+// Push status to main thread periodically — diff-based to skip unchanged payloads.
+// Force a heartbeat every 30s regardless so the main thread can detect a stale worker.
+let lastStatusJson = '';
+let lastStatusSentAt = 0;
+const STATUS_HEARTBEAT_MS = 30_000;
 const statusInterval = setInterval(() => {
   try {
-    ipc.notify('status.update', {
+    const payload = {
       status: instance.getStatus(),
       detailedStatus: instance.getDetailedStatus(),
       diagnostics: instance.getDiagnosticsSummary(),
-    });
+    };
+    const json = JSON.stringify(payload);
+    const now = Date.now();
+    if (json === lastStatusJson && now - lastStatusSentAt < STATUS_HEARTBEAT_MS) {
+      return;
+    }
+    lastStatusJson = json;
+    lastStatusSentAt = now;
+    ipc.notify('status.update', payload);
   } catch {
     // Bot may not be fully initialized yet
-  }
-}, 2000);
-
-// Wire decision trace + reputation forwarding — re-check periodically to catch reconnected loops
-let lastWiredLoop: any = null;
-setInterval(() => {
-  const loop = instance.getVoyagerLoop();
-  if (loop && loop !== lastWiredLoop) {
-    lastWiredLoop = loop;
-    loop.getDecisionTrace().setEmitter((record) => {
-      ipc.notify('decision.trace', record);
-    });
-    loop.getDecisionTrace().setReputationEmitter((event) => {
-      ipc.notify('reputation.recordEvent', event);
-    });
-    logger.info({ bot: data.botName }, 'Decision trace + reputation notifier wired');
   }
 }, 2000);
 

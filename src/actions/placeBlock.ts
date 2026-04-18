@@ -45,6 +45,14 @@ export async function placeBlock(
   // Walk near the target location
   await moveNearWithCleanup(bot, { x, y, z, range: 3 }, 15000);
 
+  // Equip + look once — both are independent of which face we end up using.
+  try {
+    await bot.equip(item, 'hand');
+    await bot.lookAt(targetPos);
+  } catch (err: any) {
+    return { success: false, message: `Equip/look failed: ${err.message}` };
+  }
+
   let lastError = 'No block to place against';
   for (const faceVector of FACE_VECTORS) {
     const referencePos = targetPos.minus(faceVector);
@@ -54,8 +62,6 @@ export async function placeBlock(
     }
 
     try {
-      await bot.equip(item, 'hand');
-      await bot.lookAt(targetPos);
       await bot.placeBlock(referenceBlock, faceVector);
 
       const placedBlock = bot.blockAt(targetPos);

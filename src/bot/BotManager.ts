@@ -46,6 +46,7 @@ export class BotManager {
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private spawnListeners: Array<(handle: WorkerHandle) => void> = [];
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -108,6 +109,14 @@ export class BotManager {
 
     this.workers.set(key, handle);
 
+    for (const listener of this.spawnListeners) {
+      try {
+        listener(handle);
+      } catch (err) {
+        logger.warn({ err: (err as any)?.message, bot: name }, 'Bot spawn listener failed');
+      }
+    }
+
     // Start the worker (with optional stagger delay)
     if (delay > 0) {
       await new Promise((r) => setTimeout(r, delay));
@@ -154,6 +163,11 @@ export class BotManager {
 
   getWorker(name: string): WorkerHandle | undefined {
     return this.workers.get(name.toLowerCase());
+  }
+
+  /** Register a listener fired when a new bot is spawned. Existing bots are NOT replayed. */
+  onBotSpawned(listener: (handle: WorkerHandle) => void): void {
+    this.spawnListeners.push(listener);
   }
 
   /** Get all worker handles */

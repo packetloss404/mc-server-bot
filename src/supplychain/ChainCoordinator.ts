@@ -110,6 +110,9 @@ export class ChainCoordinator {
   private dataPath: string;
   private pollingInterval: ReturnType<typeof setInterval> | null = null;
   private taskDescriptionMap: Map<string, string> = new Map(); // stageId -> task description sent to bot
+  /** stageId -> {completedCount, failedCount} last seen on the bot. Lets us skip
+   *  the substring scan entirely when no new tasks have completed/failed. */
+  private lastObservedCounts: Map<string, { completed: number; failed: number }> = new Map();
 
   constructor(botManager: BotManager, io: SocketIOServer, eventLog: EventLog) {
     this.botManager = botManager;
@@ -450,7 +453,17 @@ export class ChainCoordinator {
     }, 5000);
   }
 
+  /** True if there's at least one chain in 'running' status. */
+  private hasActiveChains(): boolean {
+    for (const chain of this.chains.values()) {
+      if (chain.status === 'running') return true;
+    }
+    return false;
+  }
+
   private checkChainProgress(): void {
+    // Skip the per-chain scan entirely if no chain is active.
+    if (!this.hasActiveChains()) return;
     for (const chain of this.chains.values()) {
       if (chain.status !== 'running') continue;
 
@@ -471,9 +484,15 @@ export class ChainCoordinator {
       const completedTasks: string[] = voyager.getCompletedTasks();
       const failedTasks: string[] = voyager.getFailedTasks();
 
-      // Check if the task has completed (bot no longer working on it and it appears in completed list)
-      const isCompleted = completedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
-      const isFailed = failedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
+      // Skip the substring scan entirely when neither list has grown since
+      // the previous tick — no new task can have matched.
+      const last = this.lastObservedCounts.get(stage.id);
+      const newCompleted = last ? completedTasks.length > last.completed : completedTasks.length > 0;
+      const newFailed = last ? failedTasks.length > last.failed : failedTasks.length > 0;
+      this.lastObservedCounts.set(stage.id, { completed: completedTasks.length, failed: failedTasks.length });
+
+      const isCompleted = newCompleted && completedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
+      const isFailed = newFailed && failedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
       const taskFinished = currentTask === null || (!currentTask.includes(taskDesc) && !taskDesc.includes(currentTask ?? ''));
 
       if (isCompleted) {

@@ -13,7 +13,7 @@ import { BotManager } from '../bot/BotManager';
 import { MarkerStore } from './MarkerStore';
 import type { RoleManager } from './RoleManager';
 import { logger } from '../util/logger';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { atomicWriteJsonSync, atomicWriteJson } from '../util/atomicWrite';
 import * as fs from 'fs';
 import * as path from 'path';
 
@@ -62,6 +62,11 @@ const TIMEOUT_CHECK_INTERVAL_MS = 10_000;
 
 export class CommandCenter {
   private commands: Map<string, CommandRecord> = new Map();
+  /** Index of command IDs currently in 'started' state, with cached numeric startedAt. */
+  private startedCommands: Map<string, number> = new Map();
+  /** Cached numeric timestamps so metrics paths skip Date.parse on every record. */
+  private startedAtMs: Map<string, number> = new Map();
+  private completedAtMs: Map<string, number> = new Map();
   private botManager: BotManager;
   private io: SocketIOServer;
   private markerStore: MarkerStore | null;
@@ -291,9 +296,9 @@ export class CommandCenter {
   }
 
   private computeDurationMs(cmd: CommandRecord): number | undefined {
-    if (cmd.startedAt && cmd.completedAt) {
-      return new Date(cmd.completedAt).getTime() - new Date(cmd.startedAt).getTime();
-    }
+    const startMs = this.startedAtMs.get(cmd.id);
+    const endMs = this.completedAtMs.get(cmd.id);
+    if (startMs !== undefined && endMs !== undefined) return endMs - startMs;
     return undefined;
   }
 
@@ -306,12 +311,12 @@ export class CommandCenter {
   }
 
   getRecentFailedCount(withinMs: number): number {
-    const cutoff = new Date(Date.now() - withinMs).toISOString();
+    const cutoffMs = Date.now() - withinMs;
     let count = 0;
     for (const cmd of this.commands.values()) {
-      if (cmd.status === 'failed' && cmd.completedAt && cmd.completedAt >= cutoff) {
-        count++;
-      }
+      if (cmd.status !== 'failed') continue;
+      const completedMs = this.completedAtMs.get(cmd.id);
+      if (completedMs !== undefined && completedMs >= cutoffMs) count++;
     }
     return count;
   }
@@ -337,6 +342,9 @@ export class CommandCenter {
     for (const [id, cmd] of this.commands) {
       if (new Date(cmd.createdAt).getTime() < cutoff) {
         this.commands.delete(id);
+        this.startedAtMs.delete(id);
+        this.completedAtMs.delete(id);
+        this.startedCommands.delete(id);
         removed++;
       }
     }
@@ -348,6 +356,9 @@ export class CommandCenter {
       for (const id of [...this.commands.keys()]) {
         if (!keep.has(id)) {
           this.commands.delete(id);
+          this.startedAtMs.delete(id);
+          this.completedAtMs.delete(id);
+          this.startedCommands.delete(id);
           removed++;
         }
       }
@@ -374,36 +385,41 @@ export class CommandCenter {
   checkTimeouts(): void {
     const now = Date.now();
 
-    for (const command of this.commands.values()) {
-      if (command.status !== 'started') continue;
-      if (!command.startedAt) continue;
-
-      const startedMs = new Date(command.startedAt).getTime();
+    for (const [commandId, startedMs] of this.startedCommands) {
       const elapsed = now - startedMs;
+      if (elapsed <= COMMAND_TIMEOUT_MS) continue;
 
-      if (elapsed > COMMAND_TIMEOUT_MS) {
-        command.error = { code: 'TIMEOUT', message: 'Command timed out' };
-        this.updateStatus(command, 'failed');
-
-        logger.warn(
-          { commandId: command.id, botName: command.targets[0], type: command.type, durationMs: elapsed },
-          'Command timed out',
-        );
+      const command = this.commands.get(commandId);
+      if (!command) {
+        this.startedCommands.delete(commandId);
+        continue;
       }
+
+      command.error = { code: 'TIMEOUT', message: 'Command timed out' };
+      this.updateStatus(command, 'failed');
+
+      logger.warn(
+        { commandId: command.id, botName: command.targets[0], type: command.type, durationMs: elapsed },
+        'Command timed out',
+      );
     }
   }
 
   // -- Cancel active command for a bot --
 
   private async cancelActiveCommandForBot(botName: string, reason: string): Promise<void> {
-    for (const command of this.commands.values()) {
-      if (command.status === 'started' && command.targets.includes(botName)) {
-        this.cancelCommand(command.id, reason);
-        logger.info(
-          { commandId: command.id, botName, type: command.type, reason },
-          'Active command superseded by new command',
-        );
-      }
+    // Use the started-commands index instead of scanning all commands.
+    // Snapshot the IDs because cancelCommand mutates startedCommands during iteration.
+    const candidateIds = [...this.startedCommands.keys()];
+    for (const id of candidateIds) {
+      const command = this.commands.get(id);
+      if (!command || command.status !== 'started') continue;
+      if (!command.targets.includes(botName)) continue;
+      this.cancelCommand(command.id, reason);
+      logger.info(
+        { commandId: command.id, botName, type: command.type, reason },
+        'Active command superseded by new command',
+      );
     }
   }
 
@@ -607,10 +623,12 @@ export class CommandCenter {
   // -- Status lifecycle --
 
   private logLifecycle(command: CommandRecord, message: string): void {
-    const durationMs = command.startedAt && command.completedAt
-      ? new Date(command.completedAt).getTime() - new Date(command.startedAt).getTime()
-      : command.startedAt
-        ? Date.now() - new Date(command.startedAt).getTime()
+    const startMs = this.startedAtMs.get(command.id);
+    const endMs = this.completedAtMs.get(command.id);
+    const durationMs = startMs !== undefined && endMs !== undefined
+      ? endMs - startMs
+      : startMs !== undefined
+        ? Date.now() - startMs
         : undefined;
 
     logger.info(
@@ -626,13 +644,21 @@ export class CommandCenter {
   }
 
   private updateStatus(command: CommandRecord, status: CommandStatus): void {
+    const prevStatus = command.status;
     command.status = status;
 
     if (status === 'started') {
-      command.startedAt = new Date().toISOString();
+      const nowMs = Date.now();
+      command.startedAt = new Date(nowMs).toISOString();
+      this.startedCommands.set(command.id, nowMs);
+      this.startedAtMs.set(command.id, nowMs);
+    } else if (prevStatus === 'started') {
+      this.startedCommands.delete(command.id);
     }
     if (status === 'succeeded' || status === 'failed' || status === 'cancelled') {
-      command.completedAt = new Date().toISOString();
+      const nowMs = Date.now();
+      command.completedAt = new Date(nowMs).toISOString();
+      this.completedAtMs.set(command.id, nowMs);
     }
 
     const eventKey = `command:${status}` as string;
@@ -674,7 +700,12 @@ export class CommandCenter {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.persistImmediate();
+      const all = [...this.commands.values()]
+        .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+        .slice(0, MAX_PERSISTED);
+      atomicWriteJson(DATA_PATH, { commands: all }).catch((err) => {
+        logger.error({ err }, 'Failed to persist commands');
+      });
     }, DEBOUNCE_MS);
   }
 
@@ -705,6 +736,21 @@ export class CommandCenter {
 
       for (const cmd of data.commands) {
         this.commands.set(cmd.id, cmd);
+        if (cmd.startedAt) {
+          const startedMs = Date.parse(cmd.startedAt);
+          if (!Number.isNaN(startedMs)) {
+            this.startedAtMs.set(cmd.id, startedMs);
+            if (cmd.status === 'started') {
+              this.startedCommands.set(cmd.id, startedMs);
+            }
+          }
+        }
+        if (cmd.completedAt) {
+          const completedMs = Date.parse(cmd.completedAt);
+          if (!Number.isNaN(completedMs)) {
+            this.completedAtMs.set(cmd.id, completedMs);
+          }
+        }
       }
 
       logger.info({ count: data.commands.length }, 'Loaded persisted commands');

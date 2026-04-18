@@ -406,7 +406,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     res.json({ relationships: allAffinities });
   });
 
-  // Global skill library — read from disk
+  // Global skill library — read from disk, cached and invalidated on index mtime
+  let skillsCache: { mtimeMs: number; payload: { skills: any[]; count: number } } | null = null;
   app.get('/api/skills', (_req: Request, res: Response) => {
     try {
       const indexPath = path.join(process.cwd(), 'skills', 'index.json');
@@ -414,8 +415,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         res.json({ skills: [], count: 0 });
         return;
       }
+      const indexMtime = fs.statSync(indexPath).mtimeMs;
+      if (skillsCache && skillsCache.mtimeMs === indexMtime) {
+        res.json(skillsCache.payload);
+        return;
+      }
       const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
-      // index.json is an array of skill metadata objects (name, description, file, ...)
       const entries: any[] = Array.isArray(index) ? index : Object.values(index);
       const skills = entries.map((entry: any) => {
         const name: string = entry?.name ?? '';
@@ -434,7 +439,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
           code,
         };
       });
-      res.json({ skills, count: skills.length });
+      const payload = { skills, count: skills.length };
+      skillsCache = { mtimeMs: indexMtime, payload };
+      res.json(payload);
     } catch {
       res.json({ skills: [], count: 0 });
     }
@@ -578,8 +585,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   //  METRICS ENDPOINT
   // ═══════════════════════════════════════
 
+  let metricsCache: { at: number; payload: any } | null = null;
+  const METRICS_TTL_MS = 30_000;
   app.get('/api/metrics', (_req: Request, res: Response) => {
     try {
+      if (metricsCache && Date.now() - metricsCache.at < METRICS_TTL_MS) {
+        res.json(metricsCache.payload);
+        return;
+      }
       const workers = botManager.getAllWorkers();
       const statuses = botManager.getAllBotStatuses();
 
@@ -752,7 +765,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         }
       }
 
-      res.json({
+      const payload = {
         timestamp: Date.now(),
         bots: {
           total: totalBots,
@@ -776,7 +789,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         commander: commanderMetrics,
         fleet: fleetMetrics,
         skills: { count: skillCount },
-      });
+      };
+      metricsCache = { at: Date.now(), payload };
+      res.json(payload);
     } catch (err) {
       logger.error({ err }, 'Failed to gather metrics');
       res.status(500).json({ error: 'Failed to gather metrics' });

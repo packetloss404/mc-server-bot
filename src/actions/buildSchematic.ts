@@ -43,14 +43,21 @@ export async function buildSchematic(
     ? new Vec3(origin.x, origin.y, origin.z)
     : bot.entity.position.floored();
 
-  // Collect all non-air blocks, sorted bottom-up (Y ascending) for structural integrity
+  // Collect all non-air blocks, sorted bottom-up (Y ascending) for structural integrity.
+  // Within each Y layer, snake the Z direction so consecutive blocks share an edge —
+  // this minimizes pathfinder.setGoal calls (only fires when distance > 4).
   const blocks: { pos: Vec3; name: string; properties: Record<string, string> }[] = [];
   const start = schematic.start();
   const end = schematic.end();
 
+  let layerIdx = 0;
   for (let y = start.y; y <= end.y; y++) {
-    for (let z = start.z; z <= end.z; z++) {
-      for (let x = start.x; x <= end.x; x++) {
+    const reverseZ = layerIdx % 2 === 1;
+    for (let zStep = 0; zStep <= end.z - start.z; zStep++) {
+      const z = reverseZ ? end.z - zStep : start.z + zStep;
+      const reverseX = ((zStep + (reverseZ ? 1 : 0)) % 2) === 1;
+      for (let xStep = 0; xStep <= end.x - start.x; xStep++) {
+        const x = reverseX ? end.x - xStep : start.x + xStep;
         const localPos = new Vec3(x, y, z);
         const block = schematic.getBlock(localPos);
         if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
@@ -62,6 +69,7 @@ export async function buildSchematic(
         }
       }
     }
+    layerIdx++;
   }
 
   const total = blocks.length;

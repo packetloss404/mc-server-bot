@@ -44,6 +44,7 @@ export interface BotOptions {
   sharedWorldModel?: SharedWorldModel;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
+  onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
 }
 
 export class BotInstance {
@@ -70,6 +71,7 @@ export class BotInstance {
   private sharedWorldModel: SharedWorldModel | null;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private onReputationEvent?: (event: any) => void;
+  private onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
   private botComms: BotComms;
@@ -81,6 +83,9 @@ export class BotInstance {
   private voyagerPausedByInstinct = false;
   private lastAttackedAt = 0;
   private lastHealth = 20;
+  /** Cached world observation. The 512-block scan in renderObservation is expensive,
+   *  so we reuse it across rapid getDetailedStatus polls and refresh at most every 10s. */
+  private cachedWorld: { at: number; world: any } | null = null;
   private lastAttackerName: string | null = null;
   private statsTracker = new StatsTracker('./data');
   private static CHAT_COOLDOWN_MS = 3000;
@@ -99,6 +104,7 @@ export class BotInstance {
     this.sharedWorldModel = options.sharedWorldModel ?? null;
     this.onSwarmDirective = options.onSwarmDirective;
     this.onReputationEvent = options.onReputationEvent;
+    this.onVoyagerLoopCreated = options.onVoyagerLoopCreated;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = BotComms.getInstance();
     this.botComms.registerBot(this.name);
@@ -125,6 +131,17 @@ export class BotInstance {
 
     this.state = BotState.SPAWNING;
     logger.info({ bot: this.name }, 'Connecting to Minecraft server...');
+
+    // Reconnect path: tear down the previous bot object explicitly so its
+    // listeners don't keep references to closures from the previous lifecycle.
+    if (this.bot) {
+      try { this.bot.removeAllListeners(); } catch {}
+      try { this.bot.end(); } catch {}
+      this.bot = null;
+    }
+    // The chat listener guard is per-bot-object — reset so the new bot
+    // actually gets a chat listener on spawn.
+    this.chatListenerBound = false;
 
     this.bot = mineflayer.createBot({
       host: this.config.minecraft.host,
@@ -447,10 +464,12 @@ export class BotInstance {
       return;
     }
 
-    const delay = Math.min(
+    const baseDelay = Math.min(
       this.config.bots.reconnectDelaySec * Math.pow(2, this.reconnectAttempts) * 1000,
       30000
     );
+    const jitter = baseDelay * (Math.random() * 0.5 - 0.25);
+    const delay = Math.max(0, Math.round(baseDelay + jitter));
     this.reconnectAttempts++;
 
     logger.info({ bot: this.name, delay, attempt: this.reconnectAttempts }, 'Scheduling reconnect');
@@ -471,69 +490,108 @@ export class BotInstance {
   startHeadTracking(): void {
     if (this.headTrackingInterval) return;
 
-    this.headTrackingInterval = setInterval(() => {
-      if (!this.bot || this.state === BotState.DISCONNECTED) return;
-      if (this.mode === BotMode.CODEGEN && this.voyagerLoop?.getCurrentTask()) return;
-      if (this.state === BotState.EXECUTING_TASK) return;
+    const fastMs = this.config.behavior.headTrackingTickMs;
+    // Idle cadence: poll at most 1Hz when no players are in range. We still
+    // need to detect when a player walks up, but 4Hz forever is wasteful.
+    const idleMs = Math.max(fastMs * 4, 1000);
 
-      const players = Object.values(this.bot.players).filter(
-        (p) => p.entity && p.username !== this.bot!.username
-      );
+    const tick = () => {
+      let nextDelay = fastMs;
+      try {
+        if (!this.bot || this.state === BotState.DISCONNECTED) {
+          nextDelay = idleMs;
+          return;
+        }
+        if (this.mode === BotMode.CODEGEN && this.voyagerLoop?.getCurrentTask()) {
+          nextDelay = idleMs;
+          return;
+        }
+        if (this.state === BotState.EXECUTING_TASK) {
+          nextDelay = idleMs;
+          return;
+        }
 
-      if (players.length === 0) return;
+        const players = Object.values(this.bot.players).filter(
+          (p) => p.entity && p.username !== this.bot!.username
+        );
 
-      // Find nearest player
-      const botPos = this.bot.entity.position;
-      let nearest = players[0];
-      let nearestDist = Infinity;
+        if (players.length === 0) {
+          nextDelay = idleMs;
+          return;
+        }
 
-      for (const p of players) {
-        if (!p.entity) continue;
-        const dist = p.entity.position.distanceTo(botPos);
-        if (dist < nearestDist) {
-          nearest = p;
-          nearestDist = dist;
+        const botPos = this.bot.entity.position;
+        let nearest = players[0];
+        let nearestDist = Infinity;
+        for (const p of players) {
+          if (!p.entity) continue;
+          const dist = p.entity.position.distanceTo(botPos);
+          if (dist < nearestDist) {
+            nearest = p;
+            nearestDist = dist;
+          }
+        }
+
+        if (nearest.entity && nearestDist < this.config.behavior.headTrackingRange) {
+          const headPos = nearest.entity.position.offset(0, nearest.entity.height, 0);
+          this.bot.lookAt(headPos);
+          nextDelay = fastMs;
+        } else {
+          nextDelay = idleMs;
+        }
+      } finally {
+        if (this.headTrackingInterval !== null && !this.destroyed) {
+          this.headTrackingInterval = setTimeout(tick, nextDelay);
         }
       }
+    };
 
-      if (nearest.entity && nearestDist < this.config.behavior.headTrackingRange) {
-        const headPos = nearest.entity.position.offset(0, nearest.entity.height, 0);
-        this.bot.lookAt(headPos);
-      }
-    }, this.config.behavior.headTrackingTickMs);
+    // Mark as started; tick() reassigns the timer each iteration.
+    this.headTrackingInterval = setTimeout(tick, fastMs);
   }
 
   startWandering(): void {
     if (this.wanderInterval) return;
 
-    this.wanderInterval = setInterval(() => {
-      if (!this.bot || this.state !== BotState.IDLE) return;
+    const baseMs = this.config.behavior.wanderIntervalMs;
+    // ±20% jitter so multi-bot fleets don't tick in lockstep.
+    const nextDelay = () => Math.round(baseMs * (0.8 + Math.random() * 0.4));
 
-      const { goals } = require('mineflayer-pathfinder');
-      const pos = this.bot.entity.position;
-      const radius = this.config.behavior.wanderRadius;
+    const tick = () => {
+      try {
+        if (!this.bot || this.state !== BotState.IDLE) return;
 
-      const dx = (Math.random() - 0.5) * 2 * radius;
-      const dz = (Math.random() - 0.5) * 2 * radius;
-      const target = pos.offset(dx, 0, dz);
+        const { goals } = require('mineflayer-pathfinder');
+        const pos = this.bot.entity.position;
+        const radius = this.config.behavior.wanderRadius;
 
-      this.state = BotState.WANDERING;
-      this.bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 2));
+        const dx = (Math.random() - 0.5) * 2 * radius;
+        const dz = (Math.random() - 0.5) * 2 * radius;
+        const target = pos.offset(dx, 0, dz);
 
-      this.bot.once('goal_reached', () => {
-        if (this.state === BotState.WANDERING) {
-          this.state = BotState.IDLE;
+        this.state = BotState.WANDERING;
+        this.bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 2));
+
+        this.bot.once('goal_reached', () => {
+          if (this.state === BotState.WANDERING) {
+            this.state = BotState.IDLE;
+          }
+        });
+
+        setTimeout(() => {
+          if (this.state === BotState.WANDERING && this.bot) {
+            this.bot.pathfinder.setGoal(null);
+            this.state = BotState.IDLE;
+          }
+        }, 15000);
+      } finally {
+        if (this.wanderInterval !== null && !this.destroyed) {
+          this.wanderInterval = setTimeout(tick, nextDelay());
         }
-      });
+      }
+    };
 
-      // Timeout: go idle if pathfinding takes too long
-      setTimeout(() => {
-        if (this.state === BotState.WANDERING && this.bot) {
-          this.bot.pathfinder.setGoal(null);
-          this.state = BotState.IDLE;
-        }
-      }, 15000);
-    }, this.config.behavior.wanderIntervalMs);
+    this.wanderInterval = setTimeout(tick, nextDelay());
   }
 
   private chatListenerBound = false;
@@ -839,6 +897,13 @@ export class BotInstance {
     if (this.onReputationEvent) {
       this.voyagerLoop.setReputationNotifier(this.onReputationEvent);
     }
+    if (this.onVoyagerLoopCreated) {
+      try {
+        this.onVoyagerLoopCreated(this.voyagerLoop);
+      } catch (err) {
+        logger.warn({ err: (err as any)?.message, bot: this.name }, 'onVoyagerLoopCreated callback failed');
+      }
+    }
 
     this.voyagerLoop.start();
   }
@@ -906,32 +971,44 @@ export class BotInstance {
 
   private startInstinctLoop(): void {
     if (this.instinctInterval || !this.bot) return;
-    this.instinctInterval = setInterval(() => {
-      if (!this.bot || !this.instinctActive) return;
-      if (this.bot.health <= 0) return;
 
-      if (this.isDrowning()) {
-        this.runSurfaceInstinct();
-        return;
-      }
+    // ±20% jitter on the 1s tick so instinct loops across many bots don't sync.
+    const nextDelay = () => Math.round(1000 * (0.8 + Math.random() * 0.4));
 
-      if (this.instinctReason === 'hazard') {
-        this.stopInstinct('hazard-cleared');
-        return;
-      }
+    const tick = () => {
+      try {
+        if (!this.bot || !this.instinctActive) return;
+        if (this.bot.health <= 0) return;
 
-      const threat = this.findLikelyThreat();
-      if (!threat) {
-        logger.info({ bot: this.name }, 'Instinct active but no nearby threat found');
-        return;
-      }
+        if (this.isDrowning()) {
+          this.runSurfaceInstinct();
+          return;
+        }
 
-      if (this.shouldFight(threat)) {
-        this.runFightInstinct(threat);
-      } else {
-        this.runFleeInstinct(threat);
+        if (this.instinctReason === 'hazard') {
+          this.stopInstinct('hazard-cleared');
+          return;
+        }
+
+        const threat = this.findLikelyThreat();
+        if (!threat) {
+          logger.info({ bot: this.name }, 'Instinct active but no nearby threat found');
+          return;
+        }
+
+        if (this.shouldFight(threat)) {
+          this.runFightInstinct(threat);
+        } else {
+          this.runFleeInstinct(threat);
+        }
+      } finally {
+        if (this.instinctInterval !== null && this.instinctActive && !this.destroyed) {
+          this.instinctInterval = setTimeout(tick, nextDelay());
+        }
       }
-    }, 1000);
+    };
+
+    this.instinctInterval = setTimeout(tick, nextDelay());
   }
 
   private stopInstinct(reason: string): void {
@@ -940,7 +1017,7 @@ export class BotInstance {
       this.instinctResumeTimeout = null;
     }
     if (this.instinctInterval) {
-      clearInterval(this.instinctInterval);
+      clearTimeout(this.instinctInterval);
       this.instinctInterval = null;
     }
     if (!this.instinctActive) return;
@@ -1088,11 +1165,11 @@ export class BotInstance {
   private stopAmbientBehaviors(): void {
     this.stopInstinct('stop-ambient-behaviors');
     if (this.headTrackingInterval) {
-      clearInterval(this.headTrackingInterval);
+      clearTimeout(this.headTrackingInterval);
       this.headTrackingInterval = null;
     }
     if (this.wanderInterval) {
-      clearInterval(this.wanderInterval);
+      clearTimeout(this.wanderInterval);
       this.wanderInterval = null;
     }
     if (this.ambientChatTimeout) {
@@ -1202,18 +1279,27 @@ export class BotInstance {
     const heldItem = this.bot.heldItem;
     const equipment = heldItem ? { name: heldItem.name, count: heldItem.count } : null;
 
-    // World context via Observation
-    let world = null;
-    try {
-      const obs = renderObservation(this.bot);
-      world = {
-        biome: obs.biome,
-        timeOfDay: obs.timeOfDay,
-        isRaining: this.bot.isRaining,
-        nearbyBlocks: obs.nearbyBlocks,
-        nearbyEntities: obs.nearbyEntities,
-      };
-    } catch { /* bot may not be fully spawned */ }
+    // World context via Observation. renderObservation does a 512-block scan
+    // that's too expensive to run on every 2s status push — cache 10s.
+    const WORLD_TTL_MS = 10_000;
+    let world: any = null;
+    if (this.cachedWorld && Date.now() - this.cachedWorld.at < WORLD_TTL_MS) {
+      world = this.cachedWorld.world;
+      // Keep the volatile fields fresh (cheap to read).
+      world = { ...world, isRaining: this.bot.isRaining };
+    } else {
+      try {
+        const obs = renderObservation(this.bot);
+        world = {
+          biome: obs.biome,
+          timeOfDay: obs.timeOfDay,
+          isRaining: this.bot.isRaining,
+          nearbyBlocks: obs.nearbyBlocks,
+          nearbyEntities: obs.nearbyEntities,
+        };
+        this.cachedWorld = { at: Date.now(), world };
+      } catch { /* bot may not be fully spawned */ }
+    }
 
     // Voyager state
     let voyager = null;

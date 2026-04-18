@@ -32,20 +32,19 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // Initial fetch
     fetchAll();
 
-    // Poll bots every 5s as a fallback
+    // Polling is a fallback — sockets already push real-time updates.
+    // Long intervals to keep server CPU low; sockets cover the active path.
     const pollInterval = setInterval(() => {
       api.getBots().then((data) => setBots(data.bots)).catch(() => {});
-    }, 5000);
+    }, 15000);
 
-    // Poll world state every 30s
     const worldInterval = setInterval(() => {
       api.getWorld().then((data) => setWorld(data)).catch(() => {});
-    }, 30000);
+    }, 60000);
 
-    // Poll players every 10s
     const playerInterval = setInterval(() => {
       api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
-    }, 10000);
+    }, 30000);
 
     // Socket.IO
     const socket = getSocket();
@@ -104,15 +103,24 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     // ── Control platform events: on any change, refetch the affected list. ──
-    // Using zustand getState() avoids re-subscribing when setters change.
-    const refetchMarkers = () => api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {});
-    const refetchZones = () => api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {});
-    const refetchRoutes = () => api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {});
-    const refetchSquads = () => api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {});
-    const refetchMissions = () => api.getMissions().then((d) => useMissionStore.getState().setMissions(d.missions)).catch(() => {});
-    const refetchCommands = () => api.getCommands().then((d) => useControlStore.getState().setCommands(d.commands)).catch(() => {});
-    const refetchBuilds = () => api.getBuilds().then((d) => useBuildStore.getState().setBuilds(d.builds)).catch(() => {});
-    const refetchChains = () => api.getChains().then((d) => useChainStore.getState().setChains(d.chains)).catch(() => {});
+    // Refetches are debounced so bursty events (e.g. build:progress per-block)
+    // collapse into one HTTP call per ~500ms.
+    const debounce = (fn: () => void, ms = 500) => {
+      let t: ReturnType<typeof setTimeout> | null = null;
+      return () => {
+        if (t) return;
+        t = setTimeout(() => { t = null; fn(); }, ms);
+      };
+    };
+    const refetchMarkers = debounce(() => { api.getMarkers().then((d) => useWorldStore.getState().setMarkers(d.markers)).catch(() => {}); });
+    const refetchZones = debounce(() => { api.getZones().then((d) => useWorldStore.getState().setZones(d.zones)).catch(() => {}); });
+    const refetchRoutes = debounce(() => { api.getRoutes().then((d) => useWorldStore.getState().setRoutes(d.routes)).catch(() => {}); });
+    const refetchSquads = debounce(() => { api.getSquads().then((d) => useFleetStore.getState().setSquads(d.squads)).catch(() => {}); });
+    const refetchMissions = debounce(() => { api.getMissions().then((d) => useMissionStore.getState().setMissions(d.missions)).catch(() => {}); });
+    const refetchCommands = debounce(() => { api.getCommands().then((d) => useControlStore.getState().setCommands(d.commands)).catch(() => {}); });
+    const refetchBuilds = debounce(() => { api.getBuilds().then((d) => useBuildStore.getState().setBuilds(d.builds)).catch(() => {}); }, 1000);
+    const refetchChains = debounce(() => { api.getChains().then((d) => useChainStore.getState().setChains(d.chains)).catch(() => {}); });
+    const refetchRoles = debounce(() => { api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments?.(d.assignments)).catch(() => {}); });
 
     socket.on('marker:created', refetchMarkers);
     socket.on('marker:updated', refetchMarkers);
@@ -126,7 +134,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
 
     socket.on('squad:updated', refetchSquads);
     socket.on('squad:deleted', refetchSquads);
-    socket.on('role:updated', () => useRoleStore.getState().setAssignments?.([]));
+    socket.on('role:updated', refetchRoles);
 
     socket.on('mission:created', refetchMissions);
     socket.on('mission:updated', refetchMissions);

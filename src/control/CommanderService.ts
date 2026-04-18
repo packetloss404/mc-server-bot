@@ -221,7 +221,11 @@ export class CommanderService {
   }
 
   upsertHistory(entry: CommanderHistoryEntry): void {
-    this.history = [entry, ...this.history.filter((item) => item.planId !== entry.planId)].slice(0, MAX_HISTORY);
+    // Locate existing in one pass instead of allocating a new filtered array.
+    const idx = this.history.findIndex((item) => item.planId === entry.planId);
+    if (idx >= 0) this.history.splice(idx, 1);
+    this.history.unshift(entry);
+    if (this.history.length > MAX_HISTORY) this.history.length = MAX_HISTORY;
     this.scheduleSave();
   }
 
@@ -355,9 +359,18 @@ export class CommanderService {
     'Patrol the perimeter with guards',
   ];
 
+  private suggestionRotation = 0;
   getSuggestedCommands(): string[] {
-    const shuffled = [...CommanderService.SUGGESTED_COMMANDS].sort(() => Math.random() - 0.5);
-    return shuffled.slice(0, 4);
+    // Deterministic rotation instead of Math.random sort — avoids re-shuffling
+    // the static list on every parse/clarify call.
+    const list = CommanderService.SUGGESTED_COMMANDS;
+    const start = this.suggestionRotation % list.length;
+    this.suggestionRotation = (this.suggestionRotation + 1) % list.length;
+    const out: string[] = [];
+    for (let i = 0; i < 4 && i < list.length; i++) {
+      out.push(list[(start + i) % list.length]);
+    }
+    return out;
   }
 
   // ── Parameter validation ───────────────────────────────

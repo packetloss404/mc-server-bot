@@ -5,7 +5,7 @@ import { BotManager } from '../bot/BotManager';
 import { CommandCenter } from './CommandCenter';
 import { SquadManager } from './SquadManager';
 import { logger } from '../util/logger';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { atomicWriteJsonSync, atomicWriteJson } from '../util/atomicWrite';
 import {
   MissionRecord,
   MissionStatus,
@@ -57,6 +57,8 @@ export class MissionManager {
   private squadManager?: SquadManager;
   private missionTaskDescriptions: Map<string, string> = new Map();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Squad-resolved assignee cache. Keyed by mission ID; invalidated when squad version bumps. */
+  private resolvedAssignees: Map<string, { squadVersion: number; bots: string[] }> = new Map();
 
   constructor(botManager: BotManager, io: SocketIOServer) {
     this.botManager = botManager;
@@ -91,6 +93,12 @@ export class MissionManager {
       return [];
     }
 
+    const squadVersion = this.squadManager.getVersion();
+    const cached = this.resolvedAssignees.get(mission.id);
+    if (cached && cached.squadVersion === squadVersion) {
+      return cached.bots;
+    }
+
     const botNames: string[] = [];
     for (const squadId of mission.assigneeIds) {
       const squad = this.squadManager.getSquad(squadId);
@@ -103,7 +111,9 @@ export class MissionManager {
         );
       }
     }
-    return [...new Set(botNames)];
+    const bots = [...new Set(botNames)];
+    this.resolvedAssignees.set(mission.id, { squadVersion, bots });
+    return bots;
   }
 
   private missionTargetsBot(mission: MissionRecord, botName: string): boolean {
@@ -544,7 +554,13 @@ export class MissionManager {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      this.saveImmediate();
+      const data = {
+        missions: Array.from(this.missions.values()),
+        botQueues: Object.fromEntries(this.botMissionQueues),
+      };
+      atomicWriteJson(MISSIONS_FILE, data).catch((err) => {
+        logger.error({ err }, 'Failed to save missions file');
+      });
     }, DEBOUNCE_MS);
   }
 
@@ -578,6 +594,7 @@ export class MissionManager {
     for (const [id, m] of this.missions) {
       if ((m.status === 'completed' || m.status === 'failed') && now - m.updatedAt > ONE_DAY) {
         this.missions.delete(id);
+        this.resolvedAssignees.delete(id);
         removed++;
       }
     }
@@ -588,6 +605,7 @@ export class MissionManager {
       for (const id of Array.from(this.missions.keys())) {
         if (!keep.has(id)) {
           this.missions.delete(id);
+          this.resolvedAssignees.delete(id);
           removed++;
         }
       }

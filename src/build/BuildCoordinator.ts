@@ -48,6 +48,12 @@ interface BlockEntry {
   localY: number;
 }
 
+interface CachedSchematic {
+  size: { x: number; y: number; z: number };
+  /** Blocks in schematic-local coordinates (relative to start). */
+  blocks: Array<{ rx: number; ry: number; rz: number; name: string; stateStr: string }>;
+}
+
 // ── Build Coordinator ───────────────────────────────────────
 
 export class BuildCoordinator {
@@ -62,6 +68,8 @@ export class BuildCoordinator {
   private persistTimer: NodeJS.Timeout | null = null;
   /** Original options for each job, kept for resume. */
   private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean }>();
+  /** Parsed-schematic cache, keyed by filename. Invalidated when file mtime changes. */
+  private schematicCache = new Map<string, { mtimeMs: number; data: CachedSchematic }>();
 
   constructor(botManager: BotManager, io: SocketIOServer, eventLog: EventLog) {
     this.botManager = botManager;
@@ -136,39 +144,18 @@ export class BuildCoordinator {
   }
 
   private async resumeJob(job: BuildJob): Promise<void> {
-    const { Schematic } = require('prismarine-schematic');
     const fullPath = path.join(this.schematicsDir, job.schematicFile);
     if (!fs.existsSync(fullPath)) {
       throw new Error(`Schematic file missing for resume: ${job.schematicFile}`);
     }
-    const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer, await this.getBotVersion());
+    const cached = await this.loadSchematicCached(job.schematicFile);
     const ox = job.origin.x, oy = job.origin.y, oz = job.origin.z;
-    const start = schematic.start();
-    const end = schematic.end();
-    const sx = start.x, sy = start.y, sz = start.z;
-
-    // Re-collect blocks in the same deterministic order as startBuild.
-    const blocks: BlockEntry[] = [];
-    const tempPos = new Vec3(0, 0, 0);
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          tempPos.x = x; tempPos.y = y; tempPos.z = z;
-          const block = schematic.getBlock(tempPos);
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            const props = block.getProperties ? block.getProperties() : {};
-            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
-            blocks.push({
-              wx: ox + x - sx, wy: oy + y - sy, wz: oz + z - sz,
-              name: block.name,
-              stateStr,
-              localY: y - sy,
-            });
-          }
-        }
-      }
-    }
+    const blocks: BlockEntry[] = cached.blocks.map((b) => ({
+      wx: ox + b.rx, wy: oy + b.ry, wz: oz + b.rz,
+      name: b.name,
+      stateStr: b.stateStr,
+      localY: b.ry,
+    }));
 
     job.status = 'running';
     this.io.emit('build:started', job);
@@ -178,6 +165,48 @@ export class BuildCoordinator {
       this.io.emit('build:completed', { ...job, error: err.message });
       this.schedulePersist();
     });
+  }
+
+  // ── Schematic parsing & cache ──────────────────────────
+
+  /**
+   * Load a schematic, returning blocks in schematic-local coords.
+   * Result is cached by filename+mtime so repeated startBuild/resumeJob calls
+   * for the same file skip the NBT parse + triple-nested iteration.
+   */
+  private async loadSchematicCached(filename: string): Promise<CachedSchematic> {
+    const fullPath = path.join(this.schematicsDir, filename);
+    const mtimeMs = fs.statSync(fullPath).mtimeMs;
+    const cached = this.schematicCache.get(filename);
+    if (cached && cached.mtimeMs === mtimeMs) return cached.data;
+
+    const { Schematic } = require('prismarine-schematic');
+    const buffer = fs.readFileSync(fullPath);
+    const schematic = await Schematic.read(buffer, await this.getBotVersion());
+    const start = schematic.start();
+    const end = schematic.end();
+    const sx = start.x, sy = start.y, sz = start.z;
+    const size = schematic.size;
+
+    const blocks: CachedSchematic['blocks'] = [];
+    const tempPos = new Vec3(0, 0, 0);
+    for (let y = start.y; y <= end.y; y++) {
+      for (let z = start.z; z <= end.z; z++) {
+        for (let x = start.x; x <= end.x; x++) {
+          tempPos.x = x; tempPos.y = y; tempPos.z = z;
+          const block = schematic.getBlock(tempPos);
+          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
+            const props = block.getProperties ? block.getProperties() : {};
+            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
+            blocks.push({ rx: x - sx, ry: y - sy, rz: z - sz, name: block.name, stateStr });
+          }
+        }
+      }
+    }
+
+    const data: CachedSchematic = { size: { x: size.x, y: size.y, z: size.z }, blocks };
+    this.schematicCache.set(filename, { mtimeMs, data });
+    return data;
   }
 
   // ── Schematic listing ───────────────────────────────────
@@ -223,7 +252,6 @@ export class BuildCoordinator {
 
   /** Safe metadata loader — gets dimensions without holding the full schematic in memory */
   private async getSchematicInfoSafe(filename: string): Promise<SchematicInfo | null> {
-    const { Schematic } = require('prismarine-schematic');
     const fullPath = path.join(this.schematicsDir, filename);
     if (!fs.existsSync(fullPath)) return null;
 
@@ -238,43 +266,19 @@ export class BuildCoordinator {
       return { filename, size: { x: estDim, y: Math.round(estDim * 0.6), z: estDim }, blockCount: Math.round(estVoxels * 0.15) };
     }
 
-    let schematic: any;
     try {
-      const buffer = fs.readFileSync(fullPath);
-      schematic = await Schematic.read(buffer, await this.getBotVersion());
+      const cached = await this.loadSchematicCached(filename);
+      const size = cached.size;
+      const volume = size.x * size.y * size.z;
+      // For very large schematics, estimate block count and skip iteration
+      if (volume > 200_000) {
+        return { filename, size, blockCount: Math.round(volume * 0.15) };
+      }
+      return { filename, size, blockCount: cached.blocks.length };
     } catch (err: any) {
       logger.warn({ filename, err: err.message }, 'Failed to parse schematic');
       return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };
     }
-
-    const size = schematic.size;
-    const volume = size.x * size.y * size.z;
-
-    // For large schematics, estimate block count and skip iteration
-    if (volume > 200_000) {
-      schematic = null; // release memory
-      return { filename, size: { x: size.x, y: size.y, z: size.z }, blockCount: Math.round(volume * 0.15) };
-    }
-
-    // For smaller schematics, count actual blocks
-    const start = schematic.start();
-    const end = schematic.end();
-    let blockCount = 0;
-    const tempPos = new Vec3(0, 0, 0);
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          tempPos.x = x; tempPos.y = y; tempPos.z = z;
-          const block = schematic.getBlock(tempPos);
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            blockCount++;
-          }
-        }
-      }
-    }
-    schematic = null; // release memory
-
-    return { filename, size: { x: size.x, y: size.y, z: size.z }, blockCount };
   }
 
   async getSchematicInfoAsync(filename: string): Promise<SchematicInfo | null> {
@@ -289,7 +293,6 @@ export class BuildCoordinator {
     botNames: string[],
     options?: { cleanupBotNames?: string[]; fillFoundation?: boolean; snapToGround?: boolean },
   ): Promise<BuildJob> {
-    const { Schematic } = require('prismarine-schematic');
     const fullPath = path.join(this.schematicsDir, schematicFile);
 
     if (!fs.existsSync(fullPath)) {
@@ -310,46 +313,20 @@ export class BuildCoordinator {
       throw new Error(`Schematic file too large (${(fileStat.size / 1_000_000).toFixed(1)}MB). Max file size: 10MB.`);
     }
 
-    // Load schematic
-    const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer, await this.getBotVersion());
-
-    // Check volume before iterating — reject if too large
-    const schSize = schematic.size;
+    const cached = await this.loadSchematicCached(schematicFile);
+    const schSize = cached.size;
     const volume = schSize.x * schSize.y * schSize.z;
     if (volume > 2_000_000) {
       throw new Error(`Schematic volume too large (${schSize.x}x${schSize.y}x${schSize.z} = ${volume.toLocaleString()} voxels). Max 2M voxels.`);
     }
 
     const ox = origin.x, oy = origin.y, oz = origin.z;
-    const start = schematic.start();
-    const end = schematic.end();
-    const sx = start.x, sy = start.y, sz = start.z;
-
-    // Collect all non-air blocks as lightweight objects (no Vec3 to save memory)
-    const blocks: BlockEntry[] = [];
-    const tempPos = new Vec3(0, 0, 0); // reuse single Vec3
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          tempPos.x = x; tempPos.y = y; tempPos.z = z;
-          const block = schematic.getBlock(tempPos);
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            const props = block.getProperties ? block.getProperties() : {};
-            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
-            blocks.push({
-              wx: ox + x - sx, wy: oy + y - sy, wz: oz + z - sz,
-              name: block.name,
-              stateStr,
-              localY: y - sy,
-            });
-          }
-        }
-      }
-    }
-    // Free schematic from memory
-    // @ts-ignore
-    buffer.fill(0);
+    const blocks: BlockEntry[] = cached.blocks.map((b) => ({
+      wx: ox + b.rx, wy: oy + b.ry, wz: oz + b.rz,
+      name: b.name,
+      stateStr: b.stateStr,
+      localY: b.ry,
+    }));
 
     if (blocks.length === 0) {
       throw new Error('Schematic contains no blocks');
@@ -377,19 +354,29 @@ export class BuildCoordinator {
         if (!footprintXZ.has(key)) footprintXZ.set(key, { wx: b.wx, wz: b.wz });
       }
 
-      // Sample up to 50 evenly-spaced columns
+      // Sample up to 50 evenly-spaced columns. Probe columns in parallel chunks
+      // so we issue ~10 concurrent IPC scans instead of one at a time.
       const allColumns = [...footprintXZ.values()];
       const sampleStep = Math.max(1, Math.floor(allColumns.length / 50));
-      const samples: number[] = [];
+      const sampledColumns: { wx: number; wz: number }[] = [];
       for (let i = 0; i < allColumns.length; i += sampleStep) {
-        const col = allColumns[i];
-        // Scan downward from origin Y + 10 to find the first solid block
-        for (let y = oy + 10; y >= oy - 30; y--) {
-          const wb = await probeHandle.getBlockAt(col.wx, y, col.wz);
-          if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
-            samples.push(y + 1); // ground surface is top of this block
-            break;
+        sampledColumns.push(allColumns[i]);
+      }
+      const samples: number[] = [];
+      const PROBE_CONCURRENCY = 10;
+      for (let i = 0; i < sampledColumns.length; i += PROBE_CONCURRENCY) {
+        const chunk = sampledColumns.slice(i, i + PROBE_CONCURRENCY);
+        const results = await Promise.all(chunk.map(async (col) => {
+          for (let y = oy + 10; y >= oy - 30; y--) {
+            const wb = await probeHandle.getBlockAt(col.wx, y, col.wz);
+            if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
+              return y + 1;
+            }
           }
+          return null;
+        }));
+        for (const r of results) {
+          if (r !== null) samples.push(r);
         }
       }
 
@@ -435,42 +422,48 @@ export class BuildCoordinator {
       let skippedLiquid = 0;
       let skippedOutOfRange = 0;
 
-      for (const [key, minBlockY] of columnMinY) {
-        const [wxStr, wzStr] = key.split(',');
-        const wx = parseInt(wxStr, 10);
-        const wz = parseInt(wzStr, 10);
-
-        // Scan downward from minBlockY - 1 to find ground
-        let filledCount = 0;
-        for (let y = minBlockY - 1; y >= minBlockY - MAX_FILL_DEPTH; y--) {
-          const wb = await probeHandle.getBlockAt(wx, y, wz);
-          if (!wb) {
-            // Bot too far to query — skip this column
-            skippedOutOfRange++;
-            break;
+      const columnEntries = [...columnMinY.entries()];
+      const FOUNDATION_CONCURRENCY = 10;
+      for (let ci = 0; ci < columnEntries.length; ci += FOUNDATION_CONCURRENCY) {
+        const chunk = columnEntries.slice(ci, ci + FOUNDATION_CONCURRENCY);
+        const results = await Promise.all(chunk.map(async ([key, minBlockY]) => {
+          const [wxStr, wzStr] = key.split(',');
+          const wx = parseInt(wxStr, 10);
+          const wz = parseInt(wzStr, 10);
+          const fills: BlockEntry[] = [];
+          let outcome: 'ok' | 'liquid' | 'out_of_range' = 'ok';
+          let liquidName = '';
+          let liquidY = 0;
+          for (let y = minBlockY - 1; y >= minBlockY - MAX_FILL_DEPTH; y--) {
+            const wb = await probeHandle.getBlockAt(wx, y, wz);
+            if (!wb) { outcome = 'out_of_range'; break; }
+            if (wb.name === 'air' || wb.name === 'cave_air' || wb.name === 'void_air') {
+              fills.push({
+                wx, wy: y, wz,
+                name: 'stone',
+                stateStr: '',
+                localY: -1 - fills.length,
+              });
+            } else if (wb.name === 'water' || wb.name === 'lava'
+              || wb.name === 'flowing_water' || wb.name === 'flowing_lava') {
+              outcome = 'liquid'; liquidName = wb.name; liquidY = y; break;
+            } else {
+              break;
+            }
           }
-
-          if (wb.name === 'air' || wb.name === 'cave_air' || wb.name === 'void_air') {
-            // Air gap — fill with stone
-            foundationBlocks.push({
-              wx, wy: y, wz,
-              name: 'stone',
-              stateStr: '',
-              localY: -1 - filledCount, // negative localY so they sort before schematic blocks
-            });
-            filledCount++;
-          } else if (wb.name === 'water' || wb.name === 'lava'
-            || wb.name === 'flowing_water' || wb.name === 'flowing_lava') {
+          return { wx, wz, fills, outcome, liquidName, liquidY };
+        }));
+        for (const r of results) {
+          if (r.outcome === 'out_of_range') {
+            skippedOutOfRange++;
+          } else if (r.outcome === 'liquid') {
             logger.warn(
-              { wx, y, wz, liquid: wb.name },
+              { wx: r.wx, y: r.liquidY, wz: r.wz, liquid: r.liquidName },
               'Foundation fill: liquid detected under schematic, skipping column',
             );
             skippedLiquid++;
-            break;
-          } else {
-            // Hit solid ground — done with this column
-            break;
           }
+          for (const f of r.fills) foundationBlocks.push(f);
         }
       }
 
@@ -498,7 +491,7 @@ export class BuildCoordinator {
 
     // Determine Y range
     const minLocalY = 0;
-    const maxLocalY = end.y - start.y;
+    const maxLocalY = schSize.y - 1;
 
     // Partition by block count so each bot gets roughly equal work
     // Group blocks by Y layer, then assign layers to bots greedily
@@ -659,6 +652,19 @@ export class BuildCoordinator {
   ): Promise<void> {
     const job = this.jobs.get(jobId)!;
 
+    // Pre-partition blocks by bot in a single pass so each parallel worker
+    // doesn't re-filter the full block array.
+    const blocksByBot = new Map<string, BlockEntry[]>();
+    for (const a of assignments) blocksByBot.set(a.botName, []);
+    for (const b of blocks) {
+      for (const a of assignments) {
+        if (b.localY >= a.yMin && b.localY <= a.yMax) {
+          blocksByBot.get(a.botName)!.push(b);
+          break;
+        }
+      }
+    }
+
     // Execute all bot assignments in parallel — each bot works on its Y range
     const promises = assignments.map(async (assignment, i) => {
       // Check for cancellation
@@ -717,10 +723,8 @@ export class BuildCoordinator {
         yMax: assignment.yMax,
       });
 
-      // Get blocks for this assignment's Y range
-      const botBlocks = blocks.filter(
-        (b) => b.localY >= assignment.yMin && b.localY <= assignment.yMax,
-      );
+      // Pre-partitioned slice for this bot.
+      const botBlocks = blocksByBot.get(assignment.botName) ?? [];
 
       // Stagger start by 2s per bot to avoid overwhelming server
       if (i > 0) await new Promise((r) => setTimeout(r, i * 2000));

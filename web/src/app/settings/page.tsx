@@ -359,27 +359,76 @@ export default function SettingsPage() {
         <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
           <h2 className="text-lg font-semibold mb-4">Providers</h2>
 
-          {settings?.providers.map((p) => (
-            <div key={p.name} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0">
-              <button
-                onClick={() => toggleProvider(p)}
-                className={`w-10 h-5 rounded-full relative transition ${p.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
-                title={p.enabled ? 'Disable' : 'Enable'}
-              >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${p.enabled ? 'left-5' : 'left-0.5'}`} />
-              </button>
-              <div className="flex-1">
-                <span className="font-mono text-sm font-semibold capitalize">{p.name}</span>
-                <span className="text-zinc-500 text-xs ml-2">{p.model || 'default model'}</span>
-              </div>
-              <span className="text-zinc-500 text-xs font-mono">{p.keyMasked}</span>
-              <span className="text-zinc-600 text-xs">max {p.maxConcurrentRequests} concurrent</span>
-              <button onClick={() => removeProvider(p.name)} className="text-red-500 hover:text-red-400 text-xs" title="Remove">Remove</button>
-            </div>
-          ))}
+          {(() => {
+            const KNOWN: { id: string; label: string }[] = [
+              { id: 'gemini', label: 'Gemini' },
+              { id: 'anthropic', label: 'Anthropic' },
+              { id: 'openai', label: 'OpenAI' },
+              { id: 'minimax', label: 'MiniMax' },
+              { id: 'voyage', label: 'Voyage AI (embeddings)' },
+              { id: 'ollama', label: 'Ollama (local)' },
+            ];
+            return KNOWN.map((known) => {
+              const p = settings?.providers.find((x) => x.name === known.id);
+              if (p) {
+                return (
+                  <div key={p.name} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0">
+                    <button
+                      onClick={() => toggleProvider(p)}
+                      className={`w-10 h-5 rounded-full relative transition ${p.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
+                      title={p.enabled ? 'Disable' : 'Enable'}
+                    >
+                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${p.enabled ? 'left-5' : 'left-0.5'}`} />
+                    </button>
+                    <div className="flex-1">
+                      <span className="font-mono text-sm font-semibold capitalize">{p.name}</span>
+                      <span className="text-zinc-500 text-xs ml-2">{p.model || 'default model'}</span>
+                    </div>
+                    <span className="text-zinc-500 text-xs font-mono">{p.keyMasked}</span>
+                    <span className="text-zinc-600 text-xs">max {p.maxConcurrentRequests} concurrent</span>
+                    <button onClick={() => removeProvider(p.name)} className="text-red-500 hover:text-red-400 text-xs" title="Remove">Remove</button>
+                  </div>
+                );
+              }
+              // Placeholder row for a known provider that hasn't been configured yet.
+              const help = KEY_HELP[known.id];
+              return (
+                <div key={known.id} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0 opacity-60">
+                  <span className="w-10 h-5 rounded-full bg-zinc-800 inline-block" />
+                  <div className="flex-1">
+                    <span className="font-mono text-sm font-semibold capitalize">{known.label}</span>
+                    <span className="text-zinc-600 text-xs ml-2">not configured</span>
+                  </div>
+                  {help && (
+                    <a
+                      href={help}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[10px] text-amber-400 hover:text-amber-300 underline"
+                      title="Where to get a key"
+                    >
+                      get key ↗
+                    </a>
+                  )}
+                  <button
+                    onClick={() => {
+                      setNewProvider({ name: known.id, apiKey: '', model: '', maxConcurrent: 3 });
+                      // Scroll the form into view.
+                      setTimeout(() => {
+                        document.getElementById('add-provider-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }, 50);
+                    }}
+                    className="text-emerald-400 hover:text-emerald-300 text-xs font-medium"
+                  >
+                    + Add API key
+                  </button>
+                </div>
+              );
+            });
+          })()}
 
           {/* Add provider form */}
-          <div className="mt-4 pt-4 border-t border-zinc-800">
+          <div id="add-provider-form" className="mt-4 pt-4 border-t border-zinc-800 scroll-mt-6">
             <h3 className="text-sm font-medium text-zinc-400 mb-2">Add / Update Provider</h3>
             <div className="grid grid-cols-2 gap-3">
               <select

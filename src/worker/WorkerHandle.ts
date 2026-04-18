@@ -38,6 +38,7 @@ export class WorkerHandle {
   private traceMaxSize = 500;
   private onTrace?: (record: TraceRecord) => void;
   private onReputationEvent?: (event: any) => void;
+  private onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
 
   // Shared managers for IPC routing
   private llmClient: LLMClient | null;
@@ -176,6 +177,15 @@ export class WorkerHandle {
         catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'Reputation event handler error'); }
       } else {
         logger.debug({ bot: this.botName }, 'Reputation event received but no listener set');
+      }
+      return;
+    }
+
+    // Bot death forwarding from worker
+    if (type === 'bot.died') {
+      if (this.onDeath) {
+        try { this.onDeath(data); }
+        catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'Death event handler error'); }
       }
       return;
     }
@@ -372,6 +382,11 @@ export class WorkerHandle {
   /** Register a callback for reputation events from the worker. */
   setReputationListener(fn: (event: any) => void): void {
     this.onReputationEvent = fn;
+  }
+
+  /** Register a callback for death events from the worker. */
+  setDeathListener(fn: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void): void {
+    this.onDeath = fn;
   }
 
   isAlive(): boolean {

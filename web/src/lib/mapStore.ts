@@ -4,7 +4,7 @@ import { create } from 'zustand';
 import type { Marker, Zone, Route, Mission, Squad } from './api';
 
 // Drawing tool modes
-export type MapTool = 'select' | 'draw-zone' | 'draw-route' | 'place-marker';
+export type MapTool = 'select' | 'draw-zone' | 'draw-route' | 'place-marker' | 'place-building';
 
 interface MapOverlayStore {
   // World data

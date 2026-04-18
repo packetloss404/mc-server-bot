@@ -7,6 +7,7 @@ const tools: { id: MapTool; label: string; icon: string; title: string }[] = [
   { id: 'draw-zone', label: 'Zone', icon: 'zone', title: 'Draw a zone rectangle' },
   { id: 'draw-route', label: 'Route', icon: 'route', title: 'Draw a patrol route' },
   { id: 'place-marker', label: 'Marker', icon: 'marker', title: 'Place a world marker' },
+  { id: 'place-building', label: 'Building', icon: 'building', title: 'Place a schematic footprint on the map' },
 ];
 
 export function MapToolbar() {
@@ -60,6 +61,17 @@ function ToolIcon({ type, active }: { type: string; active: boolean }) {
         <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="inline-block">
           <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z" />
           <circle cx="12" cy="10" r="3" />
+        </svg>
+      );
+    case 'building':
+      return (
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" className="inline-block">
+          <rect x="4" y="2" width="16" height="20" rx="1" />
+          <path d="M9 22V12h6v10" />
+          <path d="M8 6h2" />
+          <path d="M14 6h2" />
+          <path d="M8 10h2" />
+          <path d="M14 10h2" />
         </svg>
       );
     default:

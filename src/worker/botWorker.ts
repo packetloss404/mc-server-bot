@@ -63,6 +63,9 @@ const instance = new BotInstance({
     });
     logger.info({ bot: data.botName }, 'Decision trace + reputation notifier wired');
   },
+  onDeath: (event) => {
+    ipc.notify('bot.died', event);
+  },
 });
 
 // Handle commands from main thread

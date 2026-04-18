@@ -15,7 +15,9 @@ export type CommandType =
   | 'patrol_route'
   | 'deposit_inventory'
   | 'equip_best'
-  | 'unstuck';
+  | 'unstuck'
+  | 'build_structure'
+  | 'build_campaign';
 
 export type CommandScope = 'single' | 'squad' | 'selection' | 'all';
 

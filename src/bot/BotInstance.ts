@@ -45,6 +45,7 @@ export interface BotOptions {
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
   onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
+  onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
 }
 
 export class BotInstance {
@@ -72,11 +73,13 @@ export class BotInstance {
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private onReputationEvent?: (event: any) => void;
   private onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
+  private onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
   private botComms: BotComms;
   private voyagerLoop: VoyagerLoop | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
+  private survivalInterval: NodeJS.Timeout | null = null;
   private instinctResumeTimeout: NodeJS.Timeout | null = null;
   private instinctActive = false;
   private instinctReason: 'attack' | 'hazard' | null = null;
@@ -90,6 +93,16 @@ export class BotInstance {
   private statsTracker = new StatsTracker('./data');
   private static CHAT_COOLDOWN_MS = 3000;
   private lastPathResetLog: { reason: string; at: number; suppressed: number } | null = null;
+
+  // ── Overnight-survival state ──
+  /** Last time we evaluated the "am I hungry?" branch. Gated to ~10s. */
+  private lastFoodCheckAt = 0;
+  /** True while a bot.consume() promise is in flight. */
+  private isEating = false;
+  /** Last time we tried to place a torch. Gated to ~30s. */
+  private lastTorchPlaceAt = 0;
+  /** True while a torch placement promise is in flight. */
+  private isPlacingTorch = false;
 
   constructor(options: BotOptions) {
     this.name = options.name;
@@ -105,6 +118,7 @@ export class BotInstance {
     this.onSwarmDirective = options.onSwarmDirective;
     this.onReputationEvent = options.onReputationEvent;
     this.onVoyagerLoopCreated = options.onVoyagerLoopCreated;
+    this.onDeath = options.onDeath;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = BotComms.getInstance();
     this.botComms.registerBot(this.name);
@@ -204,6 +218,7 @@ export class BotInstance {
           }
           this.startChatListener();
           this.startVoyagerIfCodegen();
+          this.startSurvivalLoop();
         });
       });
     });
@@ -213,14 +228,15 @@ export class BotInstance {
     });
 
     this.bot.on('death', () => {
+      const deathPos = this.bot?.entity?.position ? {
+        x: Number(this.bot.entity.position.x.toFixed(1)),
+        y: Number(this.bot.entity.position.y.toFixed(1)),
+        z: Number(this.bot.entity.position.z.toFixed(1)),
+      } : null;
       logger.warn({
         bot: this.name,
         state: this.state,
-        position: this.bot?.entity?.position ? {
-          x: Number(this.bot.entity.position.x.toFixed(1)),
-          y: Number(this.bot.entity.position.y.toFixed(1)),
-          z: Number(this.bot.entity.position.z.toFixed(1)),
-        } : null,
+        position: deathPos,
         pathfinderMoving: this.bot?.pathfinder?.isMoving?.() ?? false,
       }, 'Bot died');
       if (this.bot?.pathfinder?.isMoving()) {
@@ -229,6 +245,18 @@ export class BotInstance {
       }
       this.statsTracker.trackDeath(this.name);
       this.stopInstinct('death');
+      // Reset per-life survival guards so they don't leak across a respawn.
+      this.isEating = false;
+      this.isPlacingTorch = false;
+      // Notify the dashboard / other layers. Layer-1 recovery handles reassignment;
+      // this is just so the UI can surface the death in real time.
+      if (this.onDeath) {
+        try {
+          this.onDeath({ botName: this.name, position: deathPos });
+        } catch (err: any) {
+          logger.warn({ bot: this.name, err: err?.message }, 'onDeath callback failed');
+        }
+      }
     });
 
     this.bot.on('health', () => {
@@ -1011,6 +1039,170 @@ export class BotInstance {
     this.instinctInterval = setTimeout(tick, nextDelay());
   }
 
+  /**
+   * Overnight-survival tick. Runs independently of the instinct loop so bots
+   * eat / place torches even when they're otherwise idle. Each sub-behavior is
+   * fire-and-forget with its own guard flag so a slow mineflayer action can't
+   * wedge the tick.
+   */
+  private startSurvivalLoop(): void {
+    if (this.survivalInterval || !this.bot || this.destroyed) return;
+
+    const BASE_MS = 2500;
+    const nextDelay = () => Math.round(BASE_MS * (0.85 + Math.random() * 0.3));
+
+    const tick = () => {
+      try {
+        if (!this.bot || this.destroyed) return;
+        if (this.state === BotState.DISCONNECTED) return;
+        if (this.bot.health <= 0) return;
+
+        // B1 — eat when hungry
+        this.maybeEatFood();
+        // B2 — place torches at night when threatened
+        this.maybePlaceTorchForNight();
+      } finally {
+        if (this.survivalInterval !== null && !this.destroyed) {
+          this.survivalInterval = setTimeout(tick, nextDelay());
+        }
+      }
+    };
+
+    this.survivalInterval = setTimeout(tick, nextDelay());
+  }
+
+  /** Eat an edible inventory item when food <= 6 (3 hunger bar half-icons). */
+  private maybeEatFood(): void {
+    if (!this.bot || this.isEating) return;
+    const now = Date.now();
+    if (now - this.lastFoodCheckAt < 10_000) return;
+    this.lastFoodCheckAt = now;
+
+    if ((this.bot.food ?? 20) >= 7) return;
+
+    let mcData: any;
+    try {
+      mcData = require('minecraft-data')(this.bot.version);
+    } catch {
+      return;
+    }
+    if (!mcData?.foods) return;
+
+    const foods = mcData.foods as Record<number, { foodPoints?: number }>;
+    const edible = this.bot.inventory.items().find((item) => {
+      const entry = foods[item.type];
+      return entry && (entry.foodPoints ?? 0) > 0;
+    });
+    if (!edible) return;
+
+    this.isEating = true;
+    logger.info({ bot: this.name, food: this.bot.food, item: edible.name }, 'Eating food');
+    (async () => {
+      try {
+        await this.bot!.equip(edible, 'hand');
+        await this.bot!.consume();
+      } catch (err: any) {
+        logger.debug({ bot: this.name, err: err?.message }, 'Eat attempt failed');
+      } finally {
+        this.isEating = false;
+      }
+    })().catch(() => {
+      this.isEating = false;
+    });
+  }
+
+  /**
+   * Place a torch nearby if it's night, a hostile is within 16 blocks, and we
+   * have torches in inventory. Gated to once per 30s.
+   */
+  private maybePlaceTorchForNight(): void {
+    if (!this.bot || this.isPlacingTorch) return;
+    const now = Date.now();
+    if (now - this.lastTorchPlaceAt < 30_000) return;
+
+    const tod = this.bot.time?.timeOfDay ?? 0;
+    const isNight = tod > 13000 && tod < 23000;
+    if (!isNight) return;
+
+    // Threat check — use the existing helper, then widen the radius check to 16.
+    const threat = this.findLikelyThreat();
+    if (!threat?.position) return;
+    if (threat.position.distanceTo(this.bot.entity.position) > 16) return;
+
+    // Inventory check
+    let mcData: any;
+    try {
+      mcData = require('minecraft-data')(this.bot.version);
+    } catch {
+      return;
+    }
+    const torchItemDef = mcData?.itemsByName?.torch;
+    if (!torchItemDef) return;
+    const torchItem = this.bot.inventory.items().find((item) => item.type === torchItemDef.id);
+    if (!torchItem) return;
+
+    // Find a placeable air block adjacent to a solid block within 5 blocks.
+    const target = this.findTorchPlacementSpot();
+    if (!target) return;
+
+    this.lastTorchPlaceAt = now;
+    this.isPlacingTorch = true;
+    logger.info({
+      bot: this.name,
+      pos: {
+        x: Number(target.reference.position.x.toFixed(1)),
+        y: Number(target.reference.position.y.toFixed(1)),
+        z: Number(target.reference.position.z.toFixed(1)),
+      },
+    }, 'Placing torch for night protection');
+    (async () => {
+      try {
+        await this.bot!.equip(torchItem, 'hand');
+        await this.bot!.placeBlock(target.reference, target.faceVector);
+      } catch (err: any) {
+        logger.debug({ bot: this.name, err: err?.message }, 'Torch placement failed');
+      } finally {
+        this.isPlacingTorch = false;
+      }
+    })().catch(() => {
+      this.isPlacingTorch = false;
+    });
+  }
+
+  /**
+   * Scan a small box around the bot for a (solid, air-above) pair we can place
+   * a torch against.
+   */
+  private findTorchPlacementSpot(): { reference: any; faceVector: any } | null {
+    if (!this.bot) return null;
+    const { Vec3 } = require('vec3');
+    const origin = this.bot.entity.position.floored();
+    const UP = new Vec3(0, 1, 0);
+
+    // Spiral-ish search: small radius first.
+    for (let dx = -3; dx <= 3; dx++) {
+      for (let dz = -3; dz <= 3; dz++) {
+        for (let dy = -1; dy <= 1; dy++) {
+          const refPos = origin.offset(dx, dy, dz);
+          const ref = this.bot.blockAt(refPos);
+          if (!ref || ref.name === 'air' || ref.name === 'cave_air' || ref.name === 'water' || ref.name === 'lava') continue;
+          // Skip blocks that aren't a reasonable torch substrate.
+          if (ref.boundingBox !== 'block') continue;
+
+          const abovePos = refPos.offset(0, 1, 0);
+          const above = this.bot.blockAt(abovePos);
+          if (!above || (above.name !== 'air' && above.name !== 'cave_air')) continue;
+
+          // Within 5 blocks of the bot feet.
+          if (abovePos.distanceTo(origin) > 5) continue;
+
+          return { reference: ref, faceVector: UP };
+        }
+      }
+    }
+    return null;
+  }
+
   private stopInstinct(reason: string): void {
     if (this.instinctResumeTimeout) {
       clearTimeout(this.instinctResumeTimeout);
@@ -1175,6 +1367,10 @@ export class BotInstance {
     if (this.ambientChatTimeout) {
       clearTimeout(this.ambientChatTimeout);
       this.ambientChatTimeout = null;
+    }
+    if (this.survivalInterval) {
+      clearTimeout(this.survivalInterval);
+      this.survivalInterval = null;
     }
     if (this.voyagerLoop) {
       this.voyagerLoop.stop();

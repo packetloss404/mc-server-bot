@@ -7,6 +7,11 @@ import type { CommandCenter, CreateCommandParams } from './CommandCenter';
 import type { MissionManager, CreateMissionParams } from './MissionManager';
 import type { CommandType } from './CommandTypes';
 import type { MissionType } from './MissionTypes';
+import type { BuildCoordinator } from '../build/BuildCoordinator';
+import type { CampaignManager } from '../build/BuildCampaign';
+import type { SchematicMatcher } from '../build/SchematicMatcher';
+import type { BotManager } from '../bot/BotManager';
+import { selectCrew } from '../build/CrewSelector';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const HISTORY_FILE = path.join(DATA_DIR, 'commander-history.json');
@@ -38,6 +43,19 @@ Your job is to parse natural language instructions into structured JSON command 
 - "deposit_inventory" — deposit inventory into nearby chests
 - "equip_best" — equip the best available gear
 - "unstuck" — attempt to free a stuck bot
+- "build_structure" — place a single named building. Payload: { schematic: string, origin: {x,y,z}, botCount?: number }. Use when the user names a single thing to build at a known location.
+- "build_campaign" — queue multiple buildings as a campaign. Payload: { name: string, structures: Array<{schematic: string, origin: {x,y,z}, botCount?: number}>, autoSpawn?: boolean, maxParallel?: number }. Use when the user asks for several buildings (e.g. "build 6 houses").
+
+When the user says something like "build 6 oak houses spaced 30 blocks apart near spawn":
+1. Pick a base origin (use spawn or a named marker if mentioned; fall back to {x:0,y:64,z:0} if nothing is given).
+2. Generate the array of N structures, each with origin offset from the base by spacing × index along X (or Z if specified).
+3. Match each schematic name to the closest available file (the system will resolve final filenames).
+4. Set autoSpawn=true so the system spawns extra bots if no idle ones are available.
+5. Set maxParallel to roughly half the structure count so the server isn't overwhelmed.
+
+Examples:
+- "Build a cottage at 100, 64, 100" → build_structure { schematic: "cottage", origin: {x:100,y:64,z:100} }
+- "Build me 6 houses near spawn" → build_campaign { name: "Spawn Town", structures: [...6 with offsets...], autoSpawn: true, maxParallel: 3 }
 
 ## Available Mission Types (longer tasks tracked by MissionManager)
 - "queue_task" — generic task (mining, farming, etc.)
@@ -167,6 +185,10 @@ export interface CommanderMetrics {
 
 export interface CommanderServiceDeps {
   llmClient: LLMClient | null;
+  botManager?: BotManager;
+  buildCoordinator?: BuildCoordinator;
+  campaignManager?: CampaignManager;
+  schematicMatcher?: SchematicMatcher;
 }
 
 // ── Service ──────────────────────────────────────────────
@@ -175,6 +197,10 @@ export class CommanderService {
   private llmClient: LLMClient | null;
   private commandCenter: CommandCenter | null = null;
   private missionManager: MissionManager | null = null;
+  private botManager: BotManager | null = null;
+  private buildCoordinator: BuildCoordinator | null = null;
+  private campaignManager: CampaignManager | null = null;
+  private schematicMatcher: SchematicMatcher | null = null;
   private plans: Map<string, CommanderPlan> = new Map();
   private history: CommanderHistoryEntry[] = [];
   private drafts: CommanderDraft[] = [];
@@ -193,6 +219,10 @@ export class CommanderService {
 
   constructor(deps: CommanderServiceDeps) {
     this.llmClient = deps.llmClient;
+    this.botManager = deps.botManager ?? null;
+    this.buildCoordinator = deps.buildCoordinator ?? null;
+    this.campaignManager = deps.campaignManager ?? null;
+    this.schematicMatcher = deps.schematicMatcher ?? null;
     this.load();
   }
 
@@ -206,6 +236,22 @@ export class CommanderService {
 
   setLLMClient(client: LLMClient): void {
     this.llmClient = client;
+  }
+
+  setBotManager(bm: BotManager): void {
+    this.botManager = bm;
+  }
+
+  setBuildCoordinator(bc: BuildCoordinator): void {
+    this.buildCoordinator = bc;
+  }
+
+  setCampaignManager(cm: CampaignManager): void {
+    this.campaignManager = cm;
+  }
+
+  setSchematicMatcher(sm: SchematicMatcher): void {
+    this.schematicMatcher = sm;
   }
 
   // ── Plan ID generation ──────────────────────────────────
@@ -580,6 +626,121 @@ export class CommanderService {
 
     const lowerInput = trimmedInput.toLowerCase();
 
+    // Build N <thing> — high-priority pattern before generic "build/craft/make"
+    const multiBuildMatch = trimmedInput.match(/\bbuild\s+(?:me\s+)?(\d+)\s+(\w+(?:\s+\w+)?)/i);
+    const singleBuildAtMatch = !multiBuildMatch
+      ? trimmedInput.match(/\bbuild\s+(?:me\s+)?(?:a\s+|an\s+)?(\w+(?:\s+\w+)?)\s+(?:at|near)\s+(-?\d+)\s*[, ]\s*(-?\d+)(?:\s*[, ]\s*(-?\d+))?/i)
+      : null;
+
+    if (multiBuildMatch) {
+      const count = Math.max(1, Math.min(24, parseInt(multiBuildMatch[1], 10)));
+      const thing = multiBuildMatch[2].replace(/s$/i, '').trim();
+      const spacingMatch = trimmedInput.match(/\b(?:spaced|every|by)\s+(\d+)\s+blocks?\b/i);
+      const spacing = spacingMatch ? parseInt(spacingMatch[1], 10) : 30;
+      const originMatch = trimmedInput.match(/\b(?:at|near)\s+(-?\d+)\s*[, ]\s*(-?\d+)(?:\s*[, ]\s*(-?\d+))?/i);
+      let baseX = 0, baseY = 64, baseZ = 0;
+      if (originMatch) {
+        baseX = parseInt(originMatch[1], 10);
+        if (originMatch[3] !== undefined) {
+          baseY = parseInt(originMatch[2], 10);
+          baseZ = parseInt(originMatch[3], 10);
+        } else {
+          baseZ = parseInt(originMatch[2], 10);
+        }
+      }
+      const axis = /\balong\s+z\b|\bz[- ]axis\b/i.test(trimmedInput) ? 'z' : 'x';
+      const structures: Array<{ schematic: string; origin: { x: number; y: number; z: number }; botCountHint?: number }> = [];
+      for (let i = 0; i < count; i++) {
+        structures.push({
+          schematic: thing,
+          origin: {
+            x: axis === 'x' ? baseX + i * spacing : baseX,
+            y: baseY,
+            z: axis === 'z' ? baseZ + i * spacing : baseZ,
+          },
+        });
+      }
+      const intent = 'build_campaign';
+      const confidence = 0.7;
+      const commands: CommanderPlanCommand[] = [{
+        type: 'build_campaign',
+        targets: [],
+        payload: {
+          name: `Build ${count} ${thing}${count > 1 ? 's' : ''}`,
+          structures,
+          autoSpawn: true,
+          maxParallel: Math.max(1, Math.floor(count / 2)),
+        },
+      }];
+      const missions: CommanderPlanMission[] = [];
+      const clarificationQuestions = this.generateClarificationQuestions(trimmedInput, confidence, []);
+      const plan: CommanderPlan = {
+        id: planId,
+        input: trimmedInput,
+        intent,
+        confidence,
+        warnings: [],
+        requiresConfirmation: true,
+        commands,
+        missions,
+        clarificationQuestions,
+        needsClarification: clarificationQuestions.length > 0,
+        suggestedCommands: [],
+        createdAt: now,
+      };
+      this.validatePlanParams(plan);
+      this.plans.set(planId, plan);
+      this.upsertHistory({
+        planId,
+        input,
+        plan,
+        status: plan.needsClarification ? 'clarification_needed' : 'parsed',
+        createdAt: now,
+      });
+      this.trackParseMetrics(plan);
+      return plan;
+    }
+
+    if (singleBuildAtMatch) {
+      const thing = singleBuildAtMatch[1].trim();
+      const x = parseInt(singleBuildAtMatch[2], 10);
+      const hasY = singleBuildAtMatch[4] !== undefined;
+      const y = hasY ? parseInt(singleBuildAtMatch[3], 10) : 64;
+      const z = hasY ? parseInt(singleBuildAtMatch[4], 10) : parseInt(singleBuildAtMatch[3], 10);
+      const intent = 'build_structure';
+      const confidence = 0.75;
+      const commands: CommanderPlanCommand[] = [{
+        type: 'build_structure',
+        targets: [],
+        payload: { schematic: thing, origin: { x, y, z } },
+      }];
+      const plan: CommanderPlan = {
+        id: planId,
+        input: trimmedInput,
+        intent,
+        confidence,
+        warnings: [],
+        requiresConfirmation: true,
+        commands,
+        missions: [],
+        clarificationQuestions: [],
+        needsClarification: false,
+        suggestedCommands: [],
+        createdAt: now,
+      };
+      this.validatePlanParams(plan);
+      this.plans.set(planId, plan);
+      this.upsertHistory({
+        planId,
+        input,
+        plan,
+        status: 'parsed',
+        createdAt: now,
+      });
+      this.trackParseMetrics(plan);
+      return plan;
+    }
+
     if (/\b(pause|stop|halt)\b/.test(lowerInput)) {
       intent = 'pause_bots';
       confidence = 0.7;
@@ -862,6 +1023,9 @@ export class CommanderService {
     mine_task: 'queue_task',
     farm_task: 'queue_task',
     craft_task: 'craft_items',
+    build_structure: 'build_schematic',
+    build_campaign: 'build_schematic',
+    build_task: 'build_schematic',
   };
 
   private populateCommandsAndMissions(
@@ -943,6 +1107,24 @@ export class CommanderService {
 
     // ── Dispatch commands via CommandCenter ───────────────
     for (const cmd of plan.commands) {
+      // Build-type commands don't flow through CommandCenter (they're
+      // multi-bot or fleet-level) — handle them here and then continue.
+      if (cmd.type === 'build_structure' || cmd.type === 'build_campaign') {
+        try {
+          const buildResult = await this.executeBuildCommand(cmd, planId);
+          result.commands.push(buildResult);
+        } catch (err: any) {
+          const errorEntry = {
+            type: cmd.type,
+            targets: cmd.targets,
+            error: String(err?.message ?? err),
+          };
+          result.commands.push(errorEntry);
+          logger.error({ planId, cmd, err }, 'Commander failed to execute build command');
+        }
+        continue;
+      }
+
       if (this.commandCenter) {
         try {
           const scope = cmd.targets.includes('__all__')
@@ -1027,6 +1209,114 @@ export class CommanderService {
       executedAt: new Date().toISOString(),
     });
     return result;
+  }
+
+  // ── Build command execution ────────────────────────────
+
+  private async executeBuildCommand(
+    cmd: CommanderPlanCommand,
+    planId: string,
+  ): Promise<Record<string, any>> {
+    if (!this.schematicMatcher) {
+      throw new Error('SchematicMatcher not wired into CommanderService');
+    }
+
+    if (cmd.type === 'build_structure') {
+      if (!this.buildCoordinator || !this.botManager) {
+        throw new Error('BuildCoordinator/BotManager not wired into CommanderService');
+      }
+      const payload = cmd.payload as any;
+      const schematicName = typeof payload.schematic === 'string' ? payload.schematic : '';
+      const origin = payload.origin;
+      if (!schematicName) throw new Error('build_structure: missing schematic');
+      if (!origin || typeof origin.x !== 'number' || typeof origin.y !== 'number' || typeof origin.z !== 'number') {
+        throw new Error('build_structure: missing or invalid origin (need {x,y,z})');
+      }
+      const match = this.schematicMatcher.match(schematicName);
+      if (!match) {
+        throw new Error(`build_structure: no schematic matched "${schematicName}"`);
+      }
+      const botCount = Math.max(1, Math.min(6, payload.botCount ?? 2));
+      const crew = selectCrew(this.botManager, { count: botCount, near: origin });
+      if (crew.length === 0) {
+        throw new Error('build_structure: no idle bots available');
+      }
+      const job = await this.buildCoordinator.startBuild(match.filename, origin, crew, {
+        fillFoundation: true,
+        snapToGround: true,
+        clearSite: true,
+      });
+      logger.info(
+        { planId, jobId: job.id, schematic: match.filename, crew, reason: match.reason },
+        'Commander dispatched build_structure',
+      );
+      return {
+        type: 'build_structure',
+        status: 'started',
+        buildJobId: job.id,
+        schematic: match.filename,
+        matchReason: match.reason,
+        crew,
+        origin,
+      };
+    }
+
+    // build_campaign
+    if (!this.campaignManager) {
+      throw new Error('CampaignManager not wired into CommanderService');
+    }
+    const payload = cmd.payload as any;
+    const rawStructures = Array.isArray(payload.structures) ? payload.structures : [];
+    if (rawStructures.length === 0) {
+      throw new Error('build_campaign: structures array is empty');
+    }
+    const resolved: Array<{
+      schematicFile: string;
+      origin: { x: number; y: number; z: number };
+      botCountHint?: number;
+    }> = [];
+    const unresolved: string[] = [];
+    for (const s of rawStructures) {
+      const schematicName = typeof s?.schematic === 'string' ? s.schematic : '';
+      const origin = s?.origin;
+      if (!schematicName || !origin || typeof origin.x !== 'number') {
+        unresolved.push(`invalid-entry:${JSON.stringify(s).slice(0, 60)}`);
+        continue;
+      }
+      const match = this.schematicMatcher.match(schematicName);
+      if (!match) {
+        unresolved.push(schematicName);
+        continue;
+      }
+      resolved.push({
+        schematicFile: match.filename,
+        origin,
+        botCountHint: typeof s.botCount === 'number' ? s.botCount : undefined,
+      });
+    }
+    if (resolved.length === 0) {
+      throw new Error(`build_campaign: could not match any schematic names (${unresolved.join(', ')})`);
+    }
+    const campaign = this.campaignManager.createCampaign({
+      name: typeof payload.name === 'string' && payload.name ? payload.name : `Commander campaign ${new Date().toISOString().slice(0, 19)}`,
+      structures: resolved,
+      autoSpawn: payload.autoSpawn !== false,
+      maxParallel: typeof payload.maxParallel === 'number' ? payload.maxParallel : Math.max(1, Math.floor(resolved.length / 2)),
+      spawnPersonality: typeof payload.spawnPersonality === 'string' ? payload.spawnPersonality : undefined,
+      cleanupBots: !!payload.cleanupBots,
+    });
+    await this.campaignManager.startCampaign(campaign.id);
+    logger.info(
+      { planId, campaignId: campaign.id, resolvedCount: resolved.length, unresolvedCount: unresolved.length },
+      'Commander dispatched build_campaign',
+    );
+    return {
+      type: 'build_campaign',
+      status: 'started',
+      campaignId: campaign.id,
+      structures: resolved.length,
+      unresolved,
+    };
   }
 
   // ── Persistence ─────────────────────────────────────────

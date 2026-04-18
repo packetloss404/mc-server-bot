@@ -90,12 +90,30 @@ export function setupSocketEvents(
 
   // Wire decision trace listeners on new workers — event-driven, no polling.
   // Also wire any bots that were spawned before this listener registered.
-  const wireBot = (handle: { setTraceListener: (cb: (r: any) => void) => void; setReputationListener: (cb: (e: any) => void) => void }) => {
+  const wireBot = (handle: {
+    botName: string;
+    setTraceListener: (cb: (r: any) => void) => void;
+    setReputationListener: (cb: (e: any) => void) => void;
+    setDeathListener?: (cb: (e: { botName: string; position: { x: number; y: number; z: number } | null }) => void) => void;
+  }) => {
     handle.setTraceListener((record) => {
       io.emit('bot:decision', record);
     });
     handle.setReputationListener((event) => {
       botManager.getBotReputation().recordEvent(event);
+    });
+    handle.setDeathListener?.((event) => {
+      const posText = event.position
+        ? ` at ${event.position.x}, ${event.position.y}, ${event.position.z}`
+        : '';
+      const logEntry = eventLog.push({
+        type: 'bot:died',
+        botName: event.botName,
+        description: `${event.botName} died${posText}`,
+        metadata: { position: event.position },
+      });
+      io.emit('bot:died', { bot: event.botName, position: event.position });
+      io.emit('activity', logEntry);
     });
   };
   for (const handle of botManager.getAllWorkers()) wireBot(handle);

@@ -14,6 +14,9 @@ import {
   MissionType,
   MISSION_EVENTS,
 } from './MissionTypes';
+import type { BuildCoordinator } from '../build/BuildCoordinator';
+import type { SchematicMatcher } from '../build/SchematicMatcher';
+import { selectCrew } from '../build/CrewSelector';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
@@ -55,6 +58,8 @@ export class MissionManager {
   private io: SocketIOServer;
   private commandCenter?: CommandCenter;
   private squadManager?: SquadManager;
+  private buildCoordinator?: BuildCoordinator;
+  private schematicMatcher?: SchematicMatcher;
   private missionTaskDescriptions: Map<string, string> = new Map();
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   /** Squad-resolved assignee cache. Keyed by mission ID; invalidated when squad version bumps. */
@@ -72,6 +77,14 @@ export class MissionManager {
 
   setSquadManager(sm: SquadManager): void {
     this.squadManager = sm;
+  }
+
+  setBuildCoordinator(bc: BuildCoordinator): void {
+    this.buildCoordinator = bc;
+  }
+
+  setSchematicMatcher(sm: SchematicMatcher): void {
+    this.schematicMatcher = sm;
   }
 
   // -- ID generation --
@@ -403,8 +416,84 @@ export class MissionManager {
       return this.executeQueueTaskMission(mission);
     }
 
+    if (mission.type === 'build_schematic') {
+      return this.executeBuildSchematicMission(mission);
+    }
+
     // For other mission types, just transition to running
     return this.updateMissionStatus(id, 'running');
+  }
+
+  // -- BuildCoordinator bridge for build_schematic missions --
+
+  private executeBuildSchematicMission(mission: MissionRecord): MissionRecord | undefined {
+    if (!this.buildCoordinator || !this.schematicMatcher) {
+      logger.warn(
+        { missionId: mission.id },
+        'build_schematic mission cannot run: BuildCoordinator/SchematicMatcher not wired',
+      );
+      return this.updateMissionStatus(mission.id, 'failed', {
+        reason: 'BuildCoordinator/SchematicMatcher not available',
+      });
+    }
+
+    // Payload may live on the first step, or mission description may hold the schematic name.
+    const step = mission.steps[0];
+    const payload = (step?.payload ?? {}) as Record<string, any>;
+    const schematicName: string | undefined = payload.schematic ?? payload.schematicFile ?? payload.name;
+    const origin = payload.origin;
+
+    if (!schematicName || !origin || typeof origin.x !== 'number' || typeof origin.y !== 'number' || typeof origin.z !== 'number') {
+      logger.warn(
+        { missionId: mission.id, payload },
+        'build_schematic mission is missing schematic or origin in step payload',
+      );
+      return this.updateMissionStatus(mission.id, 'failed', {
+        reason: 'Missing schematic or origin in mission step payload',
+      });
+    }
+
+    const match = this.schematicMatcher.match(schematicName);
+    if (!match) {
+      return this.updateMissionStatus(mission.id, 'failed', {
+        reason: `No schematic matched "${schematicName}"`,
+      });
+    }
+
+    // Pick crew from mission assignees (if set) or via CrewSelector.
+    let crew = this.resolveAssigneeBotNames(mission).filter((name) => !!this.botManager.getWorker(name));
+    if (crew.length === 0) {
+      const botCount = typeof payload.botCount === 'number' ? payload.botCount : 2;
+      crew = selectCrew(this.botManager, { count: Math.max(1, botCount), near: origin });
+    }
+    if (crew.length === 0) {
+      return this.updateMissionStatus(mission.id, 'failed', {
+        reason: 'No idle bots available for build_schematic mission',
+      });
+    }
+
+    // Fire-and-forget the build; BuildCoordinator tracks progress via Socket.IO.
+    this.buildCoordinator
+      .startBuild(match.filename, origin, crew, {
+        fillFoundation: true,
+        snapToGround: true,
+        clearSite: true,
+      })
+      .then((job) => {
+        logger.info(
+          { missionId: mission.id, buildJobId: job.id, schematic: match.filename },
+          'build_schematic mission dispatched to BuildCoordinator',
+        );
+      })
+      .catch((err: any) => {
+        logger.error(
+          { missionId: mission.id, err: err.message },
+          'build_schematic mission failed to start build',
+        );
+        this.updateMissionStatus(mission.id, 'failed', { reason: err.message });
+      });
+
+    return this.updateMissionStatus(mission.id, 'running');
   }
 
   // -- VoyagerLoop bridge for queue_task missions --

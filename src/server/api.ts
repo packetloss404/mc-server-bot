@@ -16,6 +16,7 @@ import { TemplateManager } from '../control/TemplateManager';
 import { RoutineManager } from '../control/RoutineManager';
 import { BuildCoordinator } from '../build/BuildCoordinator';
 import { CampaignManager } from '../build/BuildCampaign';
+import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { logger } from '../util/logger';
 
@@ -34,6 +35,7 @@ export interface APIServerResult {
   routineManager: RoutineManager;
   buildCoordinator: BuildCoordinator;
   campaignManager: CampaignManager;
+  schematicMatcher: SchematicMatcher;
   chainCoordinator: ChainCoordinator;
 }
 
@@ -58,9 +60,16 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
 
+  // ── Schematic matcher (keyword index over /schematics/*.schem) ──
+  const schematicsDir = path.join(process.cwd(), 'schematics');
+  const schematicMatcher = new SchematicMatcher(schematicsDir);
+  schematicMatcher.refresh();
+
   // ── Commander service (persisted to data/commander-history.json) ──
   const commanderService = new CommanderService({
     llmClient: null, // LLM wired later if available
+    botManager,
+    schematicMatcher,
   });
 
   // Socket.IO
@@ -83,6 +92,10 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   const campaignManager = new CampaignManager(botManager, buildCoordinator, io, eventLog);
   const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 
+  // Wire build dependencies into CommanderService now that they exist.
+  commanderService.setBuildCoordinator(buildCoordinator);
+  commanderService.setCampaignManager(campaignManager);
+
   // ── Control platform: wire managers in dependency order ──
   const markerStore = new MarkerStore(io);
   const squadManager = new SquadManager(io);
@@ -97,6 +110,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   roleManager.setMissionManager(missionManager);
   commanderService.setCommandCenter(commandCenter);
   commanderService.setMissionManager(missionManager);
+  missionManager.setBuildCoordinator(buildCoordinator);
+  missionManager.setSchematicMatcher(schematicMatcher);
   logger.info('Control platform wired: CommandCenter ↔ MissionManager ↔ Squad/Role/Marker/Template');
 
   // ═══════════════════════════════════════
@@ -1546,6 +1561,6 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   return {
     app, httpServer, io, eventLog,
     commanderService, commandCenter, missionManager, markerStore, squadManager, roleManager, templateManager, routineManager,
-    buildCoordinator, campaignManager, chainCoordinator,
+    buildCoordinator, campaignManager, schematicMatcher, chainCoordinator,
   };
 }

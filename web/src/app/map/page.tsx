@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore } from '@/lib/store';
+import { useBotStore, useSchematicPlacementStore } from '@/lib/store';
 import { useMapOverlayStore } from '@/lib/mapStore';
-import { api } from '@/lib/api';
+import { api, type SchematicInfo } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
 import { getBlockColor } from '@/lib/blockColors';
 import {
@@ -97,6 +97,42 @@ export default function MapPage() {
   const kick = () => forceRender((n) => n + 1);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
+
+  // ─── Building placement state ───
+  const pendingPlacements = useSchematicPlacementStore((s) => s.pending);
+  const addPending = useSchematicPlacementStore((s) => s.addPending);
+  const removePending = useSchematicPlacementStore((s) => s.removePending);
+  const clearPending = useSchematicPlacementStore((s) => s.clearPending);
+
+  const [schematics, setSchematics] = useState<SchematicInfo[]>([]);
+  const [selectedSchematic, setSelectedSchematic] = useState<string>('');
+  const [campaignName, setCampaignName] = useState<string>('');
+  const [campaignStatus, setCampaignStatus] = useState<
+    { kind: 'idle' } | { kind: 'sending' } | { kind: 'success'; name: string } | { kind: 'error'; message: string }
+  >({ kind: 'idle' });
+
+  // Refs for draw loop
+  const pendingRef = useRef(pendingPlacements);
+  const selectedSchematicRef = useRef(selectedSchematic);
+  const schematicsRef = useRef(schematics);
+  const cursorWorldRef = useRef<{ x: number; z: number } | null>(null);
+  pendingRef.current = pendingPlacements;
+  selectedSchematicRef.current = selectedSchematic;
+  schematicsRef.current = schematics;
+
+  // Load schematics when tool activates or on mount
+  useEffect(() => {
+    let cancelled = false;
+    api.getSchematics().then((res) => {
+      if (cancelled) return;
+      setSchematics(res.schematics ?? []);
+      setSelectedSchematic((prev) => {
+        if (prev) return prev;
+        return res.schematics?.[0]?.filename ?? '';
+      });
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
 
   // Keep refs in sync
   botsRef.current = bots;
@@ -412,6 +448,82 @@ export default function MapPage() {
         drawRoutePreview(ctx, rwp, cx, cy, scale, offset);
       }
 
+      // ── Pending building placements (always rendered) ──
+      const pendings = pendingRef.current;
+      const schematicList = schematicsRef.current;
+      const schematicByFile = new Map(schematicList.map((s) => [s.filename, s] as const));
+      if (pendings.length > 0) {
+        for (let i = 0; i < pendings.length; i++) {
+          const p = pendings[i];
+          const sch = schematicByFile.get(p.schematicFile);
+          const sizeX = sch?.size.x ?? 1;
+          const sizeZ = sch?.size.z ?? 1;
+          const tl = worldToScreen(p.origin.x, p.origin.z, cx, cy, scale, offset);
+          const sw = sizeX * scale;
+          const sh = sizeZ * scale;
+
+          ctx.save();
+          // Amber outlined footprint (distinct from zones/routes/markers).
+          ctx.fillStyle = '#F59E0B22';
+          ctx.fillRect(tl.sx, tl.sy, sw, sh);
+          ctx.strokeStyle = '#F59E0BC0';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([6, 4]);
+          ctx.strokeRect(tl.sx, tl.sy, sw, sh);
+          ctx.setLineDash([]);
+
+          // Count label
+          ctx.shadowColor = '#000000';
+          ctx.shadowBlur = 3;
+          ctx.fillStyle = '#F59E0B';
+          ctx.font = 'bold 11px system-ui, sans-serif';
+          ctx.textAlign = 'left';
+          ctx.fillText(`#${i + 1}`, tl.sx + 4, tl.sy + 13);
+
+          const labelName = p.label || p.schematicFile;
+          ctx.fillStyle = '#ffffffCC';
+          ctx.font = '9px system-ui, sans-serif';
+          ctx.fillText(labelName, tl.sx + 4, tl.sy + sh - 4);
+          ctx.restore();
+        }
+      }
+
+      // ── Place-building cursor preview ──
+      if (activeToolRef.current === 'place-building' && cursorWorldRef.current) {
+        const selFile = selectedSchematicRef.current;
+        const sch = selFile ? schematicByFile.get(selFile) : undefined;
+        if (sch) {
+          const sizeX = sch.size.x;
+          const sizeZ = sch.size.z;
+          const ox = Math.floor(cursorWorldRef.current.x);
+          const oz = Math.floor(cursorWorldRef.current.z);
+          const tl = worldToScreen(ox, oz, cx, cy, scale, offset);
+          const sw = sizeX * scale;
+          const sh = sizeZ * scale;
+
+          ctx.save();
+          ctx.fillStyle = '#8B5CF622';
+          ctx.fillRect(tl.sx, tl.sy, sw, sh);
+          ctx.strokeStyle = '#8B5CF6E0';
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]);
+          ctx.strokeRect(tl.sx, tl.sy, sw, sh);
+          ctx.setLineDash([]);
+
+          ctx.shadowColor = '#000000';
+          ctx.shadowBlur = 3;
+          ctx.fillStyle = '#C4B5FD';
+          ctx.font = '10px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            `${sizeX}×${sizeZ}  @ ${ox}, ${oz}`,
+            tl.sx + sw / 2,
+            tl.sy + sh / 2 + 4,
+          );
+          ctx.restore();
+        }
+      }
+
       // HUD overlays
       if (show.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
@@ -429,6 +541,7 @@ export default function MapPage() {
           'draw-zone': 'Click and drag to draw zone',
           'draw-route': 'Click to add waypoints, double-click to finish',
           'place-marker': 'Right-click to place a marker',
+          'place-building': 'Pick a schematic in the sidebar, then click to place',
         };
         const hint = hints[tool] || '';
         ctx.fillStyle = '#00000090';
@@ -479,6 +592,38 @@ export default function MapPage() {
       return;
     }
 
+    // Place-building mode: add a pending placement at the clicked location.
+    if (tool === 'place-building') {
+      const selFile = selectedSchematicRef.current;
+      if (!selFile) return;
+      const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+      const ox = Math.floor(wx);
+      const oz = Math.floor(wz);
+      const labelBase = selFile.replace(/\.(schem|schematic)$/i, '');
+      const label = `${labelBase} #${pendingRef.current.length + 1}`;
+      // Provisional Y — overwritten when the terrain height request comes back.
+      const provisionalY = 64;
+      const id = addPending({
+        schematicFile: selFile,
+        origin: { x: ox, y: provisionalY, z: oz },
+        label,
+      });
+      // Fire-and-forget terrain height lookup; patch origin.y when it returns.
+      api.getTerrainHeight(ox, oz).then((res) => {
+        useSchematicPlacementStore.setState((state) => {
+          if (!state.pending.some((p) => p.id === id)) return state;
+          return {
+            pending: state.pending.map((p) =>
+              p.id === id ? { ...p, origin: { ...p.origin, y: res.y } } : p,
+            ),
+          };
+        });
+        kick();
+      }).catch(() => {});
+      kick();
+      return;
+    }
+
     // Select tool: check entity clicks
     for (const [name, pos] of entityPositions.current) {
       const dx = mx - pos.sx;
@@ -510,6 +655,14 @@ export default function MapPage() {
       const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
       setZoneDrawEnd({ x: wx, z: wz });
       return;
+    }
+
+    // Place-building: track world cursor for footprint preview
+    if (activeToolRef.current === 'place-building') {
+      const { wx, wz } = screenToWorld(mx, my, cx, cy, scaleRef.current, offsetRef.current);
+      cursorWorldRef.current = { x: wx, z: wz };
+    } else if (cursorWorldRef.current) {
+      cursorWorldRef.current = null;
     }
 
     if (draggingRef.current) {
@@ -675,6 +828,7 @@ export default function MapPage() {
     if (activeTool === 'draw-zone') return 'cursor-crosshair';
     if (activeTool === 'draw-route') return 'cursor-crosshair';
     if (activeTool === 'place-marker') return 'cursor-crosshair';
+    if (activeTool === 'place-building') return 'cursor-crosshair';
     if (hoveredRef.current) return 'cursor-pointer';
     return 'cursor-grab';
   };
@@ -775,7 +929,7 @@ export default function MapPage() {
                   {zones.map((zone) => (
                     <button
                       key={zone.id}
-                      onClick={() => { centerOn((zone.x1 + zone.x2) / 2, (zone.z1 + zone.z2) / 2); kick(); }}
+                      onClick={() => { centerOn(((zone.x1 ?? 0) + (zone.x2 ?? 0)) / 2, ((zone.z1 ?? 0) + (zone.z2 ?? 0)) / 2); kick(); }}
                       className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left hover:bg-zinc-800/50 transition-colors"
                     >
                       <span className="w-2.5 h-2.5 shrink-0 rounded-sm" style={{ backgroundColor: zone.color || '#8B5CF6' }} />
@@ -841,6 +995,125 @@ export default function MapPage() {
                 </div>
               </>
             )}
+
+            {/* Building placement — active tool schematic picker */}
+            {activeTool === 'place-building' && (
+              <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/5 p-2">
+                <p className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider mb-2">
+                  Place Building
+                </p>
+                {schematics.length === 0 ? (
+                  <p className="text-[11px] text-zinc-500">No schematics available.</p>
+                ) : (
+                  <>
+                    <label className="block text-[10px] text-zinc-400 mb-1">Schematic</label>
+                    <select
+                      value={selectedSchematic}
+                      onChange={(e) => setSelectedSchematic(e.target.value)}
+                      className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200"
+                    >
+                      {schematics.map((s) => (
+                        <option key={s.filename} value={s.filename}>
+                          {s.filename}  ({s.size.x}×{s.size.y}×{s.size.z})
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-[9px] text-zinc-500 mt-2">
+                      Click on the map to drop a footprint. Y is snapped to the terrain height.
+                    </p>
+                  </>
+                )}
+              </div>
+            )}
+
+            {/* Pending placements list */}
+            {pendingPlacements.length > 0 && (
+              <>
+                <p className="text-[10px] font-semibold text-amber-300 uppercase tracking-wider mb-2 mt-4">
+                  Pending Placements ({pendingPlacements.length})
+                </p>
+                <div className="space-y-0.5">
+                  {pendingPlacements.map((p, i) => (
+                    <div
+                      key={p.id}
+                      className="group flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-zinc-800/50 transition-colors"
+                    >
+                      <span className="text-[10px] font-mono text-amber-400 w-6 shrink-0">#{i + 1}</span>
+                      <button
+                        onClick={() => { centerOn(p.origin.x, p.origin.z); kick(); }}
+                        className="flex-1 min-w-0 text-left"
+                      >
+                        <p className="text-[11px] font-medium text-zinc-200 truncate">
+                          {p.label || p.schematicFile}
+                        </p>
+                        <p className="text-[9px] text-zinc-500 font-mono tabular-nums">
+                          {Math.round(p.origin.x)}, {Math.round(p.origin.y)}, {Math.round(p.origin.z)}
+                        </p>
+                      </button>
+                      <button
+                        onClick={() => { removePending(p.id); kick(); }}
+                        title="Remove"
+                        className="text-[10px] px-1.5 py-0.5 rounded bg-zinc-800 hover:bg-red-600/40 text-zinc-400 hover:text-red-200 transition-colors shrink-0"
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="mt-3 space-y-1.5">
+                  <input
+                    type="text"
+                    value={campaignName}
+                    onChange={(e) => setCampaignName(e.target.value)}
+                    placeholder="Campaign name"
+                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] text-zinc-200"
+                  />
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      disabled={campaignStatus.kind === 'sending' || !campaignName.trim() || pendingPlacements.length === 0}
+                      onClick={async () => {
+                        const name = campaignName.trim();
+                        if (!name || pendingPlacements.length === 0) return;
+                        setCampaignStatus({ kind: 'sending' });
+                        try {
+                          await api.createCampaign({
+                            name,
+                            structures: pendingPlacements.map((p) => ({
+                              schematicFile: p.schematicFile,
+                              origin: p.origin,
+                            })),
+                            start: false,
+                          });
+                          clearPending();
+                          setCampaignName('');
+                          setCampaignStatus({ kind: 'success', name });
+                          setTimeout(() => setCampaignStatus({ kind: 'idle' }), 4000);
+                          kick();
+                        } catch (err: any) {
+                          setCampaignStatus({ kind: 'error', message: err?.message || 'Failed to create campaign' });
+                        }
+                      }}
+                      className="flex-1 px-2 py-1 text-[11px] font-medium rounded bg-amber-500/20 border border-amber-500/40 text-amber-200 hover:bg-amber-500/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {campaignStatus.kind === 'sending' ? 'Sending…' : 'Send to Campaign'}
+                    </button>
+                    <button
+                      onClick={() => { clearPending(); setCampaignStatus({ kind: 'idle' }); kick(); }}
+                      className="px-2 py-1 text-[11px] rounded bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  {campaignStatus.kind === 'success' && (
+                    <p className="text-[10px] text-emerald-400">Campaign “{campaignStatus.name}” created.</p>
+                  )}
+                  {campaignStatus.kind === 'error' && (
+                    <p className="text-[10px] text-red-400">{campaignStatus.message}</p>
+                  )}
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -854,7 +1127,7 @@ export default function MapPage() {
             onMouseDown={handleMouseDown}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
-            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; }}
+            onMouseLeave={() => { handleMouseUp(); hoveredRef.current = null; cursorWorldRef.current = null; }}
             onDoubleClick={handleDoubleClick}
             onContextMenu={handleContextMenu}
             className="w-full h-full"

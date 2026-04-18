@@ -408,21 +408,60 @@ interface SchematicPlacement {
   sizeY: number;
 }
 
+export interface PendingPlacement {
+  id: string;
+  schematicFile: string;
+  origin: { x: number; y: number; z: number };
+  /** Optional display label (defaults to filename + count). */
+  label?: string;
+}
+
 interface SchematicPlacementStore {
+  // Existing single-placement API (preserved for backward compatibility).
   placement: SchematicPlacement | null;
   placedOrigin: { x: number; y: number; z: number } | null;
   startPlacement: (placement: SchematicPlacement) => void;
   cancelPlacement: () => void;
   setPlacedOrigin: (origin: { x: number; y: number; z: number }) => void;
+
+  /** A separate list of staged placements for multi-structure queuing. */
+  pending: PendingPlacement[];
+  addPending: (p: {
+    schematicFile: string;
+    origin: { x: number; y: number; z: number };
+    label?: string;
+  }) => string;
+  removePending: (id: string) => void;
+  clearPending: () => void;
 }
 
-export const useSchematicPlacementStore = create<SchematicPlacementStore>((set) => ({
+function genPendingId(): string {
+  // Simple ephemeral id — not persisted, never conflicts with server ids.
+  return `p_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export const useSchematicPlacementStore = create<SchematicPlacementStore>((set, get) => ({
   placement: null,
   placedOrigin: null,
 
   startPlacement: (placement) => set({ placement, placedOrigin: null }),
   cancelPlacement: () => set({ placement: null, placedOrigin: null }),
   setPlacedOrigin: (origin) => set({ placedOrigin: origin }),
+
+  pending: [],
+  addPending: (p) => {
+    const id = genPendingId();
+    set((state) => ({
+      pending: [
+        ...state.pending,
+        { id, schematicFile: p.schematicFile, origin: p.origin, label: p.label },
+      ],
+    }));
+    return id;
+  },
+  removePending: (id) =>
+    set((state) => ({ pending: state.pending.filter((item) => item.id !== id) })),
+  clearPending: () => set({ pending: [] }),
 }));
 
 // ─── Mission Store ───

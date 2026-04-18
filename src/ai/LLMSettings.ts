@@ -6,6 +6,8 @@ import type { RouteConfig, TaskType } from './TaskType';
 import { GeminiClient } from './GeminiClient';
 import { AnthropicClient } from './AnthropicClient';
 import { OllamaClient } from './OllamaClient';
+import { MiniMaxClient } from './MiniMaxClient';
+import { OpenAIClient } from './OpenAIClient';
 import { ModelRouter } from './ModelRouter';
 import type { TokenLedger } from './TokenLedger';
 
@@ -150,6 +152,24 @@ export class LLMSettings {
             maxTokens: 2048,
             timeoutMs: 30000,
           }));
+        } else if (p.name === 'minimax') {
+          clients.set('minimax', new MiniMaxClient({
+            apiKey: p.apiKey,
+            model: p.model || 'MiniMax-Text-01',
+            baseUrl: process.env.MINIMAX_BASE_URL,
+            temperature: 0.7,
+            maxTokens: 2048,
+            maxConcurrentRequests: p.maxConcurrentRequests || 3,
+          }));
+        } else if (p.name === 'openai') {
+          clients.set('openai', new OpenAIClient({
+            apiKey: p.apiKey,
+            model: p.model || 'gpt-5',
+            baseUrl: process.env.OPENAI_BASE_URL,
+            temperature: 0.7,
+            maxTokens: 2048,
+            maxConcurrentRequests: p.maxConcurrentRequests || 3,
+          }));
         }
         logger.info({ provider: p.name, model: p.model }, 'Provider client rebuilt');
       } catch (err: any) {
@@ -194,6 +214,28 @@ export class LLMSettings {
         name: 'anthropic',
         apiKey: anthropicKey,
         model: 'claude-sonnet-4-20250514',
+        maxConcurrentRequests: 3,
+        enabled: true,
+      });
+    }
+
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (openaiKey) {
+      this.settings.providers.push({
+        name: 'openai',
+        apiKey: openaiKey,
+        model: 'gpt-5',
+        maxConcurrentRequests: 3,
+        enabled: true,
+      });
+    }
+
+    const minimaxKey = process.env.MINIMAX_API_KEY;
+    if (minimaxKey) {
+      this.settings.providers.push({
+        name: 'minimax',
+        apiKey: minimaxKey,
+        model: 'MiniMax-Text-01',
         maxConcurrentRequests: 3,
         enabled: true,
       });

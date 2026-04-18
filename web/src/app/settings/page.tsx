@@ -53,6 +53,41 @@ export default function SettingsPage() {
   // New provider form
   const [newProvider, setNewProvider] = useState({ name: 'gemini', apiKey: '', model: '', maxConcurrent: 3 });
 
+  // Known model IDs per provider — surfaced in a datalist so users get a dropdown
+  // but can still type any custom model ID (vendors release new ones constantly).
+  const MODEL_CATALOG: Record<string, string[]> = {
+    gemini: [
+      'gemini-2.5-flash-preview-05-20',
+      'gemini-2.5-pro',
+      'gemini-2.0-flash',
+    ],
+    anthropic: [
+      'claude-opus-4-7',
+      'claude-opus-4-6',
+      'claude-sonnet-4-6',
+      'claude-haiku-4-5-20251001',
+      'claude-sonnet-4-20250514',
+    ],
+    openai: [
+      'gpt-5',
+      'gpt-5-mini',
+      'gpt-5.4',
+      'gpt-4.1',
+      'gpt-4o',
+    ],
+    minimax: [
+      'MiniMax-Text-01',
+      'MiniMax-M1',
+      'M2.7-highspeed',
+      'abab-6.5s-chat',
+    ],
+    ollama: [
+      'llama3.2:3b',
+      'qwen2.5-coder:3b',
+      'mistral:7b',
+    ],
+  };
+
   // Route editing
   const [editRoutes, setEditRoutes] = useState<Record<string, RouteConfig>>({});
 
@@ -301,11 +336,14 @@ export default function SettingsPage() {
             <div className="grid grid-cols-2 gap-3">
               <select
                 value={newProvider.name}
-                onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value }))}
+                onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value, model: '' }))}
                 className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
               >
                 <option value="gemini">Gemini</option>
                 <option value="anthropic">Anthropic</option>
+                <option value="openai">OpenAI</option>
+                <option value="minimax">MiniMax</option>
+                <option value="ollama">Ollama (local)</option>
               </select>
               <input
                 type="password"
@@ -314,13 +352,21 @@ export default function SettingsPage() {
                 onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
                 className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
               />
-              <input
-                type="text"
-                placeholder="Model (optional)"
-                value={newProvider.model}
-                onChange={(e) => setNewProvider((p) => ({ ...p, model: e.target.value }))}
-                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-              />
+              <div>
+                <input
+                  type="text"
+                  list={`models-${newProvider.name}`}
+                  placeholder="Model (pick from list or type custom)"
+                  value={newProvider.model}
+                  onChange={(e) => setNewProvider((p) => ({ ...p, model: e.target.value }))}
+                  className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full"
+                />
+                <datalist id={`models-${newProvider.name}`}>
+                  {(MODEL_CATALOG[newProvider.name] || []).map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+              </div>
               <input
                 type="number"
                 placeholder="Max concurrent"
@@ -347,8 +393,9 @@ export default function SettingsPage() {
           <div className="space-y-3">
             {TASK_TYPES.map((taskType) => {
               const route = editRoutes[taskType] || {};
+              const routeProviderModels = MODEL_CATALOG[route.provider || ''] || [];
               return (
-                <div key={taskType} className="grid grid-cols-5 gap-2 items-center">
+                <div key={taskType} className="grid grid-cols-6 gap-2 items-center">
                   <span className="text-sm font-mono text-amber-400">{taskType}</span>
                   <select
                     value={route.provider || ''}
@@ -358,6 +405,21 @@ export default function SettingsPage() {
                     <option value="">Default</option>
                     {providerNames.map((n) => <option key={n} value={n}>{n}</option>)}
                   </select>
+                  <div>
+                    <input
+                      type="text"
+                      list={`route-models-${taskType}`}
+                      placeholder="Model (optional)"
+                      value={route.model || ''}
+                      onChange={(e) => updateRoute(taskType, 'model', e.target.value || undefined)}
+                      className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs w-full"
+                    />
+                    <datalist id={`route-models-${taskType}`}>
+                      {routeProviderModels.map((m) => (
+                        <option key={m} value={m} />
+                      ))}
+                    </datalist>
+                  </div>
                   <input
                     type="number"
                     placeholder="Max tokens"

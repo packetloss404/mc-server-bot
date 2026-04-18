@@ -55,6 +55,8 @@ export default function SettingsPage() {
 
   // Known model IDs per provider — surfaced in a datalist so users get a dropdown
   // but can still type any custom model ID (vendors release new ones constantly).
+  // Canonical model IDs verified against each vendor's API docs (April 2026).
+  // Lists are ordered current → legacy. Users can also type any custom ID.
   const MODEL_CATALOG: Record<string, string[]> = {
     gemini: [
       'gemini-2.5-flash-preview-05-20',
@@ -62,24 +64,47 @@ export default function SettingsPage() {
       'gemini-2.0-flash',
     ],
     anthropic: [
+      // Current
       'claude-opus-4-7',
-      'claude-opus-4-6',
       'claude-sonnet-4-6',
-      'claude-haiku-4-5-20251001',
-      'claude-sonnet-4-20250514',
+      'claude-haiku-4-5',
+      // Legacy but still callable
+      'claude-opus-4-6',
+      'claude-sonnet-4-5',
+      'claude-opus-4-5',
+      'claude-opus-4-1',
     ],
     openai: [
+      // Frontier (gpt-5.4 family)
+      'gpt-5.4',
+      'gpt-5.4-pro',
+      'gpt-5.4-mini',
+      'gpt-5.4-nano',
+      // gpt-5 family
       'gpt-5',
       'gpt-5-mini',
-      'gpt-5.4',
+      'gpt-5-nano',
+      // Older
       'gpt-4.1',
+      'gpt-4.1-mini',
       'gpt-4o',
     ],
     minimax: [
-      'MiniMax-Text-01',
+      'MiniMax-M2.7-highspeed',
+      'MiniMax-M2.7',
+      'MiniMax-M2.5',
+      'MiniMax-M2.1',
+      'MiniMax-M2',
       'MiniMax-M1',
-      'M2.7-highspeed',
-      'abab-6.5s-chat',
+      'MiniMax-Text-01',
+    ],
+    voyage: [
+      'voyage-4-large',
+      'voyage-4',
+      'voyage-4-lite',
+      'voyage-code-3',
+      'voyage-3-large',
+      'voyage-3.5',
     ],
     ollama: [
       'llama3.2:3b',
@@ -343,6 +368,7 @@ export default function SettingsPage() {
                 <option value="anthropic">Anthropic</option>
                 <option value="openai">OpenAI</option>
                 <option value="minimax">MiniMax</option>
+                <option value="voyage">Voyage AI (embeddings)</option>
                 <option value="ollama">Ollama (local)</option>
               </select>
               <input

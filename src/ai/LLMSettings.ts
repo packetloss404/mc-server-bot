@@ -8,6 +8,7 @@ import { AnthropicClient } from './AnthropicClient';
 import { OllamaClient } from './OllamaClient';
 import { MiniMaxClient } from './MiniMaxClient';
 import { OpenAIClient } from './OpenAIClient';
+import { VoyageAIClient } from './VoyageAIClient';
 import { ModelRouter } from './ModelRouter';
 import type { TokenLedger } from './TokenLedger';
 
@@ -138,7 +139,7 @@ export class LLMSettings {
         } else if (p.name === 'anthropic') {
           clients.set('anthropic', new AnthropicClient({
             apiKey: p.apiKey,
-            model: p.model || 'claude-sonnet-4-20250514',
+            model: p.model || 'claude-sonnet-4-6',
             temperature: 0.7,
             maxTokens: 2048,
             maxConcurrentRequests: p.maxConcurrentRequests || 3,
@@ -155,7 +156,7 @@ export class LLMSettings {
         } else if (p.name === 'minimax') {
           clients.set('minimax', new MiniMaxClient({
             apiKey: p.apiKey,
-            model: p.model || 'MiniMax-Text-01',
+            model: p.model || 'MiniMax-M2.7-highspeed',
             baseUrl: process.env.MINIMAX_BASE_URL,
             temperature: 0.7,
             maxTokens: 2048,
@@ -164,11 +165,16 @@ export class LLMSettings {
         } else if (p.name === 'openai') {
           clients.set('openai', new OpenAIClient({
             apiKey: p.apiKey,
-            model: p.model || 'gpt-5',
+            model: p.model || 'gpt-5.4',
             baseUrl: process.env.OPENAI_BASE_URL,
             temperature: 0.7,
             maxTokens: 2048,
             maxConcurrentRequests: p.maxConcurrentRequests || 3,
+          }));
+        } else if (p.name === 'voyage') {
+          clients.set('voyage', new VoyageAIClient({
+            apiKey: p.apiKey,
+            model: p.model || 'voyage-4-large',
           }));
         }
         logger.info({ provider: p.name, model: p.model }, 'Provider client rebuilt');
@@ -213,7 +219,7 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'anthropic',
         apiKey: anthropicKey,
-        model: 'claude-sonnet-4-20250514',
+        model: 'claude-sonnet-4-6',
         maxConcurrentRequests: 3,
         enabled: true,
       });
@@ -224,7 +230,18 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'openai',
         apiKey: openaiKey,
-        model: 'gpt-5',
+        model: 'gpt-5.4',
+        maxConcurrentRequests: 3,
+        enabled: true,
+      });
+    }
+
+    const voyageKey = process.env.VOYAGE_API_KEY;
+    if (voyageKey) {
+      this.settings.providers.push({
+        name: 'voyage',
+        apiKey: voyageKey,
+        model: 'voyage-4-large',
         maxConcurrentRequests: 3,
         enabled: true,
       });
@@ -235,7 +252,7 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'minimax',
         apiKey: minimaxKey,
-        model: 'MiniMax-Text-01',
+        model: 'MiniMax-M2.7-highspeed',
         maxConcurrentRequests: 3,
         enabled: true,
       });

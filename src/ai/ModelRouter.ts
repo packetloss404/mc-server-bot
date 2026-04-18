@@ -91,29 +91,41 @@ export class ModelRouter implements LLMClient {
 
   async embed(texts: string[]): Promise<number[][]> {
     if (!this.isEnabledFn()) throw new AIDisabledError();
-    // Find first provider with embed capability
-    for (const [name, client] of this.clients) {
-      if (client.embed) {
-        try {
-          const start = Date.now();
-          const result = await client.embed(texts);
-          this.ledger.record({
-            provider: name,
-            model: 'embedding',
-            taskType: 'embed',
-            botName: '',
-            inputTokens: texts.join(' ').split(/\s+/).length, // rough estimate
-            outputTokens: 0,
-            latencyMs: Date.now() - start,
-            success: true,
-          });
-          return result;
-        } catch (err: any) {
-          logger.warn({ provider: name, err: err.message }, 'Embed failed, trying next provider');
-        }
+
+    // Build provider chain — honor the 'embed' route + its fallback list first,
+    // then fall back to any other provider that supports embed().
+    const route = this.routes.get('embed');
+    const seen = new Set<string>();
+    const chain: string[] = [];
+    const push = (n?: string) => { if (n && !seen.has(n)) { seen.add(n); chain.push(n); } };
+    push(route?.provider);
+    for (const f of route?.fallback ?? []) push(f);
+    for (const name of this.clients.keys()) push(name);
+
+    let lastError: Error | null = null;
+    for (const name of chain) {
+      const client = this.clients.get(name);
+      if (!client?.embed) continue;
+      const start = Date.now();
+      try {
+        const result = await client.embed(texts);
+        this.ledger.record({
+          provider: name,
+          model: route?.model ?? 'embedding',
+          taskType: 'embed',
+          botName: '',
+          inputTokens: texts.join(' ').split(/\s+/).length, // rough estimate
+          outputTokens: 0,
+          latencyMs: Date.now() - start,
+          success: true,
+        });
+        return result;
+      } catch (err: any) {
+        lastError = err;
+        logger.warn({ provider: name, err: err.message }, 'Embed failed, trying next provider');
       }
     }
-    throw new Error('No provider supports embeddings');
+    throw lastError ?? new Error('No provider supports embeddings');
   }
 
   /** Core dispatch logic with fallback chain and ledger recording. */

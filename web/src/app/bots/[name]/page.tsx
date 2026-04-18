@@ -28,6 +28,11 @@ export default function BotProfilePage() {
   const [chatPlayer, setChatPlayer] = useState('');
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
+  const [llmRouting, setLlmRouting] = useState<{
+    defaultProvider: string;
+    providers: { name: string; model: string; enabled: boolean }[];
+    routes: Record<string, { provider?: string; model?: string }>;
+  } | null>(null);
 
   useEffect(() => {
     const load = () => {
@@ -37,8 +42,30 @@ export default function BotProfilePage() {
     };
     load();
     const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
+    // LLM routing is global, not per-bot — fetch once and refresh sparingly.
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+    const loadLlm = () => {
+      fetch(`${base}/api/llm/providers`).then((r) => r.json()).then((s) => {
+        setLlmRouting({
+          defaultProvider: s.defaultProvider,
+          providers: (s.providers ?? []).map((p: any) => ({ name: p.name, model: p.model, enabled: p.enabled })),
+          routes: s.routes ?? {},
+        });
+      }).catch(() => {});
+    };
+    loadLlm();
+    const llmInterval = setInterval(loadLlm, 30000);
+    return () => { clearInterval(interval); clearInterval(llmInterval); };
   }, [name]);
+
+  // Resolve the model the bot will actually use for codegen + chat tasks.
+  const resolveRoute = (taskType: 'codegen' | 'chat' | 'curriculum' | 'critic'): { provider: string; model: string } | null => {
+    if (!llmRouting) return null;
+    const route = llmRouting.routes[taskType];
+    const provider = route?.provider || llmRouting.defaultProvider;
+    const providerCfg = llmRouting.providers.find((p) => p.name === provider);
+    return { provider, model: route?.model || providerCfg?.model || 'default' };
+  };
 
   const handleQueueTask = async () => {
     if (!taskInput.trim()) return;
@@ -110,6 +137,11 @@ export default function BotProfilePage() {
               <div className="flex items-center gap-3 mt-2 flex-wrap">
                 <InfoPill label="Mode" value={bot.mode} color={bot.mode === 'codegen' ? '#10B981' : '#F59E0B'} />
                 {bot.position && <InfoPill label="Pos" value={`${Math.round(bot.position.x)}, ${Math.round(bot.position.y)}, ${Math.round(bot.position.z)}`} mono />}
+                {(() => {
+                  const r = resolveRoute(bot.mode === 'codegen' ? 'codegen' : 'chat');
+                  if (!r) return null;
+                  return <InfoPill label="AI" value={`${r.provider}/${r.model}`} mono color="#A855F7" />;
+                })()}
               </div>
             </div>
             <span

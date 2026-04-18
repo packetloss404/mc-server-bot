@@ -11,6 +11,7 @@ import {
   useMissionStore,
   useBuildStore,
   useChainStore,
+  useCampaignStore,
 } from '@/lib/store';
 import { api } from '@/lib/api';
 
@@ -26,6 +27,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     api.getBots().then((data) => setBots(data.bots)).catch(console.error);
     api.getWorld().then((data) => setWorld(data)).catch(() => {});
     api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+    api.listCampaigns().then((d) => useCampaignStore.getState().setCampaigns(d.campaigns)).catch(() => {});
   }, [setBots, setWorld, setPlayers]);
 
   useEffect(() => {
@@ -121,6 +123,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     const refetchBuilds = debounce(() => { api.getBuilds().then((d) => useBuildStore.getState().setBuilds(d.builds)).catch(() => {}); }, 1000);
     const refetchChains = debounce(() => { api.getChains().then((d) => useChainStore.getState().setChains(d.chains)).catch(() => {}); });
     const refetchRoles = debounce(() => { api.getRoleAssignments().then((d) => useRoleStore.getState().setAssignments?.(d.assignments)).catch(() => {}); });
+    const refetchCampaigns = debounce(() => { api.listCampaigns().then((d) => useCampaignStore.getState().setCampaigns(d.campaigns)).catch(() => {}); });
 
     socket.on('marker:created', refetchMarkers);
     socket.on('marker:updated', refetchMarkers);
@@ -160,6 +163,18 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('chain:completed', refetchChains);
     socket.on('chain:failed', refetchChains);
 
+    socket.on('campaign:created', refetchCampaigns);
+    socket.on('campaign:started', refetchCampaigns);
+    socket.on('campaign:structure-started', refetchCampaigns);
+    socket.on('campaign:structure-completed', refetchCampaigns);
+    socket.on('campaign:structure-failed', refetchCampaigns);
+    socket.on('campaign:completed', refetchCampaigns);
+    socket.on('campaign:failed', refetchCampaigns);
+    socket.on('campaign:cancelled', refetchCampaigns);
+    socket.on('campaign:paused', refetchCampaigns);
+    socket.on('campaign:resumed', refetchCampaigns);
+    socket.on('campaign:deleted', refetchCampaigns);
+
     return () => {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
@@ -190,6 +205,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('build:cancelled'); socket.off('build:bot-status');
       socket.off('chain:started'); socket.off('chain:stage-update'); socket.off('chain:paused');
       socket.off('chain:cancelled'); socket.off('chain:completed'); socket.off('chain:failed');
+      socket.off('campaign:created'); socket.off('campaign:started');
+      socket.off('campaign:structure-started'); socket.off('campaign:structure-completed');
+      socket.off('campaign:structure-failed');
+      socket.off('campaign:completed'); socket.off('campaign:failed');
+      socket.off('campaign:cancelled'); socket.off('campaign:paused');
+      socket.off('campaign:resumed'); socket.off('campaign:deleted');
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

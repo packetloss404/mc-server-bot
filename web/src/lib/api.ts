@@ -12,6 +12,17 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   return res.json();
 }
 
+async function fetchVoid(path: string, options?: RequestInit): Promise<void> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { 'Content-Type': 'application/json', ...options?.headers },
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `API error: ${res.status}`);
+  }
+}
+
 // Types matching the backend
 export interface BotStatus {
   name: string;
@@ -248,6 +259,49 @@ export interface BuildRecord {
   placedBlocks?: number;
   assignments?: { botName: string; status: string; blocksPlaced?: number; blocksTotal?: number; yMin?: number; yMax?: number; currentY?: number }[];
   metadata?: Record<string, any>;
+}
+
+export type CampaignStructureStatus = 'pending' | 'building' | 'completed' | 'failed' | 'cancelled';
+export type CampaignStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+
+export interface CampaignStructure {
+  id: string;
+  schematicFile: string;
+  origin: { x: number; y: number; z: number };
+  botCountHint?: number;
+  buildJobId?: string;
+  status: CampaignStructureStatus;
+  startedAt?: number;
+  completedAt?: number;
+  error?: string;
+}
+
+export interface Campaign {
+  id: string;
+  name: string;
+  structures: CampaignStructure[];
+  status: CampaignStatus;
+  createdAt: number;
+  updatedAt: number;
+  maxParallel?: number;
+  autoSpawn?: boolean;
+  spawnPersonality?: string;
+  cleanupBots?: boolean;
+  spawnedBotNames?: string[];
+}
+
+export interface CampaignCreateInput {
+  name: string;
+  structures: Array<{
+    schematicFile: string;
+    origin: { x: number; y: number; z: number };
+    botCountHint?: number;
+  }>;
+  maxParallel?: number;
+  autoSpawn?: boolean;
+  spawnPersonality?: string;
+  cleanupBots?: boolean;
+  start?: boolean;
 }
 
 export interface Routine {
@@ -555,6 +609,27 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/builds/${id}/resume`, { method: 'POST' }),
   getTerrainHeight: (x: number, z: number) =>
     fetchJSON<{ y: number; block: string }>(`/api/terrain/height?x=${x}&z=${z}`),
+
+  // ─── Campaigns ───
+  listCampaigns: () =>
+    fetchJSON<{ campaigns: Campaign[] }>('/api/campaigns').catch(() => ({ campaigns: [] as Campaign[] })),
+  getCampaign: (id: string) =>
+    fetchJSON<{ campaign: Campaign }>(`/api/campaigns/${id}`),
+  createCampaign: (input: CampaignCreateInput) =>
+    fetchJSON<{ campaign: Campaign }>('/api/campaigns', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  startCampaign: (id: string) =>
+    fetchVoid(`/api/campaigns/${id}/start`, { method: 'POST' }),
+  pauseCampaign: (id: string) =>
+    fetchVoid(`/api/campaigns/${id}/pause`, { method: 'POST' }),
+  resumeCampaign: (id: string) =>
+    fetchVoid(`/api/campaigns/${id}/resume`, { method: 'POST' }),
+  cancelCampaign: (id: string) =>
+    fetchVoid(`/api/campaigns/${id}/cancel`, { method: 'POST' }),
+  deleteCampaign: (id: string) =>
+    fetchVoid(`/api/campaigns/${id}`, { method: 'DELETE' }),
 
   // ─── Supply Chains ───
   getChains: () =>

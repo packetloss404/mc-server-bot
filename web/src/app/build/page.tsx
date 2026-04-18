@@ -2,9 +2,10 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, SchematicInfo, MissionRecord } from '@/lib/api';
-import { useBotStore, useSchematicPlacementStore } from '@/lib/store';
+import { api, SchematicInfo, MissionRecord, Campaign } from '@/lib/api';
+import { useBotStore, useCampaignStore, useSchematicPlacementStore } from '@/lib/store';
 import { SchematicMiniMap } from '@/components/build/SchematicMiniMap';
+import { CampaignStatus } from '@/components/build/CampaignStatus';
 import { PageHeader } from '@/components/PageHeader';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -108,6 +109,27 @@ export default function BuildPage() {
   const playerList = useBotStore((s) => s.playerList);
   const activeBuild = useBotStore((s) => s.activeBuild);
   const setActiveBuild = useBotStore((s) => s.setActiveBuild);
+  const campaigns = useCampaignStore((s) => s.campaigns);
+
+  // Campaign queuing state
+  const [campaignName, setCampaignName] = useState('');
+  const [campaignError, setCampaignError] = useState<string | null>(null);
+  const [addingToCampaign, setAddingToCampaign] = useState(false);
+  const [startingCampaignId, setStartingCampaignId] = useState<string | null>(null);
+
+  const activeCampaigns = useMemo(
+    () => campaigns.filter((c) => c.status === 'pending' || c.status === 'running' || c.status === 'paused'),
+    [campaigns],
+  );
+
+  const currentCampaign = useMemo<Campaign | null>(() => {
+    if (!campaignName.trim()) return null;
+    return (
+      campaigns.find(
+        (c) => c.name.toLowerCase() === campaignName.trim().toLowerCase(),
+      ) || null
+    );
+  }, [campaigns, campaignName]);
 
   const connectedBots = useMemo(
     () => botList.filter((b) => b.state !== 'DISCONNECTED'),
@@ -321,6 +343,68 @@ export default function BuildPage() {
     } catch {}
   };
 
+  const handleAddToCampaign = async () => {
+    if (!selectedSchematic) return;
+    const name = campaignName.trim();
+    if (!name) return;
+    setCampaignError(null);
+    setAddingToCampaign(true);
+    try {
+      const newStructure = {
+        schematicFile: selectedSchematic.filename,
+        origin: { ...origin },
+        botCountHint: effectiveBotNames.length || botCount,
+      };
+      if (currentCampaign) {
+        // MVP: backend has no "add structure" endpoint, so delete + recreate.
+        // Only safe for pending campaigns (running campaigns would be disrupted).
+        if (currentCampaign.status !== 'pending') {
+          throw new Error(`Campaign "${currentCampaign.name}" is ${currentCampaign.status}; can only add to pending campaigns.`);
+        }
+        const appendedStructures = [
+          ...currentCampaign.structures.map((s) => ({
+            schematicFile: s.schematicFile,
+            origin: s.origin,
+            botCountHint: s.botCountHint,
+          })),
+          newStructure,
+        ];
+        await api.deleteCampaign(currentCampaign.id);
+        await api.createCampaign({
+          name: currentCampaign.name,
+          structures: appendedStructures,
+          maxParallel: currentCampaign.maxParallel,
+          autoSpawn: currentCampaign.autoSpawn,
+          spawnPersonality: currentCampaign.spawnPersonality,
+          cleanupBots: currentCampaign.cleanupBots,
+          start: false,
+        });
+      } else {
+        await api.createCampaign({
+          name,
+          structures: [newStructure],
+          start: false,
+        });
+      }
+    } catch (err: unknown) {
+      setCampaignError(err instanceof Error ? err.message : 'Failed to add to campaign');
+    } finally {
+      setAddingToCampaign(false);
+    }
+  };
+
+  const handleStartCampaign = async (id: string) => {
+    setStartingCampaignId(id);
+    setCampaignError(null);
+    try {
+      await api.startCampaign(id);
+    } catch (err: unknown) {
+      setCampaignError(err instanceof Error ? err.message : 'Failed to start campaign');
+    } finally {
+      setStartingCampaignId(null);
+    }
+  };
+
   const overallPct = activeBuild && activeBuild.totalBlocks > 0
     ? Math.round(((activeBuild.placedBlocks ?? 0) / activeBuild.totalBlocks) * 100)
     : 0;
@@ -331,6 +415,12 @@ export default function BuildPage() {
         title="Blueprint Builder"
         subtitle="Multi-bot coordinated building from schematics"
       />
+
+      {/* Active Campaigns */}
+      <div className="space-y-3">
+        <h2 className="text-sm font-semibold text-white">Active Campaigns</h2>
+        <CampaignStatus />
+      </div>
 
       {/* Active Build Monitor */}
       <AnimatePresence>
@@ -845,6 +935,67 @@ export default function BuildPage() {
                       {error}
                     </p>
                   )}
+
+                  {/* Queue to Campaign */}
+                  <div className="space-y-2 border-t border-zinc-800/60 pt-4">
+                    <label className="text-xs text-zinc-400 font-medium">Queue to Campaign</label>
+                    <p className="text-[11px] text-zinc-500">
+                      Add this structure to a campaign, then start the whole town at once.
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <input
+                        type="text"
+                        value={campaignName}
+                        onChange={(e) => setCampaignName(e.target.value)}
+                        placeholder="Campaign name (e.g. Oakridge)"
+                        list="existing-campaigns"
+                        className="flex-1 min-w-[180px] bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white"
+                      />
+                      <datalist id="existing-campaigns">
+                        {activeCampaigns.map((c) => (
+                          <option key={c.id} value={c.name} />
+                        ))}
+                      </datalist>
+                      <button
+                        onClick={handleAddToCampaign}
+                        disabled={!campaignName.trim() || addingToCampaign || !selectedSchematic}
+                        className="px-3 py-2 rounded-lg text-xs font-medium bg-zinc-800/80 border border-zinc-700/50 text-zinc-300 hover:text-white hover:border-teal-500/40 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {addingToCampaign ? 'Adding...' : 'Add to Campaign'}
+                      </button>
+                      {currentCampaign && (
+                        <button
+                          onClick={() => handleStartCampaign(currentCampaign.id)}
+                          disabled={
+                            startingCampaignId === currentCampaign.id ||
+                            currentCampaign.status !== 'pending' ||
+                            currentCampaign.structures.length === 0
+                          }
+                          className="px-3 py-2 rounded-lg text-xs font-semibold bg-teal-600/20 border border-teal-500/40 text-teal-300 hover:bg-teal-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                        >
+                          {startingCampaignId === currentCampaign.id ? 'Starting...' : 'Start Campaign'}
+                        </button>
+                      )}
+                    </div>
+                    {currentCampaign && (
+                      <div className="flex items-center gap-2 text-[11px] text-zinc-500">
+                        <span className="px-2 py-0.5 rounded-full bg-zinc-800/80 border border-zinc-700/50 text-zinc-300 font-medium">
+                          {currentCampaign.structures.length} structure{currentCampaign.structures.length !== 1 ? 's' : ''} queued
+                        </span>
+                        <span>in &quot;{currentCampaign.name}&quot; ({currentCampaign.status})</span>
+                      </div>
+                    )}
+                    {!currentCampaign && campaignName.trim() && (
+                      <p className="text-[11px] text-zinc-500">
+                        Will create new campaign &quot;{campaignName.trim()}&quot;.
+                      </p>
+                    )}
+                    {campaignError && (
+                      <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                        {campaignError}
+                      </p>
+                    )}
+                  </div>
 
                   {/* Start Button */}
                   {(() => {

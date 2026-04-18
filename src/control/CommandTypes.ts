@@ -62,6 +62,20 @@ export const COMMAND_EVENTS = {
   CANCELLED: 'command:cancelled',
 } as const;
 
+export const CAMPAIGN_EVENTS = {
+  CREATED: 'campaign:created',
+  STARTED: 'campaign:started',
+  STRUCTURE_STARTED: 'campaign:structure-started',
+  STRUCTURE_COMPLETED: 'campaign:structure-completed',
+  STRUCTURE_FAILED: 'campaign:structure-failed',
+  COMPLETED: 'campaign:completed',
+  FAILED: 'campaign:failed',
+  CANCELLED: 'campaign:cancelled',
+  PAUSED: 'campaign:paused',
+  RESUMED: 'campaign:resumed',
+  DELETED: 'campaign:deleted',
+} as const;
+
 // Commander plan types
 export interface CommanderPlanCommand {
   type: CommandType;

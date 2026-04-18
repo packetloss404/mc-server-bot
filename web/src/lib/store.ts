@@ -6,6 +6,7 @@ import type {
   SquadRecord, RoleAssignmentRecord, RoleOverrideRecord, RoleApprovalRecord,
   CommandRecord, MissionRecord,
   Marker, Zone, Route, Routine, RoutineStep, RoutineDraft, BuildRecord,
+  Campaign,
 } from './api';
 
 export interface BotLiveData extends BotStatus {
@@ -473,6 +474,33 @@ export const useBuildStore = create<BuildStore>((set) => ({
       }
       return { builds: [build, ...state.builds].slice(0, 100) };
     }),
+}));
+
+// ─── Campaign Store ───
+
+interface CampaignState {
+  campaigns: Campaign[];
+  setCampaigns: (campaigns: Campaign[]) => void;
+  upsertCampaign: (campaign: Campaign) => void;
+  removeCampaign: (id: string) => void;
+}
+
+export const useCampaignStore = create<CampaignState>((set) => ({
+  campaigns: [],
+
+  setCampaigns: (campaigns) => set({ campaigns }),
+  upsertCampaign: (campaign) =>
+    set((state) => {
+      const idx = state.campaigns.findIndex((c) => c.id === campaign.id);
+      if (idx >= 0) {
+        const next = [...state.campaigns];
+        next[idx] = campaign;
+        return { campaigns: next };
+      }
+      return { campaigns: [campaign, ...state.campaigns] };
+    }),
+  removeCampaign: (id) =>
+    set((state) => ({ campaigns: state.campaigns.filter((c) => c.id !== id) })),
 }));
 
 // ─── Chain Store ───

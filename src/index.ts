@@ -58,7 +58,7 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, chainCoordinator } = createAPIServer(botManager);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager);
 
   // Register LLM settings/usage API routes
   const llmSettings = new LLMSettings(tokenLedger);
@@ -187,6 +187,9 @@ async function main() {
     buildCoordinator.resumePendingJobs().catch((err) => {
       logger.error({ err: err.message }, 'Failed to resume pending build jobs');
     });
+    campaignManager.resumePendingCampaigns().catch((err) => {
+      logger.error({ err: err.message }, 'Failed to resume pending campaigns');
+    });
   }, 20000);
 
   // Graceful shutdown — flush ALL managers before exiting
@@ -203,6 +206,9 @@ async function main() {
 
     // Flush supply chain coordinator (stops polling + saves)
     chainCoordinator.shutdown();
+
+    // Flush campaign manager (persists state)
+    campaignManager.shutdown();
 
     // Flush persistence managers on BotManager (affinityManager, socialMemory, blackboardManager)
     // shutdownPersistence() is the canonical method when available; fall back to individual shutdown() calls

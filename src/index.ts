@@ -42,10 +42,26 @@ async function main() {
 
   const config = loadConfig();
 
-  // Initialize LLM router (optional - bots work without it, just no AI)
-  const { client: llmClient, ledger: tokenLedger } = buildModelRouter(config);
+  // LLMSettings is the source of truth for /settings UI and supports the full
+  // provider lineup (gemini/anthropic/openai/minimax/voyage/ollama). Prefer
+  // its router at boot so the routes the user configured in /settings actually
+  // take effect — fall back to the legacy ProviderRegistry path only when
+  // LLMSettings has no providers configured.
+  const tokenLedger = new TokenLedger();
+  const llmSettings = new LLMSettings(tokenLedger);
+  let llmClient: LLMClient | null = llmSettings.buildRouter();
   if (llmClient) {
-    logger.info({ model: config.llm.model, routes: Object.keys(config.llm.routes ?? {}) }, 'LLM ModelRouter initialized');
+    const settings = llmSettings.getSettings();
+    logger.info(
+      { providers: settings.providers.map((p) => p.name), defaultProvider: settings.defaultProvider, routes: Object.keys(settings.routes) },
+      'LLM ModelRouter initialized from LLMSettings',
+    );
+  } else {
+    const fallback = buildModelRouter(config);
+    llmClient = fallback.client;
+    if (llmClient) {
+      logger.info({ model: config.llm.model, routes: Object.keys(config.llm.routes ?? {}) }, 'LLM ModelRouter initialized from legacy ProviderRegistry');
+    }
   }
 
   const botManager = new BotManager(config, llmClient);
@@ -60,8 +76,7 @@ async function main() {
   // Start HTTP API server with Socket.IO
   const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager);
 
-  // Register LLM settings/usage API routes
-  const llmSettings = new LLMSettings(tokenLedger);
+  // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);
 
   // Set up real-time Socket.IO event broadcasting

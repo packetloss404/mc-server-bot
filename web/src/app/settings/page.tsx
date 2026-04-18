@@ -169,10 +169,14 @@ export default function SettingsPage() {
   };
 
   const addProvider = async () => {
-    if (!newProvider.apiKey) return showFeedback('error', 'API key is required');
+    // Ollama runs locally and doesn't need an API key — everything else does.
+    if (newProvider.name !== 'ollama' && !newProvider.apiKey) {
+      return showFeedback('error', 'API key is required');
+    }
     setSaving(true);
     try {
-      const res = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001'}/api/llm/providers`, {
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${base}/api/llm/providers`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -186,14 +190,33 @@ export default function SettingsPage() {
       const data = await res.json();
       if (data.success) {
         setSettings(data.settings);
+        // Hot-reload the router so the new key takes effect immediately —
+        // no separate "Reload Router" click required.
+        const reloadRes = await fetch(`${base}/api/llm/reload`, { method: 'POST' });
+        const reloadData = await reloadRes.json();
+        const savedName = newProvider.name;
         setNewProvider({ name: 'gemini', apiKey: '', model: '', maxConcurrent: 3 });
-        showFeedback('success', `Provider "${newProvider.name}" saved`);
+        if (reloadData.success) {
+          showFeedback('success', `Provider "${savedName}" saved and live (active: ${reloadData.providers.join(', ')})`);
+        } else {
+          showFeedback('success', `Provider "${savedName}" saved (router reload reported: ${reloadData.error ?? 'unknown'})`);
+        }
       }
     } catch {
       showFeedback('error', 'Failed to save provider');
     } finally {
       setSaving(false);
     }
+  };
+
+  // Help-text URLs for getting an API key per provider.
+  const KEY_HELP: Record<string, string> = {
+    gemini: 'https://aistudio.google.com/app/apikey',
+    anthropic: 'https://console.anthropic.com/settings/keys',
+    openai: 'https://platform.openai.com/api-keys',
+    minimax: 'https://platform.minimax.io/user-center/basic-information/interface-key',
+    voyage: 'https://dashboard.voyageai.com/api-keys',
+    ollama: '', // local, no key
   };
 
   const removeProvider = async (name: string) => {
@@ -371,13 +394,29 @@ export default function SettingsPage() {
                 <option value="voyage">Voyage AI (embeddings)</option>
                 <option value="ollama">Ollama (local)</option>
               </select>
-              <input
-                type="password"
-                placeholder="API Key"
-                value={newProvider.apiKey}
-                onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
-                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-              />
+              <div>
+                <input
+                  type="password"
+                  placeholder={newProvider.name === 'ollama' ? 'Not required (local)' : `${newProvider.name} API key`}
+                  value={newProvider.apiKey}
+                  onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
+                  disabled={newProvider.name === 'ollama'}
+                  className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full disabled:opacity-50"
+                />
+                {KEY_HELP[newProvider.name] && (
+                  <p className="text-[10px] text-zinc-500 mt-1">
+                    Get a key:{' '}
+                    <a
+                      href={KEY_HELP[newProvider.name]}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-amber-400 hover:text-amber-300 underline"
+                    >
+                      {KEY_HELP[newProvider.name].replace(/^https?:\/\//, '').split('/')[0]}
+                    </a>
+                  </p>
+                )}
+              </div>
               <div>
                 <input
                   type="text"

@@ -500,9 +500,9 @@ export default function BuildPage() {
             {/* Per-Bot Assignments */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {(activeBuild.assignments ?? []).map((assignment) => {
-                const botPct = assignment.blocksTotal > 0
-                  ? Math.round((assignment.blocksPlaced / assignment.blocksTotal) * 100)
-                  : 0;
+                const placed = assignment.blocksPlaced ?? 0;
+                const total = assignment.blocksTotal ?? 0;
+                const botPct = total > 0 ? Math.round((placed / total) * 100) : 0;
                 return (
                   <motion.div
                     key={assignment.botName}
@@ -518,9 +518,9 @@ export default function BuildPage() {
                       <span>Y: {assignment.yMin} - {assignment.yMax}</span>
                       <span>Current Y: {assignment.currentY}</span>
                     </div>
-                    <ProgressBar value={assignment.blocksPlaced} max={assignment.blocksTotal} color="#0EA5E9" />
+                    <ProgressBar value={placed} max={total} color="#0EA5E9" />
                     <div className="text-[10px] text-zinc-500 text-right">
-                      {assignment.blocksPlaced} / {assignment.blocksTotal} ({botPct}%)
+                      {placed} / {total} ({botPct}%)
                     </div>
                   </motion.div>
                 );

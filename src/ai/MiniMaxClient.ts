@@ -86,8 +86,12 @@ export class MiniMaxClient implements LLMClient {
       }
 
       const json: any = await resp.json();
-      const text = json.choices?.[0]?.message?.content?.trim();
-      if (!text) throw new Error('No text in MiniMax response');
+      const raw = json.choices?.[0]?.message?.content?.trim();
+      if (!raw) throw new Error('No text in MiniMax response');
+      // MiniMax M2.x models stream chain-of-thought inside <think>...</think>
+      // blocks before the real answer. Strip them so downstream JSON parsers
+      // and prompt logic only see the final response.
+      const text = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim() || raw;
       return {
         text,
         inputTokens: json.usage?.prompt_tokens,

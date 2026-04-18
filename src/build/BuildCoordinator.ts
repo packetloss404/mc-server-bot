@@ -38,6 +38,8 @@ export interface BotAssignment {
   blocksTotal: number;
   blocksPlaced: number;
   currentY: number;
+  /** Count of blocks that failed placement verification after all retry attempts. */
+  failedBlocks: number;
 }
 
 interface BlockEntry {
@@ -67,7 +69,12 @@ export class BuildCoordinator {
   private persistPath: string;
   private persistTimer: NodeJS.Timeout | null = null;
   /** Original options for each job, kept for resume. */
-  private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean }>();
+  private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean }>();
+  /**
+   * Per-job queue of extra blocks that need to be absorbed by an alive bot whose
+   * original assignment has completed. Keyed by the receiving bot name.
+   */
+  private reassignQueues = new Map<string, Map<string, BlockEntry[]>>();
   /** Parsed-schematic cache, keyed by filename. Invalidated when file mtime changes. */
   private schematicCache = new Map<string, { mtimeMs: number; data: CachedSchematic }>();
 
@@ -90,6 +97,10 @@ export class BuildCoordinator {
       if (!data || !Array.isArray(data.jobs)) return;
       for (const entry of data.jobs) {
         const job = entry.job as BuildJob;
+        // Backfill failedBlocks for jobs persisted before this field existed
+        for (const a of job.assignments ?? []) {
+          if (typeof a.failedBlocks !== 'number') a.failedBlocks = 0;
+        }
         this.jobs.set(job.id, job);
         if (entry.options) this.jobOptions.set(job.id, entry.options);
       }
@@ -291,7 +302,7 @@ export class BuildCoordinator {
     schematicFile: string,
     origin: { x: number; y: number; z: number },
     botNames: string[],
-    options?: { cleanupBotNames?: string[]; fillFoundation?: boolean; snapToGround?: boolean },
+    options?: { cleanupBotNames?: string[]; fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
 
@@ -335,6 +346,7 @@ export class BuildCoordinator {
     // ── Snap-to-ground: adjust origin Y to average terrain height ──
     const fillFoundation = options?.fillFoundation !== false; // default true
     const snapToGround = options?.snapToGround === true; // default false
+    const clearSiteEnabled = options?.clearSite !== false; // default true
 
     // Find a connected bot handle to query world blocks via IPC
     let probeHandle: any = null;
@@ -344,6 +356,37 @@ export class BuildCoordinator {
         probeHandle = h;
         break;
       }
+    }
+
+    // ── Pre-build site-prep: clear the footprint before any placement ──
+    // Runs BEFORE snap-to-ground because leveling/terrain probes should see
+    // a clean slate (no trees, no grass tufts, no water interfering).
+    if (clearSiteEnabled && probeHandle) {
+      const footprintMin = {
+        x: origin.x,
+        y: origin.y,
+        z: origin.z,
+      };
+      const footprintMax = {
+        x: origin.x + schSize.x - 1,
+        y: origin.y + schSize.y - 1,
+        z: origin.z + schSize.z - 1,
+      };
+      try {
+        const clearResult = await this.runClearSite(probeHandle, {
+          footprintMin,
+          footprintMax,
+          clearanceHeight: schSize.y,
+        });
+        logger.info(
+          { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length },
+          'Site-prep: cleared footprint ahead of snap-to-ground',
+        );
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Site-prep: clear failed — continuing with build');
+      }
+    } else if (clearSiteEnabled && !probeHandle) {
+      logger.warn('Site-prep requested but no connected bot available to issue /fill');
     }
 
     if (snapToGround && probeHandle) {
@@ -531,6 +574,7 @@ export class BuildCoordinator {
         blocksTotal: botBlocks.length,
         blocksPlaced: 0,
         currentY: range.yMin,
+        failedBlocks: 0,
       } as BotAssignment;
     });
 
@@ -553,7 +597,11 @@ export class BuildCoordinator {
     };
 
     this.jobs.set(jobId, job);
-    this.jobOptions.set(jobId, { fillFoundation: options?.fillFoundation, snapToGround: options?.snapToGround });
+    this.jobOptions.set(jobId, {
+      fillFoundation: options?.fillFoundation,
+      snapToGround: options?.snapToGround,
+      clearSite: options?.clearSite,
+    });
     this.persistJobs();
 
     // Emit started event
@@ -789,8 +837,9 @@ export class BuildCoordinator {
       }
     }
 
-    // Cleanup cancellation tracking
+    // Cleanup cancellation & reassignment tracking
     this.cancelledJobs.delete(jobId);
+    this.reassignQueues.delete(jobId);
   }
 
   private async executeBotAssignment(
@@ -808,7 +857,52 @@ export class BuildCoordinator {
         'Resuming bot assignment — skipping already-placed blocks',
       );
     }
-    for (let bi = startIdx; bi < blocks.length; bi++) {
+
+    // Helper: place a single block with verification + retry.
+    const placeOne = async (block: BlockEntry): Promise<void> => {
+      const blockSpec = block.stateStr ? `${block.name}[${block.stateStr}]` : block.name;
+      const MAX_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        handle.chat(`/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`);
+        await this.sleep(250);
+
+        // Verify placement via IPC probe on the bot's own handle.
+        let placed: { name: string } | null = null;
+        try {
+          placed = typeof handle.getBlockAt === 'function'
+            ? await handle.getBlockAt(block.wx, block.wy, block.wz)
+            : null;
+        } catch {
+          placed = null;
+        }
+
+        // If probe returned nothing (chunk not loaded / transient IPC error),
+        // accept the placement optimistically — further retry without evidence
+        // risks doubling up server load for every block.
+        if (!placed) return;
+
+        const placedName = placed.name?.startsWith('minecraft:')
+          ? placed.name.slice('minecraft:'.length)
+          : placed.name;
+        if (placedName === block.name) return;
+
+        if (attempt < MAX_ATTEMPTS) {
+          logger.warn(
+            { jobId, bot: assignment.botName, at: { x: block.wx, y: block.wy, z: block.wz }, want: block.name, got: placedName, attempt },
+            'Block verify failed — retrying /setblock',
+          );
+        } else {
+          assignment.failedBlocks++;
+          logger.warn(
+            { jobId, bot: assignment.botName, at: { x: block.wx, y: block.wy, z: block.wz }, want: block.name, got: placedName },
+            'Block verify failed after max retries — counting as failed',
+          );
+        }
+      }
+    };
+
+    let bi = startIdx;
+    while (bi < blocks.length) {
       const block = blocks[bi];
       // Check cancellation
       if (this.cancelledJobs.has(jobId)) return;
@@ -819,14 +913,30 @@ export class BuildCoordinator {
         await this.sleep(500);
       }
 
-      // Place block using /setblock command
-      const blockSpec = block.stateStr ? `${block.name}[${block.stateStr}]` : block.name;
-      handle.chat(
-        `/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`,
-      );
+      // Bot-death check BEFORE each placement: if the worker handle is
+      // dead or the mineflayer bot is disconnected, hand off remaining
+      // blocks to any spare bot whose assignment has completed.
+      const alive = typeof handle.isAlive === 'function' ? handle.isAlive() : true;
+      let connected = true;
+      if (alive && typeof handle.isBotConnected === 'function') {
+        try {
+          connected = await handle.isBotConnected();
+        } catch {
+          connected = false;
+        }
+      }
+      if (!alive || !connected) {
+        const remaining = blocks.slice(bi);
+        assignment.status = 'failed';
+        logger.error(
+          { jobId, bot: assignment.botName, remaining: remaining.length, placed: assignment.blocksPlaced },
+          'Bot disconnected mid-build — attempting reassignment',
+        );
+        this.reassignRemaining(jobId, job, assignment, remaining);
+        throw new Error('bot disconnected');
+      }
 
-      // 250ms delay between blocks to avoid server spam kick
-      await this.sleep(250);
+      await placeOne(block);
 
       assignment.blocksPlaced++;
       assignment.currentY = block.localY;
@@ -846,7 +956,136 @@ export class BuildCoordinator {
         // Throttled persist so a crash loses at most ~2s of progress
         this.schedulePersist();
       }
+      bi++;
+
+      // Between placements, absorb any reassigned blocks handed to this bot.
+      if (bi >= blocks.length) {
+        const extras = this.drainReassignedBlocks(jobId, assignment.botName);
+        if (extras.length > 0) {
+          logger.info(
+            { jobId, bot: assignment.botName, absorbing: extras.length },
+            'Absorbing reassigned blocks from a dead bot',
+          );
+          blocks.push(...extras);
+          assignment.blocksTotal += extras.length;
+        }
+      }
     }
+  }
+
+  /**
+   * Try to hand off the `remaining` blocks of a dead bot's assignment to
+   * another bot in the same job whose worker is still alive + connected.
+   * Prefers a bot that has already completed its own slice (spec-preferred),
+   * but falls back to any still-alive bot so blocks are not lost when a
+   * death happens mid-build. Each recipient drains the reassign queue after
+   * finishing its own blocks. Single-pass — no full re-balancing.
+   */
+  private reassignRemaining(
+    jobId: string,
+    job: BuildJob,
+    deadAssignment: BotAssignment,
+    remaining: BlockEntry[],
+  ): void {
+    if (remaining.length === 0) return;
+
+    const candidates = job.assignments.filter((a) => {
+      if (a === deadAssignment) return false;
+      if (a.status === 'failed') return false;
+      const h = this.botManager.getWorker(a.botName) as any;
+      if (!h) return false;
+      if (typeof h.isAlive === 'function' && !h.isAlive()) return false;
+      return true;
+    });
+    // Prefer completed (now-idle) bots over still-building ones.
+    candidates.sort((a, b) => {
+      const rank = (s: string) => (s === 'completed' ? 0 : s === 'building' ? 1 : 2);
+      return rank(a.status) - rank(b.status);
+    });
+    const target = candidates[0];
+    if (!target) {
+      logger.warn(
+        { jobId, from: deadAssignment.botName, blocks: remaining.length },
+        'No spare bot available — dead bot\'s remaining blocks will be lost',
+      );
+      return;
+    }
+
+    let jobQueues = this.reassignQueues.get(jobId);
+    if (!jobQueues) {
+      jobQueues = new Map();
+      this.reassignQueues.set(jobId, jobQueues);
+    }
+    const existing = jobQueues.get(target.botName) ?? [];
+    existing.push(...remaining);
+    jobQueues.set(target.botName, existing);
+
+    this.io.emit('build:reassign', {
+      jobId,
+      from: deadAssignment.botName,
+      to: target.botName,
+      blocks: remaining.length,
+    });
+    logger.info(
+      { jobId, from: deadAssignment.botName, to: target.botName, blocks: remaining.length, targetStatus: target.status },
+      'Reassigning remaining blocks to alive bot',
+    );
+  }
+
+  /** Drain and return any pending reassigned blocks for a given bot. */
+  private drainReassignedBlocks(jobId: string, botName: string): BlockEntry[] {
+    const jobQueues = this.reassignQueues.get(jobId);
+    if (!jobQueues) return [];
+    const queue = jobQueues.get(botName);
+    if (!queue || queue.length === 0) return [];
+    jobQueues.set(botName, []);
+    return queue;
+  }
+
+  /**
+   * Clear the world volume enclosing the schematic footprint by issuing
+   * `/fill ... air destroy` commands from the probe bot. Commands are issued
+   * one Y-slab at a time so we never exceed Minecraft's 32768-block fill cap.
+   */
+  private async runClearSite(
+    probeHandle: any,
+    opts: {
+      footprintMin: { x: number; y: number; z: number };
+      footprintMax: { x: number; y: number; z: number };
+      clearanceHeight?: number;
+    },
+  ): Promise<{ cleared: number; errors: string[] }> {
+    const errors: string[] = [];
+    const { footprintMin, footprintMax } = opts;
+    const x1 = Math.min(footprintMin.x, footprintMax.x);
+    const x2 = Math.max(footprintMin.x, footprintMax.x);
+    const z1 = Math.min(footprintMin.z, footprintMax.z);
+    const z2 = Math.max(footprintMin.z, footprintMax.z);
+    const yBase = Math.min(footprintMin.y, footprintMax.y);
+    const height = opts.clearanceHeight ?? (Math.abs(footprintMax.y - footprintMin.y) + 1);
+    const yTop = yBase + height - 1;
+
+    const area = (x2 - x1 + 1) * (z2 - z1 + 1);
+    if (area <= 0) return { cleared: 0, errors };
+
+    // Fill cap is 32768 blocks. Slab size per Y is `area` — slice Y to stay under cap.
+    const slabThickness = Math.max(1, Math.floor(32768 / Math.max(1, area)));
+    let slabs = 0;
+
+    for (let ySlabStart = yBase; ySlabStart <= yTop; ySlabStart += slabThickness) {
+      const ySlabEnd = Math.min(ySlabStart + slabThickness - 1, yTop);
+      const cmd = `/fill ${x1} ${ySlabStart} ${z1} ${x2} ${ySlabEnd} ${z2} air destroy`;
+      try {
+        probeHandle.chat(cmd);
+        slabs++;
+      } catch (err: any) {
+        errors.push(err?.message ?? String(err));
+      }
+      // Small delay between fill commands to avoid overrunning the server tick.
+      await this.sleep(200);
+    }
+
+    return { cleared: slabs, errors };
   }
 
   private sleep(ms: number): Promise<void> {

@@ -104,7 +104,7 @@ export default function ManagePage() {
 
       {/* Create Bot */}
       <motion.div
-        initial={{ opacity: 0, y: 8 }}
+        initial={{ opacity: 1, y: 0 }}
         animate={{ opacity: 1, y: 0 }}
         className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5"
       >

@@ -1,24 +1,23 @@
-async function mineOneOakLog(bot) {
-  const targetBlockName = 'oak_log';
-
-  // Check if an oak log is already nearby
-  let oakLog = bot.findBlock({
-    matching: block => block.name === targetBlockName,
+async function mine1OakLog(bot) {
+  let oakLogBlock = bot.findBlock({
+    matching: b => b.name === 'oak_log',
     maxDistance: 32
   });
-
-  // If not found, explore until one is located
-  if (!oakLog) {
-    oakLog = await exploreUntil(bot, 'north', 60, () => {
-      return bot.findBlock({
-        matching: block => block.name === targetBlockName,
-        maxDistance: 32
-      });
+  if (!oakLogBlock) {
+    await exploreUntil('north', 60,
+    // Explore for 60 seconds
+    () => bot.findBlock({
+      matching: b => b.name === 'oak_log',
+      maxDistance: 32
+    }));
+    oakLogBlock = bot.findBlock({
+      matching: b => b.name === 'oak_log',
+      maxDistance: 32
     });
   }
-
-  // If we found it (either initially or after exploring), mine it
-  if (oakLog) {
-    await mineBlock(targetBlockName, 1);
+  if (oakLogBlock) {
+    await mineBlock('oak_log', 1);
+  } else {
+    throw new Error('Could not find oak_log even after exploring.');
   }
 }

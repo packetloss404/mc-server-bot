@@ -1,141 +1,57 @@
-async function seekShelterUrgentlyRainyNight(bot) {
-  // 1. Gather materials if needed (need about 20 blocks for a 3x3x3 enclosure)
-  const dirtCount = bot.inventory.items().filter(i => i.name === 'dirt').reduce((acc, i) => acc + i.count, 0);
-  if (dirtCount < 20) {
+async function seek_shelter_urgently_rainy_night(bot) {
+  // Explore to find the nearby wooden structure (birch_planks, dark_oak_wood nearby)
+  const structure = await exploreUntil('any', 10000, () => {
+    const nearbyBlock = bot.findBlock({
+      matching: b => b.name === 'birch_planks' || b.name === 'oak_planks' || b.name === 'dark_oak_planks' || b.name === 'oak_log' || b.name === 'birch_log' || b.name === 'dark_oak_log' || b.name === 'stripped_dark_oak_wood',
+      maxDistance: 16
+    });
+    if (!nearbyBlock) { console.log("Block not found"); return; }
+    return nearbyBlock ? {
+      x: nearbyBlock.position.x,
+      y: nearbyBlock.position.y,
+      z: nearbyBlock.position.z
+    } : null;
+  });
+  if (structure) {
+    // Move to the structure and stay inside it
+    await moveTo(structure.x, structure.y, structure.z, 2, 10);
+    return;
+  }
+
+  // If no structure found, gather blocks and build emergency shelter
+  const pos = bot.entity.position;
+  const x = Math.floor(pos.x);
+  const y = Math.floor(pos.y);
+  const z = Math.floor(pos.z);
+
+  // Find and mine cobblestone or dirt nearby
+  const stoneBlock = bot.findBlock({
+    matching: b => b.name === 'cobblestone' || b.name === 'stone',
+    maxDistance: 8
+  });
+  if (!stoneBlock) { console.log("Block not found"); return; }
+  const dirtBlock = bot.findBlock({
+    matching: b => b.name === 'dirt',
+    maxDistance: 8
+  });
+  if (!dirtBlock) { console.log("Block not found"); return; }
+  if (stoneBlock) {
+    await mineBlock('cobblestone', 20);
+  } else if (dirtBlock) {
     await mineBlock('dirt', 20);
   }
 
-  // 2. Find a suitable flat spot nearby
-  const startPos = bot.entity.position.floored();
-  const targetPos = startPos.offset(2, 0, 2);
-  await moveTo(targetPos.x, targetPos.y, targetPos.z, 1, 10);
-
-  // 3. Build a simple 3x3x3 enclosure
-  // Floor/Base is already ground. We build walls.
-  const walls = [
-  // Wall 1
-  {
-    x: 0,
-    y: 0,
-    z: 0
-  }, {
-    x: 1,
-    y: 0,
-    z: 0
-  }, {
-    x: 2,
-    y: 0,
-    z: 0
-  }, {
-    x: 0,
-    y: 1,
-    z: 0
-  }, {
-    x: 1,
-    y: 1,
-    z: 0
-  }, {
-    x: 2,
-    y: 1,
-    z: 0
-  },
-  // Wall 2
-  {
-    x: 0,
-    y: 0,
-    z: 1
-  }, {
-    x: 0,
-    y: 1,
-    z: 1
-  }, {
-    x: 0,
-    y: 0,
-    z: 2
-  }, {
-    x: 0,
-    y: 1,
-    z: 2
-  },
-  // Wall 3
-  {
-    x: 1,
-    y: 0,
-    z: 2
-  }, {
-    x: 1,
-    y: 1,
-    z: 2
-  }, {
-    x: 2,
-    y: 0,
-    z: 2
-  }, {
-    x: 2,
-    y: 1,
-    z: 2
-  },
-  // Wall 4 (leaving one block for entrance)
-  {
-    x: 2,
-    y: 0,
-    z: 1
-  }, {
-    x: 2,
-    y: 1,
-    z: 1
-  },
-  // Roof
-  {
-    x: 0,
-    y: 2,
-    z: 0
-  }, {
-    x: 1,
-    y: 2,
-    z: 0
-  }, {
-    x: 2,
-    y: 2,
-    z: 0
-  }, {
-    x: 0,
-    y: 2,
-    z: 1
-  }, {
-    x: 1,
-    y: 2,
-    z: 1
-  }, {
-    x: 2,
-    y: 2,
-    z: 1
-  }, {
-    x: 0,
-    y: 2,
-    z: 2
-  }, {
-    x: 1,
-    y: 2,
-    z: 2
-  }, {
-    x: 2,
-    y: 2,
-    z: 2
-  }];
-  for (const offset of walls) {
-    const p = targetPos.plus(offset);
-    const existingBlock = bot.blockAt(p);
-    if (existingBlock && existingBlock.name === 'air') {
-      try {
-        await placeItem('dirt', p.x, p.y, p.z);
-      } catch (err) {
-        // Continue if placement fails for a single block
-      }
-    }
+  // Build a small 3x3x2 dirt shelter with door opening
+  for (let dx = -1; dx <= 1; dx++) {
+    await placeItem('dirt', x + dx, y, z + 1);
+    await placeItem('dirt', x + dx, y + 1, z + 1);
   }
-
-  // 4. Move inside the shelter
-  const inside = targetPos.offset(1, 0, 1);
-  await moveTo(inside.x, inside.y, inside.z, 0, 5);
+  for (let dz = 0; dz <= 1; dz++) {
+    await placeItem('dirt', x - 1, y, z + dz);
+    await placeItem('dirt', x - 1, y + 1, z + dz);
+    await placeItem('dirt', x + 1, y, z + dz);
+    await placeItem('dirt', x + 1, y + 1, z + dz);
+  }
+  await placeItem('dirt', x, y + 1, z);
+  await placeItem('dirt', x, y + 1, z + 1);
 }

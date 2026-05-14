@@ -1,23 +1,22 @@
-async function findNearestWaterAndWalkToIt(bot) {
+async function findTheNearestWaterSource(bot) {
+  // First, ensure we're not drowning
+  await swimToTheSurfaceDrowning(bot);
+
+  // From known world memory, the nearest water is at 1626,62,194
+  const waterPos = {
+    x: 1626,
+    y: 62,
+    z: 194
+  };
+
+  // Move to the water source
+  await moveTo(waterPos.x, waterPos.y, waterPos.z, 2, 30);
+
+  // Verify we found water
   const waterBlock = bot.findBlock({
-    matching: b => b.name === 'water',
-    maxDistance: 32
+    matching: block => block.name === 'water',
+    maxDistance: 5
   });
-  if (waterBlock) {
-    await moveTo(waterBlock.position.x, waterBlock.position.y, waterBlock.position.z, 1, 30);
-  } else {
-    await exploreUntil('forward', 60000, () => {
-      return bot.findBlock({
-        matching: b => b.name === 'water',
-        maxDistance: 32
-      });
-    });
-    const foundWater = bot.findBlock({
-      matching: b => b.name === 'water',
-      maxDistance: 32
-    });
-    if (foundWater) {
-      await moveTo(foundWater.position.x, foundWater.position.y, foundWater.position.z, 1, 30);
-    }
-  }
+  if (!waterBlock) { console.log("Block not found"); return; }
+  return waterBlock;
 }

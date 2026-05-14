@@ -1,78 +1,69 @@
 async function craftAWoodenHoe(bot) {
-  const existingHoe = bot.inventory.items().find(i => i.name === 'wooden_hoe');
-  if (existingHoe) return;
-
-  // 1. Collect Wood (Need at least 2 logs for: 2 planks for hoe, 2 sticks, 4 planks for crafting table)
-  let logs = bot.inventory.items().find(i => i.name.endsWith('_log'));
-  if (!logs) {
-    const logTypes = ['oak_log', 'birch_log', 'spruce_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log'];
-    let foundLog = false;
-    for (const logType of logTypes) {
-      try {
-        await mineBlock(logType, 3);
-        foundLog = true;
-        break;
-      } catch (e) {
-        continue;
-      }
-    }
-    if (!foundLog) {
-      await exploreUntil('north', 60, () => bot.findBlock({
-        matching: b => b.name.endsWith('_log'),
-        maxDistance: 32
-      }));
-      const nearbyLog = bot.findBlock({
-        matching: b => b.name.endsWith('_log'),
-        maxDistance: 32
-      });
-      if (nearbyLog) {
-        await mineBlock(nearbyLog.name, 3);
-      }
-    }
-    logs = bot.inventory.items().find(i => i.name.endsWith('_log'));
-  }
-  if (!logs) throw new Error("Could not find any logs to craft a hoe.");
-
-  // 2. Craft Planks
-  const plankName = logs.name.replace('_log', '_planks');
-  let planks = bot.inventory.items().find(i => i.name === plankName);
-  if (!planks || planks.count < 8) {
-    await craftItem(plankName, 3);
-    planks = bot.inventory.items().find(i => i.name === plankName);
+  // Check if wooden_hoe is already in inventory
+  const woodenHoe = bot.inventory.items().find(item => item.name === 'wooden_hoe');
+  if (woodenHoe) {
+    return; // Already have a wooden hoe, task complete
   }
 
-  // 3. Craft Sticks
-  let sticks = bot.inventory.items().find(i => i.name === 'stick');
+  // Check for required materials: 2 sticks, 2 oak_planks
+  const sticks = bot.inventory.items().find(item => item.name === 'stick');
+  const oakPlanks = bot.inventory.items().find(item => item.name === 'oak_planks');
   if (!sticks || sticks.count < 2) {
-    await craftItem('stick', 1);
-    sticks = bot.inventory.items().find(i => i.name === 'stick');
+    // If not enough sticks, craft them. Each oak_log yields 4 planks, then 2 planks yield 4 sticks.
+    // Need at least 1 oak_log to get enough sticks if starting from scratch.
+    const oakLogs = bot.inventory.items().find(item => item.name === 'oak_log');
+    if (!oakLogs || oakLogs.count < 1) {
+      await mineBlock('oak_log', 1);
+    }
+    await craftItem('oak_planks', 4); // Craft 4 planks from 1 log
+    await craftItem('stick', 4); // Craft 4 sticks from 2 planks
+  }
+  if (!oakPlanks || oakPlanks.count < 2) {
+    // If not enough planks, craft them. Each oak_log yields 4 planks.
+    const oakLogs = bot.inventory.items().find(item => item.name === 'oak_log');
+    if (!oakLogs || oakLogs.count < 1) {
+      await mineBlock('oak_log', 1);
+    }
+    await craftItem('oak_planks', 4); // Craft 4 planks from 1 log (should be enough for hoe)
   }
 
-  // 4. Ensure Crafting Table
-  let tableBlock = bot.findBlock({
-    matching: b => b.name === 'crafting_table',
+  // Ensure a crafting table is available or place one
+  let craftingTable = bot.findBlock({
+    matching: block => block.name === 'crafting_table',
     maxDistance: 32
   });
-  if (!tableBlock) {
-    let tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
-    if (!tableItem) {
+  if (!craftingTable) {
+    const tableInInventory = bot.inventory.items().find(item => item.name === 'crafting_table');
+    if (!tableInInventory) {
+      // Craft a crafting table if not in inventory
+      const wood = bot.inventory.items().find(item => item.name.includes('_log'));
+      if (!wood || wood.count < 1) {
+        await mineBlock('oak_log', 1); // Mine 1 log to make planks for crafting table
+      }
+      const planks = bot.inventory.items().find(item => item.name === 'oak_planks');
+      if (!planks || planks.count < 4) {
+        await craftItem('oak_planks', 4); // Craft 4 planks for crafting table
+      }
       await craftItem('crafting_table', 1);
-      tableItem = bot.inventory.items().find(i => i.name === 'crafting_table');
     }
-    // Place the table near the bot
-    const pos = bot.entity.position.floored().offset(1, 0, 0);
-    await placeItem('crafting_table', pos.x, pos.y, pos.z);
-    tableBlock = bot.findBlock({
-      matching: b => b.name === 'crafting_table',
+    // Place the crafting table
+    const refBlock = bot.findBlock({
+      matching: block => block.name === 'grass_block' || block.name === 'dirt' || block.name === 'stone',
       maxDistance: 32
     });
+    if (!refBlock) { console.log("Block not found"); return; }
+    if (refBlock) {
+      const p = refBlock.position;
+      await placeItem('crafting_table', p.x, p.y + 1, p.z);
+      craftingTable = bot.findBlock({
+        matching: block => block.name === 'crafting_table',
+        maxDistance: 32
+      }); // Re-find the placed table
+    } else {
+      throw new Error('Could not find a suitable block to place the crafting table.');
+    }
   }
 
-  // 5. Craft the Wooden Hoe
-  if (tableBlock) {
-    await moveTo(tableBlock.position.x, tableBlock.position.y, tableBlock.position.z, 3, 10);
-    await craftItem('wooden_hoe', 1);
-  } else {
-    throw new Error("Could not find or place a crafting table.");
-  }
+  // Craft the wooden hoe
+  await craftItem('wooden_hoe', 1);
 }

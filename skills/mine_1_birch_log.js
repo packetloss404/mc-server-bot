@@ -1,20 +1,14 @@
-async function mineBirchLog(bot) {
-  const target = 'birch_log';
-  const birchLog = bot.findBlock({
-    matching: b => b.name === target,
-    maxDistance: 32
-  });
-  if (!birchLog) {
-    await exploreUntil({
-      x: 0,
-      y: 0,
-      z: 1
-    }, 60, () => {
-      return bot.findBlock({
-        matching: b => b.name === target,
-        maxDistance: 32
-      });
+async function mine1BirchLog(bot) {
+  const birchLogBlock = await exploreUntil('south', 120,
+  // Explore for 120 seconds
+  () => {
+    return bot.findBlock({
+      matching: block => block.name === 'birch_log',
+      maxDistance: 32
     });
+  });
+  if (!birchLogBlock) {
+    throw new Error("Could not find birch_log after exploring.");
   }
-  await mineBlock(target, 1);
+  await mineBlock('birch_log', 1);
 }

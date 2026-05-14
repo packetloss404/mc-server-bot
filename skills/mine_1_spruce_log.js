@@ -1,15 +1,26 @@
-async function mineOneSpruceLog(bot) {
-  const targetName = 'spruce_log';
-  const findSpruce = () => bot.findBlock({
-    matching: b => b.name === targetName,
+async function mine1SpruceLog(bot) {
+  const spruceLogBlock = bot.findBlock({
+    matching: b => b.name === 'spruce_log',
     maxDistance: 32
   });
-  if (!findSpruce()) {
-    await exploreUntil({
-      x: 0,
-      y: 0,
-      z: 1
-    }, 60, () => findSpruce());
+  if (!spruceLogBlock) {
+    await exploreUntil('north', 60,
+    // Explore for up to 60 seconds
+    () => bot.findBlock({
+      matching: b => b.name === 'spruce_log',
+      maxDistance: 32
+    }));
   }
-  await mineBlock(targetName, 1);
+
+  // After exploring, try to find the block again
+  const targetBlock = bot.findBlock({
+    matching: b => b.name === 'spruce_log',
+    maxDistance: 32
+  });
+  if (!targetBlock) { console.log("Block not found"); return; }
+  if (targetBlock) {
+    await mineBlock('spruce_log', 1);
+  } else {
+    throw new Error('Could not find spruce_log even after exploring.');
+  }
 }

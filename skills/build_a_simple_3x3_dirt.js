@@ -1,43 +1,54 @@
-async function buildSimpleDirtShelter(bot) {
-  // Anchor the shelter at the bot's current position so it can be built anywhere.
-  const origin = bot.entity.position;
-  const ox = Math.floor(origin.x);
-  const oy = Math.floor(origin.y);
-  const oz = Math.floor(origin.z);
-  const wallOffsets = [
-    { x: 1, z: 1 }, { x: 1, z: 0 }, { x: 1, z: -1 },
-    { x: 0, z: 1 }, { x: 0, z: -1 },
-    { x: -1, z: 1 }, { x: -1, z: -1 },
-  ];
-  const doorOffset = { x: -1, z: 0 };
-  const roofOffsets = [];
-  for (let dx = -1; dx <= 1; dx++) {
-    for (let dz = -1; dz <= 1; dz++) {
-      roofOffsets.push({ x: dx, z: dz });
-    }
+async function buildASimple3x3Dirt(bot) {
+  // Check if enough dirt is available, if not, mine some.
+  let dirtCount = bot.inventory.items().find(item => item.name === 'dirt')?.count || 0;
+  if (dirtCount < 16) {
+    // Need at least 16 for a 3x3x2 hut with one opening
+    await mineBlock('dirt', 16 - dirtCount);
   }
-  const totalDirtNeeded = wallOffsets.length * 2 + roofOffsets.length;
-  let currentDirt = bot.inventory.items().filter(i => i.name === 'dirt').reduce((acc, i) => acc + i.count, 0);
-  if (currentDirt < totalDirtNeeded) {
-    await mineBlock('dirt', totalDirtNeeded - currentDirt);
-  }
-  for (const off of wallOffsets) {
-    await placeItem('dirt', ox + off.x, oy, oz + off.z);
-  }
-  for (const off of wallOffsets) {
-    await placeItem('dirt', ox + off.x, oy + 1, oz + off.z);
-  }
-  for (const off of roofOffsets) {
-    await placeItem('dirt', ox + off.x, oy + 2, oz + off.z);
-  }
-  const door = bot.inventory.items().find(i => i.name === 'oak_door');
-  if (!door) {
-    const logs = bot.inventory.items().find(i => i.name === 'oak_log');
-    if (!logs || logs.count < 2) {
-      await mineBlock('oak_log', 2);
-    }
-    await craftItem('oak_planks', 2);
-    await craftItem('oak_door', 1);
-  }
-  await placeItem('oak_door', ox + doorOffset.x, oy, oz + doorOffset.z);
+  const botX = Math.floor(bot.entity.position.x);
+  const botY = Math.floor(bot.entity.position.y);
+  const botZ = Math.floor(bot.entity.position.z);
+
+  // Define the base position for the hut relative to the bot
+  // We'll build it slightly away from the bot's current position to avoid self-blocking
+  const startX = botX + 2;
+  const startY = botY;
+  const startZ = botZ;
+
+  // Build the first layer (floor is not explicitly asked, just walls)
+  // Let's assume the bot is on a flat surface and build around startX, startY, startZ
+  // The hut will be 3x3, so the blocks will be placed from (startX, startZ) to (startX+2, startZ+2)
+
+  // Wall 1: (startX, startZ) to (startX, startZ+2)
+  await placeItem('dirt', startX, startY, startZ);
+  await placeItem('dirt', startX, startY, startZ + 1);
+  await placeItem('dirt', startX, startY, startZ + 2);
+
+  // Wall 2: (startX+1, startZ+2) to (startX+1, startZ) - this makes the back wall
+  await placeItem('dirt', startX + 1, startY, startZ + 2);
+
+  // Wall 3: (startX+2, startZ+2) to (startX+2, startZ)
+  await placeItem('dirt', startX + 2, startY, startZ + 2);
+  await placeItem('dirt', startX + 2, startY, startZ + 1);
+  await placeItem('dirt', startX + 2, startY, startZ);
+
+  // Wall 4: (startX+1, startZ) - leaving a 1-block opening for a door
+  // This will be the front wall, leaving (startX+1, startZ) open for the "door"
+
+  // Build the second layer
+  // Wall 1: (startX, startZ) to (startX, startZ+2)
+  await placeItem('dirt', startX, startY + 1, startZ);
+  await placeItem('dirt', startX, startY + 1, startZ + 1);
+  await placeItem('dirt', startX, startY + 1, startZ + 2);
+
+  // Wall 2: (startX+1, startZ+2)
+  await placeItem('dirt', startX + 1, startY + 1, startZ + 2);
+
+  // Wall 3: (startX+2, startZ+2) to (startX+2, startZ)
+  await placeItem('dirt', startX + 2, startY + 1, startZ + 2);
+  await placeItem('dirt', startX + 2, startY + 1, startZ + 1);
+  await placeItem('dirt', startX + 2, startY + 1, startZ);
+
+  // Wall 4: (startX+1, startZ) - this is the block above the door opening
+  await placeItem('dirt', startX + 1, startY + 1, startZ);
 }

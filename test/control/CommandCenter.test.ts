@@ -201,9 +201,13 @@ describe('CommandCenter', () => {
       targets: ['TestBot'],
       params: { x: 0, y: 64, z: 0 },
     });
-    // Force into started with a past startedAt
+    // Force into started with a past startedAt. Also populate the
+    // startedCommands index (normally set by updateStatus) since
+    // checkTimeouts iterates that index, not commands.values().
+    const startedMs = Date.now() - 70_000;
     (cmd as any).status = 'started';
-    (cmd as any).startedAt = new Date(Date.now() - 70_000).toISOString();
+    (cmd as any).startedAt = new Date(startedMs).toISOString();
+    (cc as any).startedCommands.set(cmd.id, startedMs);
 
     cc.checkTimeouts();
 
@@ -218,8 +222,10 @@ describe('CommandCenter', () => {
       targets: ['TestBot'],
       params: { x: 0, y: 64, z: 0 },
     });
+    const startedMs = Date.now() - 30_000;
     (cmd as any).status = 'started';
-    (cmd as any).startedAt = new Date(Date.now() - 30_000).toISOString();
+    (cmd as any).startedAt = new Date(startedMs).toISOString();
+    (cc as any).startedCommands.set(cmd.id, startedMs);
 
     cc.checkTimeouts();
 
@@ -232,8 +238,10 @@ describe('CommandCenter', () => {
       targets: ['TestBot'],
       params: { x: 0, y: 64, z: 0 },
     });
+    const startedMs = Date.now() - 70_000;
     (cmd as any).status = 'started';
-    (cmd as any).startedAt = new Date(Date.now() - 70_000).toISOString();
+    (cmd as any).startedAt = new Date(startedMs).toISOString();
+    (cc as any).startedCommands.set(cmd.id, startedMs);
 
     // Advance by 10 seconds to trigger interval
     vi.advanceTimersByTime(10_000);
@@ -245,14 +253,17 @@ describe('CommandCenter', () => {
   // ── Task 3: Concurrent command protection ──
 
   it('cancels active command when a new command is dispatched for same bot', async () => {
-    // First command: manually force into started state
+    // First command: manually force into started state. cancelActiveCommandForBot
+    // iterates the startedCommands index, so populate it too.
     const cmd1 = cc.createCommand({
       type: 'walk_to_coords',
       targets: ['TestBot'],
       params: { x: 10, y: 64, z: 10 },
     });
+    const startedMs = Date.now();
     (cmd1 as any).status = 'started';
-    (cmd1 as any).startedAt = new Date().toISOString();
+    (cmd1 as any).startedAt = new Date(startedMs).toISOString();
+    (cc as any).startedCommands.set(cmd1.id, startedMs);
 
     // Second command dispatched for same bot
     const cmd2 = cc.createCommand({

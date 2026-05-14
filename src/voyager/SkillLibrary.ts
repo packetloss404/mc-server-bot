@@ -29,6 +29,14 @@ interface ScoredSkillEntry {
 
 type SparseVector = Map<string, number>;
 
+interface CachedEmbedding {
+  vec: number[];
+  expires: number;
+}
+
+const QUERY_EMBED_TTL_MS = 60 * 60 * 1000; // 1 hour
+const QUERY_EMBED_CACHE_MAX = 256;
+
 export class SkillLibrary {
   private skillsDir: string;
   private indexPath: string;
@@ -41,6 +49,9 @@ export class SkillLibrary {
   private codeCache: Map<string, string> = new Map();
   /** Per-entry TF-IDF sparse vector cache. Wiped when corpus IDF changes. */
   private vectorCache: Map<string, SparseVector> = new Map();
+  /** Query-string → dense embedding cache. Tasks repeat across ticks, so this
+   *  saves a network round-trip per searchWithScores call. */
+  private queryEmbedCache: Map<string, CachedEmbedding> = new Map();
 
   constructor(skillsDir: string, maxSkills: number, embeddingClient: LLMClient | null = null) {
     this.skillsDir = skillsDir;
@@ -79,7 +90,7 @@ export class SkillLibrary {
       keywords: queryWords,
       file: '',
     }));
-    const queryEmbedding = this.embeddingClient?.embed ? (await this.embeddingClient.embed([query]).catch(() => [] as number[][]))[0] : undefined;
+    const queryEmbedding = await this.getQueryEmbedding(query);
 
     const scored = this.index.map((entry) => {
       let score = 0;
@@ -383,6 +394,33 @@ export class SkillLibrary {
     }
     if (magA === 0 || magB === 0) return 0;
     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  }
+
+  private async getQueryEmbedding(query: string): Promise<number[] | undefined> {
+    if (!this.embeddingClient?.embed) return undefined;
+
+    const key = query.trim().toLowerCase();
+    if (key.length === 0) return undefined;
+
+    const now = Date.now();
+    const hit = this.queryEmbedCache.get(key);
+    if (hit && hit.expires > now) {
+      return hit.vec;
+    }
+
+    try {
+      const [vec] = await this.embeddingClient.embed([query]);
+      if (!vec) return undefined;
+
+      if (this.queryEmbedCache.size >= QUERY_EMBED_CACHE_MAX) {
+        const oldestKey = this.queryEmbedCache.keys().next().value;
+        if (oldestKey !== undefined) this.queryEmbedCache.delete(oldestKey);
+      }
+      this.queryEmbedCache.set(key, { vec, expires: now + QUERY_EMBED_TTL_MS });
+      return vec;
+    } catch {
+      return undefined;
+    }
   }
 
   private async refreshMissingEmbeddings(): Promise<void> {

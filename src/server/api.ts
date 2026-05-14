@@ -465,6 +465,76 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
   });
 
+  // Aggregate skill metrics — totals, top performers, top failures.
+  // Registered before /api/skills/:name so 'stats' isn't matched as a skill name.
+  app.get('/api/skills/stats', (_req: Request, res: Response) => {
+    try {
+      const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+      if (!fs.existsSync(indexPath)) {
+        res.json({
+          total: 0,
+          totalSuccesses: 0,
+          totalFailures: 0,
+          averageQuality: 0,
+          topPerformers: [],
+          topFailures: [],
+          neverUsed: 0,
+        });
+        return;
+      }
+      const raw = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
+      const entries: any[] = Array.isArray(raw) ? raw : Object.values(raw);
+
+      let totalSuccesses = 0;
+      let totalFailures = 0;
+      let qualitySum = 0;
+      let qualityCount = 0;
+      let neverUsed = 0;
+
+      const summarized = entries.map((entry: any) => {
+        const successCount = Number(entry?.successCount ?? 0);
+        const failureCount = Number(entry?.failureCount ?? 0);
+        const quality = typeof entry?.quality === 'number' ? entry.quality : null;
+        totalSuccesses += successCount;
+        totalFailures += failureCount;
+        if (quality !== null) {
+          qualitySum += quality;
+          qualityCount += 1;
+        }
+        if (successCount === 0 && failureCount === 0) neverUsed += 1;
+        return {
+          name: entry?.name ?? '',
+          description: entry?.description ?? null,
+          successCount,
+          failureCount,
+          quality,
+        };
+      });
+
+      const topPerformers = [...summarized]
+        .filter((s) => s.successCount > 0)
+        .sort((a, b) => b.successCount - a.successCount || (b.quality ?? 0) - (a.quality ?? 0))
+        .slice(0, 10);
+      const topFailures = [...summarized]
+        .filter((s) => s.failureCount > 0)
+        .sort((a, b) => b.failureCount - a.failureCount)
+        .slice(0, 10);
+
+      res.json({
+        total: summarized.length,
+        totalSuccesses,
+        totalFailures,
+        averageQuality: qualityCount > 0 ? Number((qualitySum / qualityCount).toFixed(3)) : 0,
+        neverUsed,
+        topPerformers,
+        topFailures,
+      });
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'Failed to compute /api/skills/stats');
+      res.status(500).json({ error: 'Failed to compute skill stats' });
+    }
+  });
+
   // Single skill with code — read from disk
   app.get('/api/skills/:name', (req: Request, res: Response) => {
     const skillName = req.params.name as string;

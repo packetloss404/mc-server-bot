@@ -2,9 +2,9 @@ import fs from 'fs';
 import path from 'path';
 import { Bot } from 'mineflayer';
 import { Vec3 } from 'vec3';
-import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
 import { logger } from '../util/logger';
+import { moveNearWithCleanup } from './moveHelper';
 
 /**
  * Loads a .schematic or .schem file and builds it block-by-block
@@ -88,11 +88,7 @@ export async function buildSchematic(
       // Walk near if too far
       const dist = bot.entity.position.distanceTo(block.pos);
       if (dist > 4) {
-        bot.pathfinder.setGoal(new goals.GoalNear(block.pos.x, block.pos.y, block.pos.z, 3));
-        await new Promise<void>((resolve) => {
-          const timeout = setTimeout(() => { bot.pathfinder.stop(); resolve(); }, 10000);
-          bot.once('goal_reached', () => { clearTimeout(timeout); resolve(); });
-        });
+        await moveNearWithCleanup(bot, { x: block.pos.x, y: block.pos.y, z: block.pos.z, range: 3 }, 10000);
       }
 
       // Find the block item in inventory

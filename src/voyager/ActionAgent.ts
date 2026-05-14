@@ -177,10 +177,23 @@ export class ActionAgent {
     const baseQuery = task.keywords.join(' ') + ' ' + task.description;
     const query = chatlogSummary ? `${baseQuery}\n\n${chatlogSummary}` : baseQuery;
 
-    // Re-retrieve skills each time (query may be enriched with error context)
-    const skillSummary = await skillLibrary.buildSkillSummary(query);
-    const bestSkillCode = await skillLibrary.getTopKSkillCode(query, 1);
-    const composableSkills = await skillLibrary.getComposableMatches(query, 3);
+    // Re-retrieve skills each time (query may be enriched with error context).
+    // If any retrieval step fails (embed error, IO blip, etc.), fall back to
+    // generating without that piece of context rather than crashing the agent.
+    const [skillSummary, bestSkillCode, composableSkills] = await Promise.all([
+      skillLibrary.buildSkillSummary(query).catch((err) => {
+        logger.warn({ err: err.message }, 'ActionAgent: buildSkillSummary failed, continuing without summary');
+        return '';
+      }),
+      skillLibrary.getTopKSkillCode(query, 1).catch((err) => {
+        logger.warn({ err: err.message }, 'ActionAgent: getTopKSkillCode failed, continuing without best skill');
+        return '';
+      }),
+      skillLibrary.getComposableMatches(query, 3).catch((err) => {
+        logger.warn({ err: err.message }, 'ActionAgent: getComposableMatches failed, continuing without composables');
+        return [] as Awaited<ReturnType<typeof skillLibrary.getComposableMatches>>;
+      }),
+    ]);
 
     let lastRaw = previousCode;
     let lastError = previousError;
@@ -228,7 +241,12 @@ Write the function:`;
       } catch (err: any) {
         lastError = `Parse error: ${err.message}`;
         lastCritique = 'Return exactly one valid async JavaScript function declaration with balanced parentheses/braces and no extra text.';
-        logger.warn({ task: task.description, parseAttempt: attempt, err: err.message }, 'Action agent parse retry');
+        logger.warn({
+          task: task.description,
+          parseAttempt: attempt,
+          err: err.message,
+          rawResponsePreview: this.truncateText(response.text, 600),
+        }, 'Action agent parse retry');
       }
     }
 
@@ -317,6 +335,13 @@ Write the function:`;
     if (parsed) {
       parsed.functionCode = this.injectNullGuards(parsed.functionCode);
       return parsed;
+    }
+
+    // If the response contains no async function keyword anywhere, fail fast
+    // so the retry prompt gets a clean signal — wrapping prose as a function
+    // body just produces an opaque Babel error two layers down.
+    if (!/async\s+function\b/.test(code)) {
+      throw new Error('LLM response contains no async function declaration');
     }
 
     // Fallback: LLM returned raw body, wrap it in a function

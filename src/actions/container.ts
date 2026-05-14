@@ -3,10 +3,6 @@ import { Vec3 } from 'vec3';
 import { ActionResult } from './types';
 import { moveNearWithCleanup } from './moveHelper';
 
-async function moveNear(bot: Bot, x: number, y: number, z: number, range = 3, timeoutMs = 15000): Promise<boolean> {
-  return moveNearWithCleanup(bot, { x, y, z, range }, timeoutMs);
-}
-
 const CONTAINER_OPEN_TIMEOUT = 10000;
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -29,7 +25,12 @@ export async function inspectContainer(bot: Bot, blockName: string, position?: V
   const containerBlock = position ? bot.blockAt(position) : resolveContainerBlock(bot, blockName);
   if (!containerBlock) return { success: false, message: `No ${blockName} nearby` };
 
-  const moved = await moveNear(bot, containerBlock.position.x, containerBlock.position.y, containerBlock.position.z, 3);
+  const moved = await moveNearWithCleanup(bot, {
+    x: containerBlock.position.x,
+    y: containerBlock.position.y,
+    z: containerBlock.position.z,
+    range: 3,
+  });
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {
@@ -58,7 +59,12 @@ export async function withdrawFromContainer(bot: Bot, blockName: string, itemNam
   const containerBlock = resolveContainerBlock(bot, blockName);
   if (!containerBlock) return { success: false, message: `No ${blockName} nearby` };
 
-  const moved = await moveNear(bot, containerBlock.position.x, containerBlock.position.y, containerBlock.position.z, 3);
+  const moved = await moveNearWithCleanup(bot, {
+    x: containerBlock.position.x,
+    y: containerBlock.position.y,
+    z: containerBlock.position.z,
+    range: 3,
+  });
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {
@@ -79,7 +85,12 @@ export async function depositToContainer(bot: Bot, blockName: string, itemName: 
   const containerBlock = resolveContainerBlock(bot, blockName);
   if (!containerBlock) return { success: false, message: `No ${blockName} nearby` };
 
-  const moved = await moveNear(bot, containerBlock.position.x, containerBlock.position.y, containerBlock.position.z, 3);
+  const moved = await moveNearWithCleanup(bot, {
+    x: containerBlock.position.x,
+    y: containerBlock.position.y,
+    z: containerBlock.position.z,
+    range: 3,
+  });
   if (!moved) return { success: false, message: `Could not reach nearby ${blockName}` };
 
   try {

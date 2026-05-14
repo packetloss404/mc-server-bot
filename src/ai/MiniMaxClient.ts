@@ -1,24 +1,10 @@
 import { LLMClient, LLMResponse } from './LLMClient';
+import { Semaphore } from '../util/Semaphore';
 
 type GeminiLikeContent = {
   role?: string;
   parts?: Array<{ text?: string }>;
 };
-
-class Semaphore {
-  private active = 0;
-  private waiting: Array<() => void> = [];
-  constructor(private readonly max: number) {}
-  async acquire(): Promise<void> {
-    if (this.active < this.max) { this.active++; return; }
-    await new Promise<void>((resolve) => this.waiting.push(resolve));
-  }
-  release(): void {
-    this.active--;
-    const next = this.waiting.shift();
-    if (next) { this.active++; next(); }
-  }
-}
 
 /**
  * MiniMax chat client. Speaks the OpenAI-compatible /chat/completions schema

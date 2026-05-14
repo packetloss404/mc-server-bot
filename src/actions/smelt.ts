@@ -1,32 +1,9 @@
 import { Bot } from 'mineflayer';
-import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
 
 function inventorySummary(bot: Bot): string {
   return bot.inventory.items().map((item) => `${item.name}x${item.count}`).join(', ') || 'empty';
-}
-
-async function moveNear(bot: Bot, x: number, y: number, z: number, range = 3, timeoutMs = 15000): Promise<boolean> {
-  bot.pathfinder.setGoal(new goals.GoalNear(x, y, z, range));
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const done = (result: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timeout);
-      bot.removeListener('goal_reached', onReached as any);
-      bot.removeListener('path_update' as any, onPathUpdate);
-      if (!result) bot.pathfinder.stop();
-      resolve(result);
-    };
-    const onReached = () => done(true);
-    const onPathUpdate = (r: any) => {
-      if (r?.status === 'noPath') done(false);
-    };
-    const timeout = setTimeout(() => done(false), timeoutMs);
-    bot.once('goal_reached' as any, onReached);
-    bot.on('path_update' as any, onPathUpdate);
-  });
 }
 
 const FURNACE_OPEN_TIMEOUT = 10000;
@@ -55,7 +32,12 @@ export async function smelt(bot: Bot, itemName: string, fuelName: string, count 
     return { success: false, message: `No furnace nearby for smelting ${itemName}` };
   }
 
-  const moved = await moveNear(bot, furnaceBlock.position.x, furnaceBlock.position.y, furnaceBlock.position.z, 3);
+  const moved = await moveNearWithCleanup(bot, {
+    x: furnaceBlock.position.x,
+    y: furnaceBlock.position.y,
+    z: furnaceBlock.position.z,
+    range: 3,
+  });
   if (!moved) {
     return { success: false, message: `Found furnace for ${itemName} but could not reach it` };
   }

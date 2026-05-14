@@ -466,13 +466,31 @@ export class CodeExecutor {
       if (droppedEvents > 0) {
         events.push({ type: 'trace_truncated', message: `Dropped ${droppedEvents} execution events`, data: { droppedEvents } });
       }
-      pushPos('[exec] error');
+
+      const message: string = err?.message || String(err);
+      // Distinguish three failure modes — same outcome (success: false), different
+      // signal for the event log so retry/critic logic can react appropriately:
+      //   - timeout: we ran past the budget (likely an LLM-generated infinite loop)
+      //   - interrupt: a higher-priority signal cancelled us (instinct/safety override)
+      //   - runtime error: the generated code threw
+      let errorKind: 'execution_timeout' | 'execution_interrupted' | 'execution_error';
+      if (message.startsWith('Execution timed out')) {
+        errorKind = 'execution_timeout';
+      } else if (message.startsWith('Execution interrupted')) {
+        errorKind = 'execution_interrupted';
+      } else {
+        errorKind = 'execution_error';
+      }
+
+      pushPos(`[exec] ${errorKind}`);
       pushLog(`[exec] movedDistance=${startPos.distanceTo(bot.entity.position).toFixed(2)}`);
-      pushEvent('execution_error', err.message || String(err), { movedDistance: Number(startPos.distanceTo(bot.entity.position).toFixed(2)) });
+      pushEvent(errorKind, message, {
+        movedDistance: Number(startPos.distanceTo(bot.entity.position).toFixed(2)),
+      });
       return {
         success: false,
         output: logs.join('\n'),
-        error: err.message || String(err),
+        error: message,
         events,
       };
     } finally {

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { useBotStore } from '@/lib/store';
@@ -311,6 +311,15 @@ export default function StatsPage() {
   const [loading, setLoading] = useState(true);
   const [sortBy, setSortBy] = useState<'completed' | 'rate' | 'relationships'>('completed');
 
+  // Bot store updates fire on every position/health/state event — re-running
+  // the bots.map() fetch on every store push hammers /api/bots/:name/tasks
+  // and /relationships. Key the effect on a stable bot-roster signature so
+  // we only refetch when the SET of bots actually changes.
+  const botRosterKey = useMemo(
+    () => bots.map((b) => b.name).sort().join(','),
+    [bots],
+  );
+
   useEffect(() => {
     const loadStats = async () => {
       setLoading(true);
@@ -339,7 +348,8 @@ export default function StatsPage() {
       setLoading(false);
     };
     loadStats();
-  }, [bots]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [botRosterKey]);
 
   const sorted = [...stats].sort((a, b) => {
     if (sortBy === 'completed') return b.completedTasks - a.completedTasks;

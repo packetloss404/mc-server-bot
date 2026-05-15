@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
 import { useBotStore } from '@/lib/store';
 import { EVENT_CONFIG } from '@/lib/constants';
@@ -20,7 +20,17 @@ export default function ActivityPage() {
   const [typeFilter, setTypeFilter] = useState('all');
   const [livePaused, setLivePaused] = useState(false);
   const [pausedEvents, setPausedEvents] = useState<typeof events>([]);
-  const [grouped, setGrouped] = useState(true);
+  // Persist the grouped-mode toggle across sessions. Read once on mount;
+  // write on every change so the choice survives refresh.
+  const [grouped, setGrouped] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const stored = window.localStorage.getItem('activity:grouped');
+    return stored === null ? true : stored === '1';
+  });
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('activity:grouped', grouped ? '1' : '0');
+  }, [grouped]);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
   const visibleEvents = useMemo(() => (livePaused ? pausedEvents : events), [events, livePaused, pausedEvents]);

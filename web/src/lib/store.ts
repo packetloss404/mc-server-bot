@@ -542,6 +542,99 @@ export const useCampaignStore = create<CampaignState>((set) => ({
     set((state) => ({ campaigns: state.campaigns.filter((c) => c.id !== id) })),
 }));
 
+// ─── Decision Store (per-bot decision trace buffer) ───
+
+export interface DecisionRecord {
+  id: string;
+  type: string;
+  botName: string;
+  task?: string;
+  timestamp: number;
+  summary?: string;
+  decision?: string;
+  /** Convenience field — equivalent to `decision` for older payloads. */
+  action?: string;
+  /** Convenience field — equivalent to `summary` for older payloads. */
+  reason?: string;
+  target?: string;
+  metadata?: Record<string, unknown>;
+  alternatives?: Array<{
+    label: string;
+    chosen?: boolean;
+    reason?: string;
+    score?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  candidates?: Array<{
+    label: string;
+    chosen?: boolean;
+    reason?: string;
+    score?: number;
+    metadata?: Record<string, unknown>;
+  }>;
+  details?: Record<string, unknown>;
+}
+
+interface DecisionStore {
+  /** Per-bot decision buffers, keyed by lowercase bot name. */
+  decisionsByBot: Record<string, DecisionRecord[]>;
+  /** Push a single decision into a bot's buffer (caps at 50 newest-first). */
+  pushDecision: (botName: string, record: DecisionRecord) => void;
+  /** Replace the entire buffer for a bot (used by initial HTTP fetch). */
+  setDecisions: (botName: string, records: DecisionRecord[]) => void;
+  /** Clear the buffer for a bot. */
+  clearDecisions: (botName: string) => void;
+}
+
+const DECISION_BUFFER_CAP = 50;
+
+function dedupeAndSort(records: DecisionRecord[]): DecisionRecord[] {
+  const seen = new Set<string>();
+  const out: DecisionRecord[] = [];
+  for (const r of records) {
+    const key = r.id ?? `${r.timestamp}-${r.type}-${r.decision ?? r.action ?? ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(r);
+  }
+  out.sort((a, b) => b.timestamp - a.timestamp);
+  return out.slice(0, DECISION_BUFFER_CAP);
+}
+
+export const useDecisionStore = create<DecisionStore>((set) => ({
+  decisionsByBot: {},
+
+  pushDecision: (botName, record) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      const existing = state.decisionsByBot[key] ?? [];
+      const next = dedupeAndSort([record, ...existing]);
+      return {
+        decisionsByBot: { ...state.decisionsByBot, [key]: next },
+      };
+    }),
+
+  setDecisions: (botName, records) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      return {
+        decisionsByBot: {
+          ...state.decisionsByBot,
+          [key]: dedupeAndSort(records),
+        },
+      };
+    }),
+
+  clearDecisions: (botName) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      if (!(key in state.decisionsByBot)) return {};
+      const next = { ...state.decisionsByBot };
+      delete next[key];
+      return { decisionsByBot: next };
+    }),
+}));
+
 // ─── Chain Store ───
 
 interface ChainStore {

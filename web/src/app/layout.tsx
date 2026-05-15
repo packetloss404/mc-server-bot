@@ -4,6 +4,7 @@ import { Sidebar } from "@/components/Sidebar";
 import { SocketProvider } from "@/components/SocketProvider";
 import { ToastProvider } from "@/components/Toast";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { CommandPalette } from "@/components/CommandPalette";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -38,6 +39,7 @@ export default function RootLayout({
             <main className="flex-1 overflow-y-auto min-h-screen"><ErrorBoundary>{children}</ErrorBoundary></main>
           </ToastProvider>
         </SocketProvider>
+        <CommandPalette />
       </body>
     </html>
   );

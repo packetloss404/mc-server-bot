@@ -416,6 +416,34 @@ export interface MetricsData {
   [key: string]: any;
 }
 
+// Bot-to-bot message (BotComms.peekUnread payload)
+export interface BotMessage {
+  id: string;
+  from: string;
+  to: string;
+  content: string;
+  type: 'chat' | 'help_request' | 'status' | 'trade_offer' | 'alert';
+  timestamp: number;
+  read: boolean;
+}
+
+// Social memory entry
+export interface SocialMemoryEntry {
+  id: string;
+  botName: string;
+  type: 'chat' | 'task_complete' | 'task_failure' | 'combat' | 'gift' | 'trade' | 'observation';
+  subject: string;
+  description: string;
+  timestamp: number;
+  emotionalValence: number;
+}
+
+export interface EmotionalState {
+  mood: 'happy' | 'neutral' | 'sad' | 'angry' | 'fearful';
+  intensity: number;
+  lastUpdated: number;
+}
+
 // API functions
 export const api = {
   // Bots
@@ -424,6 +452,22 @@ export const api = {
   getBotRelationships: (name: string) => fetchJSON<{ relationships: Record<string, number> }>(`/api/bots/${name}/relationships`),
   getBotConversations: (name: string) => fetchJSON<{ conversations: Record<string, ChatMessage[]> }>(`/api/bots/${name}/conversations`),
   getBotTasks: (name: string) => fetchJSON<{ currentTask: string | null; completedTasks: string[]; failedTasks: string[] }>(`/api/bots/${name}/tasks`),
+  getBotDecisions: (name: string, limit = 30) =>
+    fetchJSON<{ decisions: Array<Record<string, unknown>> }>(`/api/bots/${name}/decisions?limit=${limit}`).catch(() => ({ decisions: [] })),
+  getBotReputation: (name: string) =>
+    fetchJSON<{
+      reputation: {
+        botName?: string;
+        name?: string;
+        overall: number;
+        reliability: number;
+        cooperation: number;
+        competence: number;
+        recentTrend: 'rising' | 'falling' | 'stable' | string;
+        totalEvents: number;
+        lastUpdated: number;
+      };
+    }>(`/api/reputation/${name}`),
 
   // Create / delete
   createBot: (name: string, personality: string, mode?: string) =>
@@ -768,4 +812,14 @@ export const api = {
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
       method: 'DELETE',
     }),
+
+  // ─── Bot-to-bot messages & social memory ───
+  getBotMessages: (name: string) =>
+    fetchJSON<{ messages: BotMessage[] }>(`/api/bots/${name}/messages`).catch(() => ({
+      messages: [] as BotMessage[],
+    })),
+  getBotMemories: (name: string) =>
+    fetchJSON<{ memories: SocialMemoryEntry[]; emotionalState: EmotionalState | null }>(
+      `/api/bots/${name}/memories`,
+    ).catch(() => ({ memories: [] as SocialMemoryEntry[], emotionalState: null })),
 };

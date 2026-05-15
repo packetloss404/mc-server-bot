@@ -38,12 +38,15 @@ import { TownBrain, TownBrainStatus } from './TownBrain';
 import type { BotManager } from '../bot/BotManager';
 import type { BuildCoordinator } from '../build/BuildCoordinator';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
+import type { SchematicMatcher } from '../build/SchematicMatcher';
 
 type TownRow = typeof schema.towns.$inferSelect;
 type DistrictRow = typeof schema.districts.$inferSelect;
 type ResidentRow = typeof schema.residents.$inferSelect;
 type BuildingRow = typeof schema.buildings.$inferSelect;
 type EventRow = typeof schema.events.$inferSelect;
+type ChronicleRow = typeof schema.chronicleEntries.$inferSelect;
+type JournalRow = typeof schema.botJournals.$inferSelect;
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -200,6 +203,71 @@ export interface TownEventInput {
   highlightScore?: number;
 }
 
+/**
+ * A chronicle row — the narrative summary the Chronicle Generator (Phase 4-B)
+ * writes once per Minecraft day plus on milestones. Daily entries are
+ * idempotent by (townId, dayNumber, 'daily').
+ */
+export interface ChronicleEntry {
+  id: string;
+  townId: string;
+  dayNumber: number;
+  kind: 'daily' | 'milestone' | 'disaster' | 'voice' | string;
+  body: string;
+  generatedAt: number | null;
+  model: string | null;
+}
+
+export interface ChronicleEntryInput {
+  townId: string;
+  dayNumber: number;
+  kind: ChronicleEntry['kind'];
+  body: string;
+  model?: string | null;
+  generatedAt?: number;
+}
+
+/** Per-resident first-person journal row (Phase 4-B scaffolding). */
+export interface BotJournalEntry {
+  id: string;
+  townId: string;
+  botName: string;
+  dayNumber: number | null;
+  body: string;
+  generatedAt: number | null;
+}
+
+export interface BotJournalInput {
+  townId: string;
+  botName: string;
+  dayNumber?: number | null;
+  body: string;
+  generatedAt?: number;
+}
+
+function rowToChronicle(row: ChronicleRow): ChronicleEntry {
+  return {
+    id: row.id,
+    townId: row.townId ?? '',
+    dayNumber: row.dayNumber,
+    kind: (row.kind as ChronicleEntry['kind']) ?? 'daily',
+    body: row.body,
+    generatedAt: row.generatedAt ?? null,
+    model: row.model ?? null,
+  };
+}
+
+function rowToJournal(row: JournalRow): BotJournalEntry {
+  return {
+    id: row.id,
+    townId: row.townId ?? '',
+    botName: row.botName,
+    dayNumber: row.dayNumber ?? null,
+    body: row.body,
+    generatedAt: row.generatedAt ?? null,
+  };
+}
+
 export interface TownManagerOptions {
   /** Override the data directory (defaults to `<cwd>/data`). Useful for tests. */
   dataDir?: string;
@@ -222,6 +290,8 @@ export class TownManager {
     botManager: BotManager;
     buildCoordinator: BuildCoordinator;
     blackboard: BlackboardManager;
+    /** Phase 4 — optional library-fallback matcher for the LLM design pipeline. */
+    schematicMatcher?: SchematicMatcher;
   } | null = null;
 
   constructor(opts: TownManagerOptions = {}) {
@@ -267,6 +337,8 @@ export class TownManager {
     botManager: BotManager;
     buildCoordinator: BuildCoordinator;
     blackboard: BlackboardManager;
+    /** Phase 4 — used as the library fallback when LLM design fails. */
+    schematicMatcher?: SchematicMatcher;
   }): void {
     this.brainDeps = deps;
     let booted = 0;
@@ -303,6 +375,7 @@ export class TownManager {
       this.brainDeps.botManager,
       this.brainDeps.buildCoordinator,
       this.brainDeps.blackboard,
+      { schematicMatcher: this.brainDeps.schematicMatcher },
     );
     this.townBrains.set(townId, brain);
     brain.start();
@@ -822,6 +895,184 @@ export class TownManager {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  //  Chronicle (Phase 4-B) — daily + milestone narrative entries
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Insert a chronicle row. Daily entries should be idempotent by
+   * (townId, dayNumber, 'daily') — callers (ChronicleGenerator) check before
+   * inserting, but this method itself just writes. Failures fall through to
+   * the JSONL fallback layer (kind='chronicle') so a wedged DB never drops
+   * the day's narrative.
+   */
+  insertChronicleEntry(input: ChronicleEntryInput): ChronicleEntry {
+    const id = genId('chr');
+    const generatedAt = input.generatedAt ?? Date.now();
+    const entry: ChronicleEntry = {
+      id,
+      townId: input.townId,
+      dayNumber: input.dayNumber,
+      kind: input.kind,
+      body: input.body,
+      generatedAt,
+      model: input.model ?? null,
+    };
+    try {
+      this.db
+        .insert(schema.chronicleEntries)
+        .values({
+          id,
+          townId: input.townId,
+          dayNumber: input.dayNumber,
+          kind: input.kind,
+          body: input.body,
+          generatedAt,
+          model: input.model ?? null,
+        })
+        .run();
+    } catch (err: any) {
+      this.appendFallbackRow('chronicle', input.townId, {
+        id,
+        townId: input.townId,
+        dayNumber: input.dayNumber,
+        kind: input.kind,
+        body: input.body,
+        generatedAt,
+        model: input.model ?? null,
+      });
+      logger.warn(
+        { err: err?.message, townId: input.townId, dayNumber: input.dayNumber },
+        'insertChronicleEntry: DB write failed; routed to fallback',
+      );
+    }
+    return entry;
+  }
+
+  /**
+   * List chronicle rows for a town. Newest-first by dayNumber, then by
+   * generatedAt — so a milestone written mid-day still surfaces on top.
+   * `kind` filter lets the dashboard separate daily from milestone feeds.
+   */
+  listChronicleEntries(
+    townId: string,
+    opts: { limit?: number; kind?: ChronicleEntry['kind'] } = {},
+  ): ChronicleEntry[] {
+    const limit = Math.min(Math.max(opts.limit ?? 7, 1), 100);
+    const whereExpr = opts.kind
+      ? and(eq(schema.chronicleEntries.townId, townId), eq(schema.chronicleEntries.kind, opts.kind))
+      : eq(schema.chronicleEntries.townId, townId);
+    const rows = this.db
+      .select()
+      .from(schema.chronicleEntries)
+      .where(whereExpr)
+      .orderBy(desc(schema.chronicleEntries.dayNumber), desc(schema.chronicleEntries.generatedAt))
+      .limit(limit)
+      .all();
+    return rows.map(rowToChronicle);
+  }
+
+  /**
+   * Find the daily chronicle row for a specific day, or null. Used by the
+   * generator to short-circuit duplicate runs.
+   */
+  getDailyChronicle(townId: string, dayNumber: number): ChronicleEntry | null {
+    const row = this.db
+      .select()
+      .from(schema.chronicleEntries)
+      .where(
+        and(
+          eq(schema.chronicleEntries.townId, townId),
+          eq(schema.chronicleEntries.dayNumber, dayNumber),
+          eq(schema.chronicleEntries.kind, 'daily'),
+        ),
+      )
+      .get();
+    return row ? rowToChronicle(row) : null;
+  }
+
+  /**
+   * Compute the chronicle day number for a town based on its foundedAt
+   * timestamp. One Minecraft day ≈ 20 real-time minutes (the spec's chosen
+   * cadence), so dayNumber = floor((now - foundedAt) / 20min). Day 1 is the
+   * first 20-minute window after founding. Returns null for missing towns.
+   */
+  getChronicleDayNumber(townId: string, now: number = Date.now()): number | null {
+    const town = this.getTown(townId);
+    if (!town) return null;
+    const elapsed = Math.max(0, now - town.foundedAt);
+    const dayMs = 20 * 60 * 1000;
+    // Day 1 is the first window — clamp at 1 so a freshly-founded town still
+    // gets a "Day 1" chronicle on the first scheduler tick.
+    return Math.max(1, Math.floor(elapsed / dayMs) + 1);
+  }
+
+  /**
+   * Insert a per-bot journal row. Phase 4-B ships this as scaffolding —
+   * Chronicle Generator focuses on the daily town narrative; per-bot LLM
+   * journals are filed as a Phase-5 follow-up.
+   */
+  insertBotJournal(input: BotJournalInput): BotJournalEntry {
+    const id = genId('jrn');
+    const generatedAt = input.generatedAt ?? Date.now();
+    const entry: BotJournalEntry = {
+      id,
+      townId: input.townId,
+      botName: input.botName,
+      dayNumber: input.dayNumber ?? null,
+      body: input.body,
+      generatedAt,
+    };
+    try {
+      this.db
+        .insert(schema.botJournals)
+        .values({
+          id,
+          townId: input.townId,
+          botName: input.botName,
+          dayNumber: input.dayNumber ?? null,
+          body: input.body,
+          generatedAt,
+        })
+        .run();
+    } catch (err: any) {
+      this.appendFallbackRow('journals', input.townId, {
+        id,
+        townId: input.townId,
+        botName: input.botName,
+        dayNumber: input.dayNumber ?? null,
+        body: input.body,
+        generatedAt,
+      });
+      logger.warn(
+        { err: err?.message, townId: input.townId, botName: input.botName },
+        'insertBotJournal: DB write failed; routed to fallback',
+      );
+    }
+    return entry;
+  }
+
+  listBotJournals(
+    townId: string,
+    opts: { botName?: string; limit?: number } = {},
+  ): BotJournalEntry[] {
+    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 200);
+    const whereExpr = opts.botName
+      ? and(
+          eq(schema.botJournals.townId, townId),
+          eq(schema.botJournals.botName, opts.botName),
+        )
+      : eq(schema.botJournals.townId, townId);
+    const rows = this.db
+      .select()
+      .from(schema.botJournals)
+      .where(whereExpr)
+      .orderBy(desc(schema.botJournals.generatedAt))
+      .limit(limit)
+      .all();
+    return rows.map(rowToJournal);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   //  Build-completion side channel (Phase 1 stub)
   // ──────────────────────────────────────────────────────────────────────
 
@@ -847,6 +1098,95 @@ export class TownManager {
       },
       highlightScore: 20,
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Style observations (Phase 4 — feedback path)
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Append a `style_observations` row. The `palette` blob is whatever the
+   * caller wants to remember about a realized build (block frequencies,
+   * dimensions, kind) — StyleObserver writes a structured object that
+   * `updateFromObservations` in StyleDoc.ts knows how to read.
+   *
+   * Failures route to the JSONL fallback so the feedback loop survives a
+   * wedged DB.
+   */
+  insertStyleObservation(
+    townId: string,
+    input: { buildingId: string | null; palette: unknown },
+  ): void {
+    const id = genId('sob');
+    const recordedAt = Date.now();
+    try {
+      this.db
+        .insert(schema.styleObservations)
+        .values({
+          id,
+          townId,
+          buildingId: input.buildingId,
+          paletteJson: input.palette == null ? null : JSON.stringify(input.palette),
+          recordedAt,
+          included: true,
+        })
+        .run();
+    } catch (err: any) {
+      this.appendFallbackRow('style_observations', townId, {
+        id,
+        townId,
+        buildingId: input.buildingId,
+        palette: input.palette,
+        recordedAt,
+        included: true,
+      });
+      logger.warn(
+        { err: err?.message, townId, buildingId: input.buildingId },
+        'insertStyleObservation: DB write failed; routed to fallback',
+      );
+    }
+  }
+
+  /** Read every style observation for a town, newest-first. */
+  getStyleObservations(townId: string): Array<{
+    id: string;
+    townId: string;
+    buildingId: string | null;
+    palette: unknown;
+    recordedAt: number | null;
+    included: boolean;
+  }> {
+    const rows = this.db
+      .select()
+      .from(schema.styleObservations)
+      .where(eq(schema.styleObservations.townId, townId))
+      .orderBy(desc(schema.styleObservations.recordedAt))
+      .all();
+    return rows.map((row) => ({
+      id: row.id,
+      townId: row.townId ?? townId,
+      buildingId: row.buildingId ?? null,
+      palette: safeJsonParse<unknown>(row.paletteJson ?? null, null),
+      recordedAt: row.recordedAt ?? null,
+      included: row.included !== false,
+    }));
+  }
+
+  /**
+   * Read the on-disk `style.json` for a town. Lives at
+   * `<dataDir>/towns/<townId>/style.json`. Returns null when the file is
+   * missing or malformed.
+   */
+  getStyleDoc(townId: string): unknown {
+    // Lazy-require so test bundlers don't pull StyleDoc's deps eagerly.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { loadStyle } = require('./StyleDoc');
+    return loadStyle(this.dataDir, townId);
+  }
+
+  /** Expose the data dir so peripheral modules (LlmDesigner, StyleObserver) can resolve files. */
+  getDataDir(): string {
+    return this.dataDir;
   }
 
   // ──────────────────────────────────────────────────────────────────────

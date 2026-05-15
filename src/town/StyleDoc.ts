@@ -99,3 +99,145 @@ export function writeStyle(dataDir: string, doc: StyleDoc): boolean {
     return false;
   }
 }
+
+// ─── Phase 4: feedback aggregation ────────────────────────────────────────
+
+/**
+ * Shape we accept from TownManager.getStyleObservations(): each row is a
+ * `style_observations` record whose `palette` blob carries the per-build
+ * frequency snapshot StyleObserver wrote in. We aggregate across all rows to
+ * produce a "what the town has actually been built from" palette.
+ */
+export interface StyleObservationRow {
+  buildingId: string | null;
+  /** The full `palette` JSON written by StyleObserver. */
+  palette: unknown;
+  recordedAt: number | null;
+  included: boolean;
+}
+
+interface ObservationPalette {
+  wall?: Array<{ name: string; count: number }>;
+  roof?: Array<{ name: string; count: number }>;
+  floor?: Array<{ name: string; count: number }>;
+  accent?: Array<{ name: string; count: number }>;
+  dimensions?: { w: number; h: number; d: number };
+  kind?: string;
+  totalBlocks?: number;
+}
+
+/** How many recent observations to weight when re-aggregating. */
+const RECENT_WINDOW = 25;
+
+function topNames(rows: Array<{ name: string; count: number }>, n: number): string[] {
+  return rows
+    .sort((a, b) => b.count - a.count)
+    .slice(0, n)
+    .map((r) => r.name);
+}
+
+/**
+ * Aggregate observation rows into a fresh StyleDoc and write it to disk. The
+ * seed style is preserved (we never "forget" the founding preset) but the
+ * realized palette and dimensions evolve toward what the town has actually
+ * built. Safe to call from a build-completion hook — failures are swallowed.
+ */
+export function updateFromObservations(
+  dataDir: string,
+  townId: string,
+  observations: StyleObservationRow[],
+): boolean {
+  const current = loadStyle(dataDir, townId);
+  if (!current) {
+    // No style.json on disk — nothing to evolve. (Seed should always exist
+    // because createTown writes it.)
+    return false;
+  }
+  // Sort newest-first and take the recent window.
+  const recent = [...observations]
+    .filter((o) => o.included && o.palette && typeof o.palette === 'object')
+    .sort((a, b) => (b.recordedAt ?? 0) - (a.recordedAt ?? 0))
+    .slice(0, RECENT_WINDOW);
+  if (recent.length === 0) return false;
+
+  // Aggregate counts across observations.
+  const tally = {
+    wall: new Map<string, number>(),
+    roof: new Map<string, number>(),
+    floor: new Map<string, number>(),
+    accent: new Map<string, number>(),
+  };
+  let totalHouseW = 0, totalHouseH = 0, totalHouseD = 0, houseCount = 0;
+  let totalCivicW = 0, totalCivicH = 0, totalCivicD = 0, civicCount = 0;
+  for (const obs of recent) {
+    const p = obs.palette as ObservationPalette;
+    for (const role of ['wall', 'roof', 'floor', 'accent'] as const) {
+      const list = p[role] ?? [];
+      for (const { name, count } of list) {
+        tally[role].set(name, (tally[role].get(name) ?? 0) + count);
+      }
+    }
+    if (p.dimensions) {
+      if (p.kind === 'house') {
+        totalHouseW += p.dimensions.w;
+        totalHouseH += p.dimensions.h;
+        totalHouseD += p.dimensions.d;
+        houseCount++;
+      } else {
+        totalCivicW += p.dimensions.w;
+        totalCivicH += p.dimensions.h;
+        totalCivicD += p.dimensions.d;
+        civicCount++;
+      }
+    }
+  }
+
+  // Build the evolved palette. Keep the seed entries at the back so we never
+  // lose the founding identity if a few unusual builds dominate the tally.
+  const tallyToRanked = (m: Map<string, number>) =>
+    [...m].map(([name, count]) => ({ name, count }));
+  const merged: StyleDocPalette = {
+    common: dedupe([...topNames(tallyToRanked(tally.wall), 4), ...current.block_palette.common]),
+    accent: dedupe([...topNames(tallyToRanked(tally.accent), 4), ...current.block_palette.accent]),
+    roof: dedupe([...topNames(tallyToRanked(tally.roof), 3), ...current.block_palette.roof]),
+    floor: dedupe([...topNames(tallyToRanked(tally.floor), 3), ...current.block_palette.floor]),
+  };
+
+  const next: StyleDoc = {
+    ...current,
+    lastObservedAt: Date.now(),
+    block_palette: merged,
+    dimensions: {
+      house_avg:
+        houseCount > 0
+          ? {
+              w: Math.round(totalHouseW / houseCount),
+              h: Math.round(totalHouseH / houseCount),
+              d: Math.round(totalHouseD / houseCount),
+            }
+          : current.dimensions.house_avg,
+      civic_avg:
+        civicCount > 0
+          ? {
+              w: Math.round(totalCivicW / civicCount),
+              h: Math.round(totalCivicH / civicCount),
+              d: Math.round(totalCivicD / civicCount),
+            }
+          : current.dimensions.civic_avg,
+    },
+  };
+
+  return writeStyle(dataDir, next);
+}
+
+function dedupe(items: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    if (!item) continue;
+    if (seen.has(item)) continue;
+    seen.add(item);
+    result.push(item);
+  }
+  return result.slice(0, 8);
+}

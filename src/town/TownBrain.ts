@@ -18,16 +18,28 @@
  * Spec: TOWN_BUILDER_SPEC.md §4 (architecture, Layer 2) + the implementation
  * briefs in the Phase 2 and Phase 3 tickets.
  */
+import path from 'path';
 import type { TownManager } from './TownManager';
 import type { BotManager } from '../bot/BotManager';
 import type { BuildCoordinator } from '../build/BuildCoordinator';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
+import type { SchematicMatcher } from '../build/SchematicMatcher';
 import type { Building, Town } from './Town';
 import type { PlanItem, TownTier } from './PlanItem';
+import type { StyleDoc } from './StyleDoc';
+import { loadStyle } from './StyleDoc';
 import { getRequiredBuildings as getMedievalPlan } from './seed/medieval';
 import { getRequiredBuildings as getMidCenturyPlan } from './seed/midcentury';
 import { RoleManager } from './RoleManager';
 import { ScheduleManager } from './ScheduleManager';
+import {
+  LlmDesigner,
+  dimensionsFor,
+  type DesignResult,
+  type NeighborContext,
+} from './LlmDesigner';
+import { DesignCache, buildStyleHashInput } from './DesignCache';
+import { StyleObserver } from './StyleObserver';
 import { logger } from '../util/logger';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -87,6 +99,21 @@ export class TownBrain {
    * handed to the role loop on the same tick. Cleared each tick.
    */
   private currentTickShortages: string[] = [];
+  /** Phase 4 — optional library matcher used when the LLM design fails. */
+  private readonly schematicMatcher: SchematicMatcher | null;
+  /** Phase 4 — LLM-driven block-plan generator. Null when no LLM client is wired. */
+  private readonly llmDesigner: LlmDesigner | null;
+  /** Phase 4 — per-town design cache rooted at `schematics/<townId>/`. */
+  private readonly designCache: DesignCache;
+  /** Phase 4 — observation writer for the realized-palette feedback loop. */
+  private readonly styleObserver: StyleObserver;
+  /** Phase 4 — per-day (UTC) LLM spend ledger, keyed by yyyy-mm-dd. */
+  private readonly dailySpendUsd: Map<string, number> = new Map();
+  /** Track if we've already emitted budget:capped for a given day to avoid spam. */
+  private readonly budgetCappedLogged: Set<string> = new Set();
+  /** Style-hashes whose cache hits we've already observed during this brain's
+   *  lifetime; prevents re-observing on every tick. */
+  private readonly observedCacheHashes: Set<string> = new Set();
 
   constructor(
     townId: string,
@@ -94,7 +121,13 @@ export class TownBrain {
     botManager: BotManager,
     buildCoordinator: BuildCoordinator,
     blackboard: BlackboardManager,
-    opts: { intervalMs?: number; roleManager?: RoleManager; scheduleManager?: ScheduleManager } = {},
+    opts: {
+      intervalMs?: number;
+      roleManager?: RoleManager;
+      scheduleManager?: ScheduleManager;
+      /** Phase 4 — library fallback matcher; optional in tests. */
+      schematicMatcher?: SchematicMatcher;
+    } = {},
   ) {
     this.townId = townId;
     this.townManager = townManager;
@@ -104,6 +137,14 @@ export class TownBrain {
     this.intervalMs = opts.intervalMs ?? TICK_INTERVAL_MS;
     this.roleManager = opts.roleManager ?? new RoleManager(townManager, botManager);
     this.scheduleManager = opts.scheduleManager ?? new ScheduleManager(townManager, blackboard);
+    this.schematicMatcher = opts.schematicMatcher ?? null;
+    const llmClient = botManager.getLLMClient();
+    this.llmDesigner = llmClient ? new LlmDesigner({ llmClient }) : null;
+    // Design cache lives next to the canonical schematics dir so build coord
+    // can also load cached files directly should it ever learn to.
+    const schematicsRoot = path.join(process.cwd(), 'schematics');
+    this.designCache = new DesignCache(schematicsRoot);
+    this.styleObserver = new StyleObserver(townManager, townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'));
   }
 
   /** Exposed so TownManager (and the API) can call assignment outside the tick. */
@@ -286,6 +327,16 @@ export class TownBrain {
 
   // ──────────────────────────────────────────────────────────────────────
   //  Loop 2: build — compare town plan to actual buildings, queue gaps
+  //
+  //  Phase 4: the LLM design path is the PRIMARY route here.
+  //    1. Style consultation: load the on-disk style.json.
+  //    2. LLM design path: prompt the LLM for a BlockPlan. Validate. Retry
+  //       up to 3x on validation failure.
+  //    3. Cache successful plans under `schematics/<townId>/<kind>-<hash>`.
+  //    4. Style observation feedback: capture realized palette + dims into
+  //       style_observations + re-aggregate style.json.
+  //    5. Fallback to SchematicMatcher when LLM fails 3x OR the daily budget
+  //       cap is hit (config.llmBudgetUsd).
   // ──────────────────────────────────────────────────────────────────────
 
   private async buildLoop(town: Town): Promise<void> {
@@ -315,7 +366,7 @@ export class TownBrain {
       const have = haveCounts[item.kind] ?? 0;
       if (have >= item.count) continue;
       if (!item.required) continue;
-      await this.queuePlanItem(town, item);
+      await this.queuePlanItem(town, item, existing);
       // ONE per tick — bail after we've queued the first gap.
       return;
     }
@@ -344,15 +395,14 @@ export class TownBrain {
   }
 
   /**
-   * Materialize a missing plan item: insert a `planned` Building row and
-   * queue a build job. With the row in place, the next tick's
-   * `inFlight`/`haveCounts` checks correctly skip this kind, so the brain
-   * does not re-queue the same plan item every 60s. Phase 4 will wire
-   * SchematicMatcher + LLM design here; for now we hand the schematicQuery
-   * straight to BuildCoordinator and accept that startBuild may throw if no
-   * matching file exists.
+   * Materialize a missing plan item. Phase 4: try the LLM design path first
+   * (cached → fresh design); fall back to the library matcher only when the
+   * LLM round-trip fails or the per-day budget is exhausted.
+   *
+   * Whatever path resolves the schematic, we always insert a `planned`
+   * Building row so the next tick's gate skips the same kind.
    */
-  private async queuePlanItem(town: Town, item: PlanItem): Promise<void> {
+  private async queuePlanItem(town: Town, item: PlanItem, existingBuildings: Building[]): Promise<void> {
     if (!town.capital) {
       logger.warn(
         { townId: this.townId, kind: item.kind },
@@ -360,12 +410,12 @@ export class TownBrain {
       );
       return;
     }
-    const schematicFile = `${item.schematicQuery}.schem`;
+
     const building = this.townManager.createPlannedBuilding({
       townId: this.townId,
       // Stored as "<kind>:<n>" so countBuildingsByKind groups by kind.
       name: `${item.kind}:${Date.now().toString(36)}`,
-      schematicSource: 'library',
+      schematicSource: 'llm',
       schematicRef: item.schematicQuery,
     });
     this.townManager.recordEvent({
@@ -376,28 +426,39 @@ export class TownBrain {
       highlightScore: 35,
     });
 
+    // Resolve the schematic file via the LLM design path with fallback.
+    const resolved = await this.resolveSchematicForPlanItem(town, item, building, existingBuildings);
+    if (!resolved) {
+      logger.warn(
+        { townId: this.townId, kind: item.kind, buildingId: building.id },
+        'TownBrain build: no schematic could be resolved; planned row stays for retry',
+      );
+      return;
+    }
+
     logger.info(
-      { townId: this.townId, kind: item.kind, buildingId: building.id, schematicFile },
+      {
+        townId: this.townId,
+        kind: item.kind,
+        buildingId: building.id,
+        schematicFile: resolved.schematicFile,
+        source: resolved.source,
+      },
       'TownBrain build: queuing planned building',
     );
 
     // Best-effort: pass to BuildCoordinator with auto-flat origin. The
-    // capital coords are the seed for the SiteSelector spiral. If no bots
-    // exist (or no schematic file matches), startBuild throws — we catch +
-    // record the planned row and try again next tick.
+    // capital coords are the seed for the SiteSelector spiral.
     try {
-      // Build coordinator wants at least one bot name. If we have no
-      // residents, queue the planned-row only — the build itself will fire
-      // once bots exist on a later tick.
       const residents = this.townManager.listResidents(this.townId);
       const botNames = residents.map((r) => r.botName);
       if (botNames.length === 0) {
-        // Phase 2: a town with zero residents still has town plan rows. The
-        // build will be queued for real on a tick where residents exist.
+        // A town with zero residents still has town plan rows. The build
+        // will be queued for real on a tick where residents exist.
         return;
       }
       const job = await this.buildCoordinator.startBuild(
-        schematicFile,
+        resolved.schematicFile,
         { x: town.capital.x, y: town.capital.y, z: town.capital.z },
         botNames,
         { originMode: 'auto-flat' },
@@ -406,19 +467,212 @@ export class TownBrain {
         townId: this.townId,
         kind: 'build:queued',
         severity: 'minor',
-        payload: { jobId: job.id, kind: item.kind, schematicFile, buildingId: building.id },
+        payload: {
+          jobId: job.id,
+          kind: item.kind,
+          schematicFile: resolved.schematicFile,
+          buildingId: building.id,
+          source: resolved.source,
+        },
         highlightScore: 30,
       });
     } catch (err: any) {
-      // Schematic missing, no bots ready, etc. The planned row stays in
-      // place so the next tick's gate skips this kind. Phase 4 will mark
-      // the row 'destroyed' on persistent failure so the brain can pick a
-      // different schematic; for now leaving it 'planned' is fine.
       logger.warn(
         { townId: this.townId, kind: item.kind, err: err?.message },
         'TownBrain build: startBuild failed (row stays planned, will retry)',
       );
     }
+  }
+
+  /**
+   * Run the Phase 4 resolution chain for one plan item:
+   *   cache → LLM design → SchematicMatcher → bare-filename guess.
+   * Returns the schematic filename + source label on success, null when
+   * every path failed.
+   */
+  private async resolveSchematicForPlanItem(
+    town: Town,
+    item: PlanItem,
+    building: Building,
+    existingBuildings: Building[],
+  ): Promise<{ schematicFile: string; source: 'cache' | 'llm' | 'library' | 'fallback'; plan?: DesignResult } | null> {
+    const styleDoc = this.loadTownStyle(town);
+    const stylePresetForHash = styleDoc?.seed_style ?? town.styleSeed ?? 'medieval-communal';
+    const dims = dimensionsFor(item.kind, styleDoc);
+    const hashInput = buildStyleHashInput({
+      stylePreset: stylePresetForHash,
+      kind: item.kind,
+      dimensions: dims,
+    });
+
+    // 1) Cache hit — skip the paid LLM call. The JSON cache file lives in
+    //    `schematics/<townId>/<kind>-<hash>.json`. BuildCoordinator today
+    //    only loads `.schem` files; we still need to fall through to the
+    //    library fallback for a buildable file, but we MUST NOT re-run the
+    //    LLM or re-observe the style on every tick. Once the JSON→.schem
+    //    encoder lands, return the cached.filename here directly.
+    let cacheHit = false;
+    try {
+      const cached = this.designCache.get({
+        townId: this.townId,
+        kind: item.kind,
+        styleHashInput: hashInput,
+      });
+      if (cached) {
+        cacheHit = true;
+        logger.info(
+          { townId: this.townId, kind: item.kind, filename: cached.filename },
+          'TownBrain build: design cache hit (JSON-only; library fallback used for build)',
+        );
+        // Observe ONCE on first cache hit during this brain's lifetime so the
+        // style doc converges. The cache file's own existence is the
+        // long-term store; re-observing every tick double-counts.
+        if (!this.observedCacheHashes.has(hashInput)) {
+          this.observedCacheHashes.add(hashInput);
+          this.styleObserver.observe(town, building, cached.plan);
+        }
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: this.townId, kind: item.kind },
+        'TownBrain build: design cache read failed',
+      );
+    }
+
+    // 2) Daily budget cap.
+    const budgetUsd = this.getDailyBudgetUsd(town);
+    const budgetKey = this.todayKey();
+    const spentToday = this.dailySpendUsd.get(budgetKey) ?? 0;
+    const overBudget = budgetUsd != null && spentToday >= budgetUsd;
+    if (overBudget && !this.budgetCappedLogged.has(budgetKey)) {
+      this.budgetCappedLogged.add(budgetKey);
+      this.townManager.recordEvent({
+        townId: this.townId,
+        kind: 'budget:capped',
+        severity: 'minor',
+        payload: { spentUsd: spentToday, budgetUsd, day: budgetKey },
+        highlightScore: 25,
+      });
+      logger.info(
+        { townId: this.townId, spentToday, budgetUsd },
+        'TownBrain build: daily LLM budget cap hit — falling back to library',
+      );
+    }
+
+    // 3) Fresh LLM design — only if no cache hit and within budget.
+    if (this.llmDesigner && !cacheHit && !overBudget) {
+      try {
+        const neighbors: NeighborContext = {
+          neighbors: existingBuildings.slice(-10).map((b) => ({
+            name: b.name,
+            kind: this.kindFromName(b.name),
+            origin: b.origin,
+            width: b.width,
+            height: b.height,
+            depth: b.depth,
+          })),
+        };
+        const design = await this.llmDesigner.designBuilding({
+          town,
+          plan: item,
+          styleDoc,
+          neighbors,
+        });
+        // Update spend ledger.
+        this.dailySpendUsd.set(budgetKey, spentToday + design.cost.estUsd);
+        // Cache the plan; record an event with the attempts/cost for telemetry.
+        const saved = this.designCache.save(
+          { townId: this.townId, kind: item.kind, styleHashInput: hashInput },
+          design.plan,
+        );
+        // Push a style observation so the style doc evolves toward what
+        // the LLM actually produced (we observe at design time so even
+        // failed builds inform the next prompt).
+        this.styleObserver.observe(town, building, design.plan);
+        this.townManager.recordEvent({
+          townId: this.townId,
+          kind: 'building:designed',
+          severity: 'info',
+          payload: {
+            buildingId: building.id,
+            kind: item.kind,
+            attempts: design.attempts,
+            estUsd: design.cost.estUsd,
+            blocks: design.plan.blocks.length,
+            cacheFile: saved?.filename ?? null,
+          },
+          highlightScore: 30,
+        });
+        // Even though we now have a JSON block plan, BuildCoordinator can
+        // only swing `.schem` files today. Fall through to library to pick
+        // an actual buildable file — but we've already saved the plan and
+        // observed the style. The JSON→schem encoder is a TODO; once
+        // landed, swap the return here to use the cached file path.
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId: this.townId, kind: item.kind },
+          'TownBrain build: LLM design failed; falling back to library',
+        );
+        this.townManager.recordEvent({
+          townId: this.townId,
+          kind: 'design:failed',
+          severity: 'minor',
+          payload: { kind: item.kind, error: err?.message ?? 'unknown' },
+          highlightScore: 15,
+        });
+      }
+    }
+
+    // 4) Library fallback via SchematicMatcher.
+    if (this.schematicMatcher) {
+      try {
+        const match = this.schematicMatcher.match(item.schematicQuery, {
+          style: town.styleSeed ?? undefined,
+        });
+        if (match) {
+          return { schematicFile: match.filename, source: 'library' };
+        }
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, kind: item.kind },
+          'TownBrain build: SchematicMatcher.match threw',
+        );
+      }
+    }
+
+    // 5) Bare-filename guess (current Phase 2 behavior). Most likely fails
+    //    BuildCoordinator's existsSync check, but keeps the original
+    //    fallback path for tests that pre-create `<query>.schem`.
+    return {
+      schematicFile: `${item.schematicQuery}.schem`,
+      source: 'fallback',
+    };
+  }
+
+  /** Lazy-load the style.json. Returns null when the file is missing. */
+  private loadTownStyle(town: Town): StyleDoc | null {
+    const dataDir = this.townManager.getDataDir?.() ?? path.join(process.cwd(), 'data');
+    return loadStyle(dataDir, town.id);
+  }
+
+  /** UTC yyyy-mm-dd key for the daily LLM spend ledger. */
+  private todayKey(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /** Pull the per-day USD ceiling out of town.config; null when not set. */
+  private getDailyBudgetUsd(town: Town): number | null {
+    const cfg = town.config ?? {};
+    const llmBudget = (cfg as any).llmBudgetUsd;
+    if (typeof llmBudget === 'number' && llmBudget > 0) return llmBudget;
+    return null;
+  }
+
+  /** Extract the kind from a stored `<kind>:<suffix>` building name. */
+  private kindFromName(name: string | null): string | null {
+    if (!name) return null;
+    const idx = name.indexOf(':');
+    return idx > 0 ? name.slice(0, idx) : name;
   }
 
   // ──────────────────────────────────────────────────────────────────────

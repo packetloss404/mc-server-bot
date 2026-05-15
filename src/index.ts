@@ -77,7 +77,7 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager, config, tokenLedger);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator, chronicleScheduler } = createAPIServer(botManager, config, tokenLedger);
 
   // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);
@@ -232,6 +232,9 @@ async function main() {
 
     // Flush supply chain coordinator (stops polling + saves)
     chainCoordinator.shutdown();
+
+    // Stop the chronicle scheduler so no late tick fires after the DB closes.
+    try { chronicleScheduler.stop(); } catch { /* swallow */ }
 
     // Flush campaign manager (persists state)
     campaignManager.shutdown();

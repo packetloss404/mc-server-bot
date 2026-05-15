@@ -23,6 +23,8 @@ import { MarkerStore } from '../control/MarkerStore';
 import { townToDTO } from '../town/TownManager';
 import { ScheduleManager } from '../town/ScheduleManager';
 import { TOWN_ROLES, type TownRole } from '../town/RoleManager';
+import { ChronicleGenerator } from '../town/ChronicleGenerator';
+import { ChronicleScheduler } from '../town/ChronicleScheduler';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -61,6 +63,8 @@ export interface APIServerResult {
   campaignManager: CampaignManager;
   schematicMatcher: SchematicMatcher;
   chainCoordinator: ChainCoordinator;
+  chronicleGenerator: ChronicleGenerator;
+  chronicleScheduler: ChronicleScheduler;
 }
 
 export function createAPIServer(botManager: BotManager, config?: Config, tokenLedger?: TokenLedger): APIServerResult {
@@ -203,9 +207,28 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       botManager,
       buildCoordinator,
       blackboard: botManager.getBlackboardManager(),
+      schematicMatcher,
     });
   } catch (err: any) {
     logger.warn({ err: err?.message }, 'TownManager.wireBrains failed');
+  }
+
+  // ── Phase 4-B Chronicle Generator + Scheduler ──
+  // Daily LLM-narrated chronicle entries (~once per 20-real-minute Minecraft
+  // day). The scheduler is idempotent — ticking faster than the day cadence
+  // is safe because the generator short-circuits on existing daily rows.
+  const chronicleGenerator = new ChronicleGenerator(
+    botManager.getTownManager(),
+    botManager.getLLMClient(),
+  );
+  const chronicleScheduler = new ChronicleScheduler(
+    botManager.getTownManager(),
+    chronicleGenerator,
+  );
+  try {
+    chronicleScheduler.start();
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'ChronicleScheduler.start failed');
   }
 
   // Wire build dependencies into CommanderService now that they exist.
@@ -2520,6 +2543,42 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     res.json({ buildings: tm.listBuildings(String(req.params.id)) });
   });
 
+  // Phase 4 — list cached LLM-designed plans for a town.
+  app.get('/api/towns/:id/designs', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    try {
+      // Lazy-require to keep dashboard endpoints lean for non-town routes.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { DesignCache } = require('../town/DesignCache');
+      const cache = new DesignCache(schematicsDir);
+      res.json({ designs: cache.list(townId) });
+    } catch (err: any) {
+      logger.warn({ err: err?.message, townId }, 'GET /api/towns/:id/designs failed');
+      res.status(500).json({ error: 'Failed to list designs' });
+    }
+  });
+
+  // Phase 4 — return the evolving style.json for a town.
+  app.get('/api/towns/:id/style', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const style = tm.getStyleDoc(townId);
+    if (!style) {
+      res.status(404).json({ error: 'No style doc on disk for this town' });
+      return;
+    }
+    res.json({ style });
+  });
+
   app.get('/api/towns/:id/residents', (req: Request, res: Response) => {
     const tm = botManager.getTownManager();
     if (!tm.getTown(String(req.params.id))) {
@@ -2551,6 +2610,75 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       since: Number.isFinite(sinceRaw) ? sinceRaw : undefined,
     });
     res.json({ events });
+  });
+
+  // ─── Phase 4-B Chronicle ──────────────────────────────────────────────
+  // Last N chronicle entries (newest-first). Defaults to 7 — the spec's
+  // "last week of dailies" feed for the dashboard.
+  app.get('/api/towns/:id/chronicle', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '7'), 10);
+    const kindRaw = typeof req.query.kind === 'string' ? req.query.kind : undefined;
+    const entries = tm.listChronicleEntries(String(req.params.id), {
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+      kind: kindRaw,
+    });
+    res.json({ entries });
+  });
+
+  // Manual trigger — generate (or force-regenerate) the chronicle entry for
+  // a given day. Body: { dayNumber?: number; force?: boolean }. Used by the
+  // dashboard's "Generate now" button.
+  app.post('/api/towns/:id/chronicle/generate', async (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const body = (req.body ?? {}) as { dayNumber?: number; force?: boolean };
+    const dayNumber =
+      typeof body.dayNumber === 'number' && Number.isFinite(body.dayNumber)
+        ? Math.max(1, Math.floor(body.dayNumber))
+        : (tm.getChronicleDayNumber(townId) ?? 1);
+    try {
+      const entry = await chronicleGenerator.generateDaily(townId, dayNumber, {
+        force: body.force === true,
+      });
+      if (!entry) {
+        // generateDaily returns null only on budget-capped / missing-town; the
+        // missing-town case is already 404'd above.
+        res.status(202).json({ ok: false, reason: 'budget_capped', dayNumber });
+        return;
+      }
+      io.emit('town:chronicle', { townId, dayNumber, entry });
+      res.json({ entry });
+    } catch (err: any) {
+      logger.warn({ err: err?.message, townId, dayNumber }, 'chronicle/generate failed');
+      res.status(500).json({ error: err?.message ?? 'chronicle generation failed' });
+    }
+  });
+
+  // Per-bot journals (Phase 4-B scaffolding only — per-resident LLM call is
+  // a follow-up). Query: ?botName=... &limit=N. Returns rows newest-first.
+  app.get('/api/towns/:id/journals', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const botName = typeof req.query.botName === 'string' ? req.query.botName : undefined;
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '20'), 10);
+    const journals = tm.listBotJournals(townId, {
+      botName,
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+    });
+    res.json({ journals });
   });
 
   app.post('/api/towns/:id/residents', (req: Request, res: Response) => {
@@ -2679,5 +2807,6 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     app, httpServer, io, eventLog,
     commanderService, commandCenter, missionManager, markerStore, squadManager, roleManager, templateManager, routineManager,
     buildCoordinator, campaignManager, schematicMatcher, chainCoordinator,
+    chronicleGenerator, chronicleScheduler,
   };
 }

@@ -1067,6 +1067,39 @@ export const api = {
     fetchJSON<TownSchedulesResponse>(
       `/api/towns/${encodeURIComponent(id)}/schedules`,
     ).catch(() => null as TownSchedulesResponse | null),
+
+  // ─── Town chronicle (Phase 4-B) ───────────────────────────────────────
+  //
+  // Daily LLM-narrated story entries (last 7 by default) and the manual
+  // "Generate now" trigger. GET swallows errors so the dashboard renders an
+  // empty state when the backend hasn't finished booting; POST surfaces so
+  // toasts can show "Backend not ready yet."
+  listTownChronicle: (id: string, params?: { limit?: number; kind?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.kind !== undefined) q.set('kind', params.kind);
+    const qs = q.toString();
+    return fetchJSON<{ entries: ChronicleEntryDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/chronicle${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ entries: [] as ChronicleEntryDTO[] }));
+  },
+  generateChronicleNow: (
+    id: string,
+    body?: { dayNumber?: number; force?: boolean },
+  ) =>
+    fetchJSON<{ entry?: ChronicleEntryDTO; ok?: false; reason?: string; dayNumber?: number }>(
+      `/api/towns/${encodeURIComponent(id)}/chronicle/generate`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+  listBotJournals: (id: string, params?: { botName?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.botName !== undefined) q.set('botName', params.botName);
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    const qs = q.toString();
+    return fetchJSON<{ journals: BotJournalDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/journals${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ journals: [] as BotJournalDTO[] }));
+  },
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1123,6 +1156,30 @@ export interface TownEventDTO {
   payload: unknown;
   occurredAt: number;
   highlightScore: number;
+}
+
+// ─── Town chronicle (Phase 4-B) ────────────────────────────────────────────
+//
+// Mirrors `ChronicleEntry` in src/town/TownManager.ts. `kind` is open-ended
+// because milestone kinds are spec-defined string ids ('tier_upgrade', etc.).
+
+export interface ChronicleEntryDTO {
+  id: string;
+  townId: string;
+  dayNumber: number;
+  kind: 'daily' | 'milestone' | 'disaster' | 'voice' | string;
+  body: string;
+  generatedAt: number | null;
+  model: string | null;
+}
+
+export interface BotJournalDTO {
+  id: string;
+  townId: string;
+  botName: string;
+  dayNumber: number | null;
+  body: string;
+  generatedAt: number | null;
 }
 
 // ─── Town roles (Phase 3) ─────────────────────────────────────────────────

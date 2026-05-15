@@ -13,6 +13,7 @@ import { FoundTownModal } from '@/components/town/FoundTownModal';
 import { RoleBreakdownCard } from '@/components/town/RoleBreakdownCard';
 import { ScheduleStripCard } from '@/components/town/ScheduleStripCard';
 import { RoleResidentList } from '@/components/town/RoleResidentList';
+import { ChronicleFeedCard } from '@/components/town/ChronicleFeedCard';
 
 /**
  * The API may return `paused` as optional (older builds) or omit it entirely
@@ -271,6 +272,9 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
         <ScheduleStripCard townId={town.id} />
       </div>
       <RoleResidentList townId={town.id} />
+
+      {/* Chronicle (Phase 4-B) — LLM-narrated daily story stream. */}
+      <ChronicleFeedCard townId={town.id} />
 
       {/* Two-column: events + quick actions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

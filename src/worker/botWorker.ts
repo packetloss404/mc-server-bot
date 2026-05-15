@@ -124,6 +124,42 @@ ipc.onCommand((type, cmdData) => {
         (instance as any).bot?.clearControlStates();
       } catch {}
       break;
+    case 'config:patch': {
+      // Hot-reload runtime config patches broadcast from the main thread's
+      // PATCH /api/config/:section handler. The worker captured its own
+      // Config object via loadConfig() at boot, so we merge the new field
+      // values into that same reference — subsystems that hold the config
+      // (VoyagerLoop, InstinctsManager, BehaviorManager) read it on every
+      // tick, so the next loop iteration picks up the patched values.
+      try {
+        const section = cmdData?.section as keyof typeof config | undefined;
+        const values = cmdData?.values as Record<string, unknown> | undefined;
+        if (!section || !values || typeof values !== 'object') {
+          logger.warn({ bot: data.botName, cmdData }, 'config:patch ignored: malformed payload');
+          break;
+        }
+        if (!config) {
+          // Defensive: config is initialized at module load above, but if
+          // a future refactor makes it lazy, skipping is safe — workers
+          // re-load config on respawn anyway.
+          logger.warn({ bot: data.botName, section }, 'config:patch ignored: config not initialized');
+          break;
+        }
+        const current = (config as any)[section];
+        if (current && typeof current === 'object') {
+          (config as any)[section] = { ...current, ...values };
+        } else {
+          (config as any)[section] = { ...values };
+        }
+        logger.info(
+          { bot: data.botName, section, fields: Object.keys(values) },
+          'Runtime config hot-reloaded in worker',
+        );
+      } catch (err: any) {
+        logger.error({ bot: data.botName, err: err?.message }, 'config:patch handler failed');
+      }
+      break;
+    }
   }
 });
 

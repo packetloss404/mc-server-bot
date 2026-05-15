@@ -13,6 +13,8 @@ export interface SettingsTabsProps<T extends string = string> {
   activeTab: T;
   onChange: (tab: T) => void;
   accentColor?: string;
+  /** Tab ids that currently have unsaved edits — shown as an amber dot. */
+  dirtyTabs?: ReadonlySet<T>;
 }
 
 /**
@@ -24,6 +26,7 @@ export function SettingsTabs<T extends string>({
   activeTab,
   onChange,
   accentColor = '#10B981',
+  dirtyTabs,
 }: SettingsTabsProps<T>) {
   const handleKey = (e: KeyboardEvent<HTMLButtonElement>) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -40,6 +43,7 @@ export function SettingsTabs<T extends string>({
     <div role="tablist" aria-label="Settings sections" className="flex gap-1 overflow-x-auto pb-0 border-b border-zinc-800">
       {tabs.map((tab) => {
         const isActive = activeTab === tab.id;
+        const isDirty = dirtyTabs?.has(tab.id) ?? false;
         return (
           <button
             key={tab.id}
@@ -51,13 +55,20 @@ export function SettingsTabs<T extends string>({
             tabIndex={isActive ? 0 : -1}
             onClick={() => onChange(tab.id)}
             onKeyDown={handleKey}
-            className={`relative px-4 py-2.5 text-xs font-medium rounded-t-lg transition-colors whitespace-nowrap ${
+            className={`relative px-4 py-2.5 text-xs font-medium rounded-t-lg transition-colors whitespace-nowrap inline-flex items-center ${
               isActive
                 ? 'text-white bg-zinc-900/80'
                 : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900/40'
             }`}
           >
             {tab.label}
+            {isDirty && (
+              <span
+                className="ml-2 w-1.5 h-1.5 rounded-full bg-amber-400"
+                aria-label="unsaved changes"
+                title="Unsaved changes — switching tabs discards them."
+              />
+            )}
             {isActive && (
               <motion.span
                 layoutId="settings-tab-underline"

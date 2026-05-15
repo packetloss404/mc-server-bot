@@ -88,6 +88,24 @@ function SettingsPageInner() {
     [router, searchParams],
   );
 
+  // Per-section dirty state — populated by each <SettingsSection> via onDirtyChange.
+  // Switching tabs unmounts the section (existing behavior), which clears its
+  // entry; the dot is purely a visual warning that switching discards edits.
+  const [dirtyTabs, setDirtyTabs] = useState<Set<TabId>>(new Set());
+  const makeDirtyHandler = useCallback(
+    (id: TabId) => (dirty: boolean) => {
+      setDirtyTabs((prev) => {
+        const has = prev.has(id);
+        if (dirty === has) return prev;
+        const next = new Set(prev);
+        if (dirty) next.add(id);
+        else next.delete(id);
+        return next;
+      });
+    },
+    [],
+  );
+
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
       <div className="max-w-4xl mx-auto space-y-6">
@@ -98,7 +116,12 @@ function SettingsPageInner() {
           </p>
         </div>
 
-        <SettingsTabs<TabId> tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+        <SettingsTabs<TabId>
+          tabs={TABS}
+          activeTab={activeTab}
+          onChange={setActiveTab}
+          dirtyTabs={dirtyTabs}
+        />
 
         <div>
           {activeTab === 'ai' && <AiProviderTab />}
@@ -107,6 +130,7 @@ function SettingsPageInner() {
               section="behavior"
               title="Behavior"
               description="Tune how bots prioritize, schedule, and react to ongoing tasks."
+              onDirtyChange={makeDirtyHandler('behavior')}
             />
           )}
           {activeTab === 'affinity' && (
@@ -114,6 +138,7 @@ function SettingsPageInner() {
               section="affinity"
               title="Affinity"
               description="Adjust relationship modifiers, gift weights, and decay rates."
+              onDirtyChange={makeDirtyHandler('affinity')}
             />
           )}
           {activeTab === 'instincts' && (
@@ -121,6 +146,7 @@ function SettingsPageInner() {
               section="instincts"
               title="Instincts"
               description="Configure reflexes for combat, hunger, fear, and self-preservation."
+              onDirtyChange={makeDirtyHandler('instincts')}
             />
           )}
           {activeTab === 'voyager' && (
@@ -128,6 +154,7 @@ function SettingsPageInner() {
               section="voyager"
               title="Voyager"
               description="Tune curriculum, critic thresholds, and execution loop parameters."
+              onDirtyChange={makeDirtyHandler('voyager')}
             />
           )}
         </div>

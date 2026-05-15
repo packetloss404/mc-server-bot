@@ -1,5 +1,21 @@
 'use client';
 
+// Force-directed layout constants — tweak these to change cluster tightness.
+// k_r (repulsion):  Coulomb-like push between every pair of nodes (k_r / d^2).
+// k_s (spring):     Hooke pull along edges toward REST_LENGTH.
+// k_c (centering):  Gentle drift toward canvas origin so clusters don't fly off.
+// damping:          Per-step velocity decay (0.85 = mild friction).
+// ITERATIONS:       Number of relaxation steps before we render once.
+// REST_LENGTH:      Desired edge length in pixels.
+// MIN_DIST:         Epsilon to avoid 1/0 in repulsion at coincident positions.
+const K_R = 2000;
+const K_S = 0.02;
+const K_C = 0.005;
+const DAMPING = 0.85;
+const ITERATIONS = 300;
+const REST_LENGTH = 80;
+const MIN_DIST = 0.5;
+
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CopyButton } from '@/components/CopyButton';
 
@@ -69,6 +85,10 @@ export function SkillGraph({ skills }: Props) {
   const [stats, setStats] = useState<SkillStatsResponse | null>(null);
   const [hover, setHover] = useState<string | null>(null);
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const drawerRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  // Element that had focus before the drawer opened — restore on close.
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   // Fetch aggregate stats once — used to show top performers list inside the drawer.
   useEffect(() => {
@@ -110,56 +130,123 @@ export function SkillGraph({ skills }: Props) {
       }
     }
 
-    // Layout: grid laid out by usage (more-used skills toward center spiral).
-    // Sort by total invocations desc, then walk an expanding square spiral.
+    // Sort by total invocations desc so the more-used nodes start nearer the center.
+    // (They get tiny radial seed positions so the sim has a non-degenerate starting state.)
     const sorted = [...skills].sort((a, b) => {
       const ta = (a.successCount ?? 0) + (a.failureCount ?? 0);
       const tb = (b.successCount ?? 0) + (b.failureCount ?? 0);
       return tb - ta;
     });
 
-    const cell = 130;
-    const cx = 0;
-    const cy = 0;
-    const positions: { x: number; y: number }[] = [];
-    // Square spiral starting at origin: 0,0 then right, down, left*2, up*2, right*3, down*3, ...
-    let x = 0;
-    let y = 0;
-    let dx = 1;
-    let dy = 0;
-    let segLen = 1;
-    let segPassed = 0;
-    let turns = 0;
-    positions.push({ x: 0, y: 0 });
-    while (positions.length < sorted.length) {
-      x += dx;
-      y += dy;
-      positions.push({ x, y });
-      segPassed += 1;
-      if (segPassed === segLen) {
-        segPassed = 0;
-        // Rotate 90deg clockwise: (dx, dy) -> (-dy, dx)
-        const ndx = -dy;
-        const ndy = dx;
-        dx = ndx;
-        dy = ndy;
-        turns += 1;
-        if (turns % 2 === 0) segLen += 1;
+    interface SimNode {
+      id: string;
+      x: number;
+      y: number;
+      vx: number;
+      vy: number;
+      r: number;
+    }
+
+    const n = sorted.length;
+    // Seed positions on concentric rings — deterministic, not random, so re-renders match.
+    const sim: SimNode[] = sorted.map((skill, i) => {
+      const total = (skill.successCount ?? 0) + (skill.failureCount ?? 0);
+      const r = 14 + Math.min(20, Math.log2(1 + total) * 4);
+      const ring = Math.floor(Math.sqrt(i + 1));
+      const perRing = Math.max(6, ring * 6);
+      const angle = ((i % perRing) / perRing) * Math.PI * 2;
+      const radius = ring * REST_LENGTH * 0.9;
+      return {
+        id: skill.name,
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+        vx: 0,
+        vy: 0,
+        r,
+      };
+    });
+
+    const idToIdx = new Map<string, number>();
+    sim.forEach((s, i) => idToIdx.set(s.id, i));
+
+    // Pre-filter edges to ones where both endpoints exist (cheaper inner loop).
+    const simEdges: { a: number; b: number }[] = [];
+    for (const e of edgesOut) {
+      const a = idToIdx.get(e.from);
+      const b = idToIdx.get(e.to);
+      if (a !== undefined && b !== undefined && a !== b) {
+        simEdges.push({ a, b });
+      }
+    }
+
+    // Run a fixed number of iterations. O(n^2) per step is fine up to ~500 nodes.
+    for (let iter = 0; iter < ITERATIONS; iter++) {
+      // Reset force accumulators (reuse vx/vy as deltas this step? — no, keep velocities).
+      const fx = new Float64Array(n);
+      const fy = new Float64Array(n);
+
+      // Repulsion: every pair pushes apart by k_r / d^2.
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          let dx = sim[i].x - sim[j].x;
+          let dy = sim[i].y - sim[j].y;
+          let distSq = dx * dx + dy * dy;
+          if (distSq < MIN_DIST * MIN_DIST) {
+            // Nudge a deterministic tiny offset so we don't divide by zero.
+            dx = MIN_DIST;
+            dy = 0;
+            distSq = MIN_DIST * MIN_DIST;
+          }
+          const dist = Math.sqrt(distSq);
+          const force = K_R / distSq;
+          const ux = dx / dist;
+          const uy = dy / dist;
+          fx[i] += ux * force;
+          fy[i] += uy * force;
+          fx[j] -= ux * force;
+          fy[j] -= uy * force;
+        }
+      }
+
+      // Spring: each edge pulls endpoints by k_s * (dist - rest_length).
+      for (const e of simEdges) {
+        const a = sim[e.a];
+        const b = sim[e.b];
+        const dx = b.x - a.x;
+        const dy = b.y - a.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || MIN_DIST;
+        const force = K_S * (dist - REST_LENGTH);
+        const ux = dx / dist;
+        const uy = dy / dist;
+        fx[e.a] += ux * force;
+        fy[e.a] += uy * force;
+        fx[e.b] -= ux * force;
+        fy[e.b] -= uy * force;
+      }
+
+      // Centering + integrate.
+      for (let i = 0; i < n; i++) {
+        fx[i] -= K_C * sim[i].x;
+        fy[i] -= K_C * sim[i].y;
+
+        sim[i].vx = (sim[i].vx + fx[i]) * DAMPING;
+        sim[i].vy = (sim[i].vy + fy[i]) * DAMPING;
+        sim[i].x += sim[i].vx;
+        sim[i].y += sim[i].vy;
       }
     }
 
     const nodesOut: GraphNode[] = sorted.map((skill, i) => {
       const total = (skill.successCount ?? 0) + (skill.failureCount ?? 0);
       const successRate = total > 0 ? (skill.successCount ?? 0) / total : null;
-      const r = 14 + Math.min(20, Math.log2(1 + total) * 4);
-      const pos = positions[i];
+      const s = sim[i];
       return {
         id: skill.name,
         label: skill.name.replace(/_/g, ' '),
         short: skill.name,
-        x: cx + pos.x * cell,
-        y: cy + pos.y * cell,
-        r,
+        x: s.x,
+        y: s.y,
+        r: s.r,
         successRate,
         total,
         color: classifyColor(successRate, total),
@@ -169,14 +256,14 @@ export function SkillGraph({ skills }: Props) {
 
     // Compute viewbox bounds with padding.
     const pad = 60;
-    const minX = Math.min(...nodesOut.map((n) => n.x - n.r), -pad);
-    const maxX = Math.max(...nodesOut.map((n) => n.x + n.r), pad);
-    const minY = Math.min(...nodesOut.map((n) => n.y - n.r), -pad);
-    const maxY = Math.max(...nodesOut.map((n) => n.y + n.r), pad);
+    const minX = Math.min(...nodesOut.map((nd) => nd.x - nd.r), -pad);
+    const maxX = Math.max(...nodesOut.map((nd) => nd.x + nd.r), pad);
+    const minY = Math.min(...nodesOut.map((nd) => nd.y - nd.r), -pad);
+    const maxY = Math.max(...nodesOut.map((nd) => nd.y + nd.r), pad);
     const w = maxX - minX + pad * 2;
     const h = maxY - minY + pad * 2;
     // Re-center: shift so minX,minY map to pad,pad.
-    const shifted = nodesOut.map((n) => ({ ...n, x: n.x - minX + pad, y: n.y - minY + pad }));
+    const shifted = nodesOut.map((nd) => ({ ...nd, x: nd.x - minX + pad, y: nd.y - minY + pad }));
 
     return { nodes: shifted, edges: edgesOut, width: w, height: h };
   }, [skills]);
@@ -227,6 +314,68 @@ export function SkillGraph({ skills }: Props) {
       cancelled = true;
     };
   }, [selected]);
+
+  // Drawer focus management: store the previously focused element when the drawer
+  // opens, move focus to the close button, and restore focus when it closes.
+  useEffect(() => {
+    if (selected) {
+      previouslyFocusedRef.current =
+        (document.activeElement as HTMLElement | null) ?? null;
+      // Defer to next tick so the drawer is mounted before we try to focus.
+      const id = window.setTimeout(() => {
+        if (closeButtonRef.current) {
+          closeButtonRef.current.focus();
+        } else if (drawerRef.current) {
+          const first = drawerRef.current.querySelector<HTMLElement>(
+            'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+          );
+          first?.focus();
+        }
+      }, 0);
+      return () => {
+        window.clearTimeout(id);
+      };
+    } else {
+      // Drawer just closed — restore focus to where it was before opening.
+      const prev = previouslyFocusedRef.current;
+      previouslyFocusedRef.current = null;
+      if (prev && typeof prev.focus === 'function') {
+        prev.focus();
+      }
+    }
+  }, [selected]);
+
+  // Keydown handler for the drawer container: trap Tab cycling and handle Escape.
+  function handleDrawerKeyDown(e: React.KeyboardEvent<HTMLElement>) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      setSelected(null);
+      return;
+    }
+    if (e.key !== 'Tab') return;
+    const container = drawerRef.current;
+    if (!container) return;
+    const focusables = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    ).filter((el) => !el.hasAttribute('disabled') && el.tabIndex !== -1);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey) {
+      if (active === first || !container.contains(active)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  }
 
   // Highlight set for hover + selection.
   const highlight = hover ?? selected;
@@ -359,7 +508,15 @@ export function SkillGraph({ skills }: Props) {
             onClick={() => setSelected(null)}
             aria-hidden
           />
-          <aside className="fixed right-0 top-0 bottom-0 w-full sm:w-[420px] bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto">
+          <aside
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Skill details: ${selectedNode.label}`}
+            onKeyDown={handleDrawerKeyDown}
+            tabIndex={-1}
+            className="fixed right-0 top-0 bottom-0 w-full sm:w-[420px] bg-zinc-950 border-l border-zinc-800 z-50 overflow-y-auto"
+          >
             <div className="p-5 space-y-4">
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
@@ -369,6 +526,7 @@ export function SkillGraph({ skills }: Props) {
                   <p className="text-[10px] text-zinc-500 font-mono truncate">{selectedNode.short}</p>
                 </div>
                 <button
+                  ref={closeButtonRef}
                   onClick={() => setSelected(null)}
                   className="text-zinc-500 hover:text-white text-sm leading-none px-1"
                   aria-label="Close"

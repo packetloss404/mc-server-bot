@@ -39,12 +39,17 @@ export type PatchableSection = (typeof PATCHABLE_SECTIONS)[number];
 /**
  * Sections whose subsystems live inside worker threads (BotInstance,
  * VoyagerLoop, CodeExecutor). Each worker captures its own `Config` copy at
- * worker start via `loadConfig()`, so any PATCH against these sections only
- * lands on disk + the main-thread `Config` object. Existing workers keep
- * reading the old values until they're respawned.
+ * worker start via `loadConfig()`.
  *
- * Until cross-thread IPC propagation is wired (TODO), the PATCH handler
- * treats every field in these sections as restart-required.
+ * As of the IPC-propagation wiring (WorkerHandle.postConfigPatch +
+ * botWorker's `config:patch` command handler), PATCH /api/config/:section
+ * broadcasts merged values into every live worker's in-memory config, so
+ * these sections hot-reload without a restart. This set is kept around as
+ * an informational marker (e.g. for UI labels or debugging) — it is NOT
+ * consulted by `findRestartRequiredFields` anymore. Only the specific
+ * fields enumerated in `RESTART_REQUIRED_FIELDS` still require a restart
+ * because they're captured at construction time inside the worker
+ * (CodeExecutor's timeout) or at the main-thread interval scheduler.
  */
 export const WORKER_THREAD_SECTIONS: ReadonlySet<PatchableSection> = new Set([
   'instincts',
@@ -164,15 +169,16 @@ export function validatePatch(
 
 /**
  * Return the subset of patched field names that require a restart to take
- * effect. Worker-thread sections are entirely restart-required until IPC
- * propagation is wired; main-thread sections only flag specific captured
- * fields.
+ * effect. Now that PATCH /api/config/:section broadcasts merges into every
+ * live worker via WorkerHandle.postConfigPatch, only fields captured at
+ * construction time (CodeExecutor's timeout) or at the main-thread interval
+ * scheduler (ambient chat timers) still need a restart. Everything else
+ * hot-reloads.
  */
 export function findRestartRequiredFields(
   section: PatchableSection,
   values: Record<string, unknown>,
 ): string[] {
-  if (WORKER_THREAD_SECTIONS.has(section)) return Object.keys(values);
   const required = RESTART_REQUIRED_FIELDS[section];
   return Object.keys(values).filter((key) => required.has(key));
 }

@@ -384,33 +384,30 @@ export default function StatsPage() {
         </div>
       ) : (
         <>
-          {/* Summary Cards */}
+          {/* Summary Cards — three simple label+value tiles; leaderboard and
+              detailed table panels below host composite content (progress
+              bars / sort buttons / tabular rows) so they stay as bespoke
+              <div> panels rather than StatCard. */}
           <div className="grid grid-cols-3 gap-3">
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
-              className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-4"
             >
-              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Total Completed</p>
-              <p className="text-2xl font-bold text-emerald-400 mt-1">{totalCompleted}</p>
+              <StatCard label="Total Completed" value={totalCompleted} intent="success" />
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.05 }}
-              className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-4"
             >
-              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Total Failed</p>
-              <p className="text-2xl font-bold text-red-400 mt-1">{totalFailed}</p>
+              <StatCard label="Total Failed" value={totalFailed} intent="danger" />
             </motion.div>
             <motion.div
               initial={{ opacity: 0, y: 8 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.1 }}
-              className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-4"
             >
-              <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Avg Success Rate</p>
-              <p className="text-2xl font-bold text-white mt-1">{avgRate}%</p>
+              <StatCard label="Avg Success Rate" value={`${avgRate}%`} />
             </motion.div>
           </div>
 

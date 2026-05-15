@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useToast } from '@/components/Toast';
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -48,6 +48,12 @@ export interface SettingsSectionProps {
   description?: string;
   /** Per-key overrides keyed by dotted path (e.g. "nested.subKey"). */
   fieldOverrides?: Record<string, FieldOverride>;
+  /**
+   * Called whenever the form's dirty state changes. Dirty means current values
+   * diverge from the last fetched/saved baseline. Fires `false` after a
+   * successful save.
+   */
+  onDirtyChange?: (dirty: boolean) => void;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
@@ -70,6 +76,21 @@ function isPlainObject(v: unknown): v is Record<string, SettingsValue> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
+/**
+ * Stable-key JSON serializer for deep-equality comparison. Object keys are
+ * sorted so that `{a:1,b:2}` and `{b:2,a:1}` produce identical output.
+ */
+function stableStringify(value: SettingsValue | Record<string, SettingsValue>): string {
+  if (value === null || value === undefined) return 'null';
+  if (typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => stableStringify(v as SettingsValue)).join(',')}]`;
+  }
+  const obj = value as Record<string, SettingsValue>;
+  const keys = Object.keys(obj).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify(obj[k])}`).join(',')}}`;
+}
+
 // ─── Component ────────────────────────────────────────────────────────────
 
 export function SettingsSection({
@@ -77,6 +98,7 @@ export function SettingsSection({
   title,
   description,
   fieldOverrides = {},
+  onDirtyChange,
 }: SettingsSectionProps) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -84,6 +106,8 @@ export function SettingsSection({
   const [error, setError] = useState<string | null>(null);
   const [values, setValues] = useState<Record<string, SettingsValue>>({});
   const [restartRequired, setRestartRequired] = useState<string[]>([]);
+  /** Baseline = last fetched or last successfully saved values (stable-stringified). */
+  const [baseline, setBaseline] = useState<string>('{}');
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -92,7 +116,9 @@ export function SettingsSection({
       const res = await fetch(`${API_BASE}/api/config/${section}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: SettingsResponse = await res.json();
-      setValues(data.values ?? {});
+      const next = data.values ?? {};
+      setValues(next);
+      setBaseline(stableStringify(next));
       setRestartRequired(data.restartRequired ?? []);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load section');
@@ -102,6 +128,23 @@ export function SettingsSection({
   }, [section]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Notify parent on dirty state transitions. Compare current values against
+  // the baseline via stable-key JSON deep equality. Only fire on edge changes.
+  const dirty = useMemo(() => stableStringify(values) !== baseline, [values, baseline]);
+  const lastDirtyRef = useRef<boolean | null>(null);
+  useEffect(() => {
+    if (lastDirtyRef.current === dirty) return;
+    lastDirtyRef.current = dirty;
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+
+  // On unmount, clear any lingering dirty signal so the parent's set stays tidy.
+  useEffect(() => {
+    return () => {
+      if (lastDirtyRef.current) onDirtyChange?.(false);
+    };
+  }, [onDirtyChange]);
 
   const setAtPath = useCallback((path: string[], next: SettingsValue) => {
     setValues((prev) => {
@@ -133,7 +176,10 @@ export function SettingsSection({
       if (!res.ok) {
         throw new Error(data.error || `HTTP ${res.status}`);
       }
+      // Reset baseline to the canonical post-save values so dirty clears.
+      const saved = data.values ?? values;
       if (data.values) setValues(data.values);
+      setBaseline(stableStringify(saved));
       const restart = data.restartRequiredFields ?? data.restartRequired ?? [];
       setRestartRequired(restart);
       toast(`${title} saved`, 'success');

@@ -1918,11 +1918,22 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
   // ═══════════════════════════════════════════════════════════════
   //  Runtime config — read + edit hot-reloadable values
   //  Whitelist: behavior | affinity | instincts | voyager.
-  //  PATCH mutates the live config object in place (preserving the
-  //  reference so subsystems like AffinityManager see the change),
-  //  then persists to config.yml atomically. Fields listed in
-  //  RESTART_REQUIRED_FIELDS still get persisted, but are reported
-  //  back so the dashboard can warn the operator.
+  //
+  //  Hot-reload semantics:
+  //    1. PATCH validates + shallow-merges values into the main-thread
+  //       Config object in place. Subsystems holding that reference
+  //       (AffinityManager, the API server's view, etc.) see the change
+  //       on their next read.
+  //    2. PATCH atomically persists the merged Config to config.yml.
+  //    3. PATCH broadcasts the patch to every live worker via
+  //       WorkerHandle.postConfigPatch. Each worker merges into its OWN
+  //       captured Config so cross-thread subsystems (BotInstance,
+  //       VoyagerLoop, InstinctsManager, CodeExecutor) read the new
+  //       values on their next tick — no restart needed.
+  //    4. Fields enumerated in RESTART_REQUIRED_FIELDS (currently
+  //       voyager.codeExecutionTimeoutMs and the ambient-chat timers)
+  //       are still persisted but reported back as `restartRequiredFields`
+  //       because they're captured at construction / setInterval time.
   // ═══════════════════════════════════════════════════════════════
   const isPatchableSection = (name: string): name is PatchableSection =>
     (PATCHABLE_SECTIONS as readonly string[]).includes(name);
@@ -1975,10 +1986,7 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
 
     const current = getSection(config, section) as Record<string, unknown>;
     // Shallow merge in place so any MAIN-THREAD subsystem holding a reference
-    // (AffinityManager) sees new values on the next read. Worker-thread
-    // subsystems (BotInstance / VoyagerLoop) capture their own Config at
-    // worker start — those changes only take effect after the worker restarts;
-    // findRestartRequiredFields flags every field in those sections.
+    // (AffinityManager) sees new values on the next read.
     for (const [key, value] of Object.entries(validated.values)) {
       current[key] = value;
     }
@@ -1990,9 +1998,27 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
       return res.status(500).json({ error: `Failed to persist config.yml: ${err.message}` });
     }
 
+    // Broadcast the patch to every live worker so cross-thread subsystems
+    // (BotInstance / VoyagerLoop / InstinctsManager) hot-reload without a
+    // restart. postConfigPatch is fire-and-forget and silently no-ops on
+    // dead/disconnected workers.
+    let workersNotified = 0;
+    try {
+      for (const handle of botManager.getAllWorkers()) {
+        handle.postConfigPatch(section, validated.values);
+        workersNotified++;
+      }
+    } catch (err: any) {
+      // Defensive: don't fail the PATCH response just because broadcast hiccuped.
+      logger.warn(
+        { err: err?.message, section },
+        'Config patch broadcast partially failed; some workers may be stale until restart',
+      );
+    }
+
     const restartRequiredFields = findRestartRequiredFields(section, validated.values);
     logger.info(
-      { section, fields: Object.keys(validated.values), restartRequiredFields, droppedFields: validated.errors },
+      { section, fields: Object.keys(validated.values), restartRequiredFields, workersNotified, droppedFields: validated.errors },
       'Runtime config patched',
     );
     res.json({

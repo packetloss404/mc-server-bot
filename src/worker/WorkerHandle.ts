@@ -299,6 +299,35 @@ export class WorkerHandle {
     this.ipc?.command(type, data);
   }
 
+  /**
+   * Fire-and-forget runtime config patch propagation.
+   *
+   * The main thread's PATCH /api/config/:section handler has already validated
+   * and persisted the new values; this just nudges each live worker so its
+   * captured `this.config[section]` picks up the change without a restart.
+   *
+   * Safe to call when the worker is dead or disconnected: a missing IPC
+   * channel logs a debug message and returns rather than throwing, so the
+   * PATCH handler can broadcast indiscriminately across `getAllWorkers()`.
+   */
+  postConfigPatch(section: string, values: Record<string, unknown>): void {
+    if (!this.ipc || !this.worker) {
+      logger.debug(
+        { bot: this.botName, section },
+        'postConfigPatch skipped: worker not running',
+      );
+      return;
+    }
+    try {
+      this.ipc.command('config:patch', { section, values });
+    } catch (err: any) {
+      logger.warn(
+        { bot: this.botName, section, err: err?.message },
+        'postConfigPatch failed to dispatch',
+      );
+    }
+  }
+
   /** Send a request to the worker and await response */
   async sendRequest(type: string, args: any[] = []): Promise<any> {
     if (!this.ipc) throw new Error('Worker not running');

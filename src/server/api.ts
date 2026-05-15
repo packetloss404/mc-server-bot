@@ -18,6 +18,7 @@ import { BuildCoordinator } from '../build/BuildCoordinator';
 import { CampaignManager } from '../build/BuildCampaign';
 import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
+import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { logger } from '../util/logger';
 
 export interface APIServerResult {
@@ -204,7 +205,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   // Event relay endpoints (for Java plugin)
-  app.post('/api/events/chat', (req: Request, res: Response) => {
+  app.post('/api/events/chat', async (req: Request, res: Response) => {
     const { playerName, message, nearestBot, playerPosition } = req.body;
     const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
 
@@ -228,6 +229,18 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       if (handle && /\b(help|can you|please|could you|need)\b/i.test(message)) {
         botManager.getAffinityManager().onHelpRequest(handle.botName, playerName, message.slice(0, 120));
       }
+
+      // Build-intent dispatch: if the chat parses as a build request, resolve
+      // it to a real schematic + origin and start the build. Best-effort: any
+      // failure here is logged but does not affect the chat response.
+      const intent = parseBuildIntent(message);
+      if (intent) {
+        try {
+          await tryStartBuildFromIntent(intent, playerName, nearestBot);
+        } catch (err: any) {
+          logger.warn({ err: err.message, playerName, message }, 'Build-intent dispatch failed');
+        }
+      }
     }
 
     if (!handle) {
@@ -238,6 +251,83 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     logger.info({ player: playerName, bot: nearestBot, message }, 'Chat event received');
     res.json({ handled: true });
   });
+
+  /**
+   * Convert a parsed BuildIntent into a concrete buildCoordinator.startBuild
+   * call. Picks a schematic via SchematicMatcher, resolves the origin from
+   * the intent's anchor, and chooses the closest connected bot as the crew.
+   */
+  async function tryStartBuildFromIntent(
+    intent: ReturnType<typeof parseBuildIntent>,
+    playerName: string,
+    nearestBot: string | undefined,
+  ): Promise<void> {
+    if (!intent) return;
+
+    // 1. Schematic. If the query is too vague, bail rather than picking a
+    //    random structure.
+    const match = schematicMatcher.match(intent.query);
+    if (!match) {
+      logger.info({ query: intent.query, playerName }, 'BuildIntent: no schematic matched query, ignoring');
+      return;
+    }
+
+    // 2. Pick a crew. Prefer nearestBot; fall back to any connected worker.
+    const allWorkers = botManager.getAllWorkers();
+    const connected = allWorkers.filter((w) => w.isAlive());
+    if (connected.length === 0) {
+      logger.info('BuildIntent: no connected bots to build with');
+      return;
+    }
+    const chosenBot = (nearestBot && connected.find((w) => w.botName === nearestBot))
+      || connected[0];
+
+    // 3. Resolve origin. For player-anchored intents, pull the player's
+    //    position from the PlayerPositionCache (kept warm by chat / move
+    //    events) and add the intent's compass offset.
+    let originMode: 'coords' | `player:${string}` = 'coords';
+    let origin = { x: 0, y: 64, z: 0 };
+    if (intent.anchor === 'absolute' && intent.absolute) {
+      origin = intent.absolute;
+    } else if (intent.anchor === 'player_position') {
+      const cached = botManager.getPlayerPositionCache().getPosition(playerName);
+      if (cached && !botManager.getPlayerPositionCache().isStale(playerName)) {
+        origin = {
+          x: Math.floor(cached.position.x + intent.offset.x),
+          y: Math.floor(cached.position.y),
+          z: Math.floor(cached.position.z + intent.offset.z),
+        };
+      } else {
+        // No fresh position — let BuildCoordinator resolve via probe IPC.
+        originMode = `player:${playerName}`;
+      }
+    } else if (intent.anchor === 'marker') {
+      // Marker lookup isn't wired here yet — fall back to player position
+      // mode so we at least put the build somewhere reasonable.
+      logger.info({ markerName: intent.markerName }, 'BuildIntent: marker anchor not yet supported, falling back to player position');
+      originMode = `player:${playerName}`;
+    }
+
+    logger.info({
+      playerName,
+      query: intent.query,
+      schematic: match.filename,
+      origin,
+      originMode,
+      mode: intent.mode,
+      bot: chosenBot.botName,
+    }, 'BuildIntent: starting build');
+
+    await buildCoordinator.startBuild(
+      match.filename,
+      origin,
+      [chosenBot.botName],
+      {
+        originMode,
+        mode: intent.mode,
+      },
+    );
+  }
 
   app.post('/api/events/player-join', (req: Request, res: Response) => {
     const { playerName } = req.body;

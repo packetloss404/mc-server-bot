@@ -253,9 +253,27 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   });
 
   /**
+   * Find a marker by case-insensitive name match. Used to resolve "build a
+   * tower at the gate" type intents where the player names a marker.
+   */
+  function findMarkerByName(name: string): { x: number; y: number; z: number } | null {
+    const wanted = name.toLowerCase().trim();
+    if (!wanted) return null;
+    const markers = markerStore.getMarkers();
+    // Exact match first, then substring.
+    const exact = markers.find((m) => m.name?.toLowerCase() === wanted);
+    const fuzzy = exact ?? markers.find((m) => m.name?.toLowerCase().includes(wanted));
+    if (!fuzzy?.position) return null;
+    return { x: Math.floor(fuzzy.position.x), y: Math.floor(fuzzy.position.y), z: Math.floor(fuzzy.position.z) };
+  }
+
+  /**
    * Convert a parsed BuildIntent into a concrete buildCoordinator.startBuild
    * call. Picks a schematic via SchematicMatcher, resolves the origin from
    * the intent's anchor, and chooses the closest connected bot as the crew.
+   *
+   * The chosen bot announces dispatch + milestones + completion in chat so
+   * the player who asked for the build gets visible feedback.
    */
   async function tryStartBuildFromIntent(
     intent: ReturnType<typeof parseBuildIntent>,
@@ -264,15 +282,8 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   ): Promise<void> {
     if (!intent) return;
 
-    // 1. Schematic. If the query is too vague, bail rather than picking a
-    //    random structure.
-    const match = schematicMatcher.match(intent.query);
-    if (!match) {
-      logger.info({ query: intent.query, playerName }, 'BuildIntent: no schematic matched query, ignoring');
-      return;
-    }
-
-    // 2. Pick a crew. Prefer nearestBot; fall back to any connected worker.
+    // 1. Pick a crew. Prefer nearestBot; fall back to any connected worker.
+    //    Done first so we can chat back any error messages below.
     const allWorkers = botManager.getAllWorkers();
     const connected = allWorkers.filter((w) => w.isAlive());
     if (connected.length === 0) {
@@ -281,14 +292,37 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     }
     const chosenBot = (nearestBot && connected.find((w) => w.botName === nearestBot))
       || connected[0];
+    const sayBack = (msg: string) => {
+      try { chosenBot.chat(`${playerName}: ${msg}`); } catch { /* best effort */ }
+    };
 
-    // 3. Resolve origin. For player-anchored intents, pull the player's
-    //    position from the PlayerPositionCache (kept warm by chat / move
-    //    events) and add the intent's compass offset.
+    // 2. Schematic. If the query is too vague, tell the player rather than
+    //    silently picking a random structure.
+    const match = schematicMatcher.match(intent.query);
+    if (!match) {
+      logger.info({ query: intent.query, playerName }, 'BuildIntent: no schematic matched query');
+      sayBack(`I don't have a schematic that matches "${intent.query}". Try a different name?`);
+      return;
+    }
+
+    // 3. Resolve origin from anchor.
     let originMode: 'coords' | `player:${string}` = 'coords';
     let origin = { x: 0, y: 64, z: 0 };
     if (intent.anchor === 'absolute' && intent.absolute) {
       origin = intent.absolute;
+    } else if (intent.anchor === 'marker' && intent.markerName) {
+      const markerPos = findMarkerByName(intent.markerName);
+      if (markerPos) {
+        origin = {
+          x: markerPos.x + intent.offset.x,
+          y: markerPos.y,
+          z: markerPos.z + intent.offset.z,
+        };
+      } else {
+        logger.info({ markerName: intent.markerName }, 'BuildIntent: marker not found, falling back to player position');
+        sayBack(`I don't know where "${intent.markerName}" is — building near you instead.`);
+        originMode = `player:${playerName}`;
+      }
     } else if (intent.anchor === 'player_position') {
       const cached = botManager.getPlayerPositionCache().getPosition(playerName);
       if (cached && !botManager.getPlayerPositionCache().isStale(playerName)) {
@@ -301,11 +335,6 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         // No fresh position — let BuildCoordinator resolve via probe IPC.
         originMode = `player:${playerName}`;
       }
-    } else if (intent.anchor === 'marker') {
-      // Marker lookup isn't wired here yet — fall back to player position
-      // mode so we at least put the build somewhere reasonable.
-      logger.info({ markerName: intent.markerName }, 'BuildIntent: marker anchor not yet supported, falling back to player position');
-      originMode = `player:${playerName}`;
     }
 
     logger.info({
@@ -318,6 +347,9 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       bot: chosenBot.botName,
     }, 'BuildIntent: starting build');
 
+    const modeLabel = intent.mode === 'underground' ? ' (underground)' : '';
+    sayBack(`Building ${match.filename}${modeLabel} — give me a few minutes.`);
+
     await buildCoordinator.startBuild(
       match.filename,
       origin,
@@ -325,6 +357,14 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       {
         originMode,
         mode: intent.mode,
+        onProgress: ({ pct }) => sayBack(`${pct}% done with ${match.filename}.`),
+        onCompleted: (job) => {
+          if (job.status === 'completed') {
+            sayBack(`Done! ${match.filename} built at ${job.origin.x}, ${job.origin.y}, ${job.origin.z}.`);
+          } else {
+            sayBack(`${match.filename} build ${job.status}. ${job.placedBlocks}/${job.totalBlocks} blocks placed.`);
+          }
+        },
       },
     );
   }

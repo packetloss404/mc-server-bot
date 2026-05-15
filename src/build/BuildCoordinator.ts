@@ -82,6 +82,14 @@ export class BuildCoordinator {
     surfaceY: number;
     probeBotName: string;
   }>();
+  /** Per-job lifecycle hooks supplied by callers (chat dispatcher, etc). */
+  private jobHooks = new Map<string, {
+    onStarted?: (job: BuildJob) => void;
+    onProgress?: (event: { jobId: string; placed: number; total: number; pct: number }) => void;
+    onCompleted?: (job: BuildJob) => void;
+    /** Track the last milestone we fired (25, 50, 75) so onProgress isn't spammy. */
+    lastMilestone: number;
+  }>();
   /**
    * Per-job queue of extra blocks that need to be absorbed by an alive bot whose
    * original assignment has completed. Keyed by the receiving bot name.
@@ -337,6 +345,15 @@ export class BuildCoordinator {
        *    the pit, and build a stairwell entrance after placement completes.
        */
       mode?: 'surface' | 'underground';
+      /**
+       * Lifecycle hooks (in-process — not Socket.IO). Used by the chat
+       * dispatcher to make the bot announce progress to the player who asked
+       * for the build. All hooks are best-effort; thrown errors are caught
+       * and logged.
+       */
+      onStarted?: (job: BuildJob) => void;
+      onProgress?: (event: { jobId: string; placed: number; total: number; pct: number }) => void;
+      onCompleted?: (job: BuildJob) => void;
     },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
@@ -721,6 +738,19 @@ export class BuildCoordinator {
     }
     this.persistJobs();
 
+    // Stash lifecycle hooks before any callbacks fire.
+    if (options?.onStarted || options?.onProgress || options?.onCompleted) {
+      this.jobHooks.set(jobId, {
+        onStarted: options.onStarted,
+        onProgress: options.onProgress,
+        onCompleted: options.onCompleted,
+        lastMilestone: 0,
+      });
+    }
+    try { options?.onStarted?.(job); } catch (err: any) {
+      logger.warn({ err: err.message, jobId }, 'onStarted hook threw');
+    }
+
     // Emit started event
     this.io.emit('build:started', job);
     this.eventLog.push({
@@ -960,6 +990,14 @@ export class BuildCoordinator {
       const allCompleted = assignments.every((a) => a.status === 'completed');
       job.status = allCompleted ? 'completed' : 'failed';
 
+      const hooks = this.jobHooks.get(jobId);
+      if (hooks?.onCompleted) {
+        try { hooks.onCompleted(job); } catch (err: any) {
+          logger.warn({ err: err.message, jobId }, 'onCompleted hook threw');
+        }
+      }
+      this.jobHooks.delete(jobId);
+
       this.io.emit('build:completed', job);
       this.eventLog.push({
         type: 'build:completed',
@@ -1097,15 +1135,30 @@ export class BuildCoordinator {
 
       // Emit progress every 20 blocks
       if (job.placedBlocks % 20 === 0) {
+        const pct = Math.round((job.placedBlocks / job.totalBlocks) * 100);
         this.io.emit('build:progress', {
           jobId,
           placedBlocks: job.placedBlocks,
           totalBlocks: job.totalBlocks,
-          percentage: Math.round((job.placedBlocks / job.totalBlocks) * 100),
+          percentage: pct,
           botName: assignment.botName,
           botBlocksPlaced: assignment.blocksPlaced,
           botBlocksTotal: assignment.blocksTotal,
         });
+        // Fire onProgress hook at 25/50/75% milestones only — keeps chat
+        // announcements from spamming every 20 blocks.
+        const hooks = this.jobHooks.get(jobId);
+        if (hooks?.onProgress) {
+          const milestone = pct >= 75 ? 75 : pct >= 50 ? 50 : pct >= 25 ? 25 : 0;
+          if (milestone > hooks.lastMilestone) {
+            hooks.lastMilestone = milestone;
+            try {
+              hooks.onProgress({ jobId, placed: job.placedBlocks, total: job.totalBlocks, pct: milestone });
+            } catch (err: any) {
+              logger.warn({ err: err.message, jobId }, 'onProgress hook threw');
+            }
+          }
+        }
         // Throttled persist so a crash loses at most ~2s of progress
         this.schedulePersist();
       }

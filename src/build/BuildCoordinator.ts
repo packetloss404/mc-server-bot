@@ -8,6 +8,7 @@ import { Server as SocketIOServer } from 'socket.io';
 import { EventLog } from '../server/EventLog';
 import { logger } from '../util/logger';
 import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { selectBuildSite, SiteCandidate } from './SiteSelector';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -302,7 +303,22 @@ export class BuildCoordinator {
     schematicFile: string,
     origin: { x: number; y: number; z: number },
     botNames: string[],
-    options?: { cleanupBotNames?: string[]; fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean },
+    options?: {
+      cleanupBotNames?: string[];
+      fillFoundation?: boolean;
+      snapToGround?: boolean;
+      clearSite?: boolean;
+      /**
+       * How to resolve the build origin.
+       *  - 'coords'      (default): use the supplied `origin` directly
+       *  - 'auto-flat'   : ignore origin, call SiteSelector to find a flat spot
+       *                    near the probe bot
+       *  - 'bot:<name>'  : place at the named bot's current position
+       *  - 'player:<name>': place at the named player's position (resolved via
+       *                    PlayerPresenceTracker if a recent location is known)
+       */
+      originMode?: 'coords' | 'auto-flat' | `bot:${string}` | `player:${string}`;
+    },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
 
@@ -331,6 +347,27 @@ export class BuildCoordinator {
       throw new Error(`Schematic volume too large (${schSize.x}x${schSize.y}x${schSize.z} = ${volume.toLocaleString()} voxels). Max 2M voxels.`);
     }
 
+    // ── Options ──
+    const fillFoundation = options?.fillFoundation !== false; // default true
+    const snapToGround = options?.snapToGround === true; // default false
+    const clearSiteEnabled = options?.clearSite !== false; // default true
+    const originMode = options?.originMode ?? 'coords';
+
+    // Find a connected bot handle EARLY so origin resolution can use it.
+    let probeHandle: any = null;
+    for (const n of botNames) {
+      const h = this.botManager.getWorker(n) as any;
+      if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+        probeHandle = h;
+        break;
+      }
+    }
+
+    // ── Origin resolution ──
+    // Map originMode -> concrete {x, y, z}. The supplied `origin` is the
+    // fallback for 'coords' mode and a hint elsewhere (e.g. Y for player mode).
+    origin = await this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize);
+
     const ox = origin.x, oy = origin.y, oz = origin.z;
     const blocks: BlockEntry[] = cached.blocks.map((b) => ({
       wx: ox + b.rx, wy: oy + b.ry, wz: oz + b.rz,
@@ -341,21 +378,6 @@ export class BuildCoordinator {
 
     if (blocks.length === 0) {
       throw new Error('Schematic contains no blocks');
-    }
-
-    // ── Snap-to-ground: adjust origin Y to average terrain height ──
-    const fillFoundation = options?.fillFoundation !== false; // default true
-    const snapToGround = options?.snapToGround === true; // default false
-    const clearSiteEnabled = options?.clearSite !== false; // default true
-
-    // Find a connected bot handle to query world blocks via IPC
-    let probeHandle: any = null;
-    for (const n of botNames) {
-      const h = this.botManager.getWorker(n) as any;
-      if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
-        probeHandle = h;
-        break;
-      }
     }
 
     // ── Pre-build site-prep: clear the footprint before any placement ──
@@ -373,13 +395,17 @@ export class BuildCoordinator {
         z: origin.z + schSize.z - 1,
       };
       try {
+        // Extend clearance high enough to take out tree canopies that overhang
+        // the schematic top. Typical trees in vanilla cap around 8 blocks of
+        // trunk + leaves; 12 is a safe floor for any schematic shorter than that.
+        const clearanceHeight = Math.max(schSize.y, 12);
         const clearResult = await this.runClearSite(probeHandle, {
           footprintMin,
           footprintMax,
-          clearanceHeight: schSize.y,
+          clearanceHeight,
         });
         logger.info(
-          { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length },
+          { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length, clearanceHeight },
           'Site-prep: cleared footprint ahead of snap-to-ground',
         );
       } catch (err: any) {
@@ -428,28 +454,30 @@ export class BuildCoordinator {
         samples.sort((a, b) => a - b);
         const medianGround = samples[Math.floor(samples.length / 2)];
         const diff = medianGround - oy;
-        if (Math.abs(diff) <= 5 && diff !== 0) {
+        if (diff !== 0) {
+          const big = Math.abs(diff) > 5;
           logger.info(
-            { oldY: oy, newY: medianGround, diff, samples: samples.length },
-            'Snap-to-ground: adjusting origin Y to median terrain height',
+            { oldY: oy, newY: medianGround, diff, samples: samples.length, largeDelta: big },
+            big
+              ? 'Snap-to-ground: large terrain delta — still adjusting (fillFoundation will plug gaps)'
+              : 'Snap-to-ground: adjusting origin Y to median terrain height',
           );
-          // Shift all block world-Y positions by the difference
+          // Shift all block world-Y positions by the difference. Previously we
+          // refused to adjust when |diff| > 5, which left builds floating in
+          // mid-air over hills/valleys. Trust fillFoundation to plug any gap.
           for (const b of blocks) {
             b.wy += diff;
           }
           origin.y = medianGround;
-        } else if (Math.abs(diff) > 5) {
-          logger.info(
-            { originY: oy, medianGround, diff },
-            'Snap-to-ground: terrain difference too large, skipping adjustment',
-          );
         }
       }
     }
 
     // ── Foundation filling: add support blocks under schematic footprint ──
     if (fillFoundation && probeHandle) {
-      const MAX_FILL_DEPTH = 20;
+      // Bumped from 20 -> 32: snap-to-ground now accepts large terrain deltas,
+      // so the fill column may need to reach further down to find solid ground.
+      const MAX_FILL_DEPTH = 32;
 
       // For each (wx, wz) column, find the lowest schematic block Y
       const columnMinY = new Map<string, number>();
@@ -1040,6 +1068,81 @@ export class BuildCoordinator {
     if (!queue || queue.length === 0) return [];
     jobQueues.set(botName, []);
     return queue;
+  }
+
+  /**
+   * Map an `originMode` string to a concrete {x, y, z}. The caller-supplied
+   * `fallbackOrigin` is used as-is for 'coords' mode and as a hint for the
+   * Y-coordinate when resolving a bot or player position that has no Y info.
+   */
+  private async resolveOrigin(
+    originMode: string,
+    fallbackOrigin: { x: number; y: number; z: number },
+    botNames: string[],
+    probeHandle: any,
+    schSize: { x: number; y: number; z: number },
+  ): Promise<{ x: number; y: number; z: number }> {
+    if (originMode === 'coords') return fallbackOrigin;
+
+    if (originMode === 'auto-flat') {
+      if (!probeHandle) {
+        logger.warn('originMode auto-flat: no probe bot available, falling back to supplied origin');
+        return fallbackOrigin;
+      }
+      const status = probeHandle.getCachedStatus?.();
+      const refPos = status?.position;
+      if (!refPos) {
+        logger.warn('originMode auto-flat: probe has no cached position, falling back');
+        return fallbackOrigin;
+      }
+      const probe = (x: number, y: number, z: number) => probeHandle.getBlockAt(x, y, z);
+      const cand: SiteCandidate | null = await selectBuildSite(probe, refPos, schSize);
+      if (!cand) {
+        logger.warn('originMode auto-flat: no acceptable site found near probe, using supplied origin');
+        return fallbackOrigin;
+      }
+      logger.info({ origin: cand.origin, confidence: cand.confidence, reasons: cand.reasons }, 'Build: auto-flat site selected');
+      return cand.origin;
+    }
+
+    if (originMode.startsWith('bot:')) {
+      const botName = originMode.slice(4);
+      const handle = this.botManager.getWorker(botName) as any;
+      if (!handle) {
+        logger.warn({ botName }, 'originMode bot:<name>: worker not found, falling back to supplied origin');
+        return fallbackOrigin;
+      }
+      const status = handle.getCachedStatus?.();
+      const pos = status?.position;
+      if (!pos) {
+        logger.warn({ botName }, 'originMode bot:<name>: no cached position, falling back');
+        return fallbackOrigin;
+      }
+      logger.info({ botName, pos }, 'Build: anchored to bot position');
+      return { x: Math.floor(pos.x), y: Math.floor(pos.y), z: Math.floor(pos.z) };
+    }
+
+    if (originMode.startsWith('player:')) {
+      const playerName = originMode.slice(7);
+      // Try probe.getPlayers — returns current world positions for online players.
+      if (probeHandle?.getPlayers) {
+        try {
+          const players = await probeHandle.getPlayers();
+          const hit = players.find((p: any) => p.name?.toLowerCase() === playerName.toLowerCase());
+          if (hit?.position) {
+            logger.info({ playerName, pos: hit.position }, 'Build: anchored to player position');
+            return { x: Math.floor(hit.position.x), y: Math.floor(hit.position.y), z: Math.floor(hit.position.z) };
+          }
+        } catch (err: any) {
+          logger.warn({ playerName, err: err.message }, 'originMode player:<name>: getPlayers failed');
+        }
+      }
+      logger.warn({ playerName }, 'originMode player:<name>: player not visible to probe, falling back to supplied origin');
+      return fallbackOrigin;
+    }
+
+    logger.warn({ originMode }, 'Unknown originMode, using supplied origin');
+    return fallbackOrigin;
   }
 
   /**

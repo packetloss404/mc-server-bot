@@ -1152,12 +1152,20 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
   // Create a new build job
   app.post('/api/builds', async (req: Request, res: Response) => {
     const { schematicFile, origin, botNames, options } = req.body;
-    if (!schematicFile || !origin || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
-      res.status(400).json({ error: 'schematicFile, origin {x,y,z}, and botNames[] are required' });
+    const originMode = options?.originMode ?? 'coords';
+    const originRequired = originMode === 'coords';
+    if (!schematicFile || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
+      res.status(400).json({ error: 'schematicFile and botNames[] are required' });
+      return;
+    }
+    if (originRequired && !origin) {
+      res.status(400).json({ error: 'origin {x,y,z} is required when originMode is "coords" (default)' });
       return;
     }
     try {
-      const job = await buildCoordinator.startBuild(schematicFile, origin, botNames, options);
+      // Placeholder origin for non-coords modes so resolveOrigin has a safe fallback.
+      const resolvedOrigin = origin ?? { x: 0, y: 64, z: 0 };
+      const job = await buildCoordinator.startBuild(schematicFile, resolvedOrigin, botNames, options);
       res.status(201).json({ build: job });
     } catch (err: any) {
       logger.error({ err }, 'Failed to start build');

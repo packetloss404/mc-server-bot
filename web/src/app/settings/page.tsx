@@ -1,8 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
-import { api } from '@/lib/api';
+import { Suspense, useCallback, useEffect, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
+import { SettingsTabs, type SettingsTabDef } from '@/components/settings/SettingsTabs';
+import { SettingsSection } from '@/components/settings/SettingsSection';
 
 const TASK_TYPES = ['codegen', 'curriculum', 'critic', 'chat', 'embed'] as const;
 
@@ -41,7 +43,102 @@ interface UsageMetrics {
   byTaskType: Record<string, { calls: number; tokens: number; cost: number }>;
 }
 
+type TabId = 'ai' | 'behavior' | 'affinity' | 'instincts' | 'voyager';
+
+const TABS: ReadonlyArray<SettingsTabDef<TabId>> = [
+  { id: 'ai', label: 'AI' },
+  { id: 'behavior', label: 'Behavior' },
+  { id: 'affinity', label: 'Affinity' },
+  { id: 'instincts', label: 'Instincts' },
+  { id: 'voyager', label: 'Voyager' },
+];
+
+function isTabId(s: string | null): s is TabId {
+  return s === 'ai' || s === 'behavior' || s === 'affinity' || s === 'instincts' || s === 'voyager';
+}
+
+// ─── Page shell ──────────────────────────────────────────────────────────
+
 export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="p-8 text-zinc-400">Loading…</div>}>
+      <SettingsPageInner />
+    </Suspense>
+  );
+}
+
+function SettingsPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+
+  const tabParam = searchParams.get('tab');
+  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'ai';
+
+  const setActiveTab = useCallback(
+    (tab: TabId) => {
+      const params = new URLSearchParams(searchParams.toString());
+      if (tab === 'ai') {
+        params.delete('tab');
+      } else {
+        params.set('tab', tab);
+      }
+      const qs = params.toString();
+      router.replace(qs ? `?${qs}` : '?', { scroll: false });
+    },
+    [router, searchParams],
+  );
+
+  return (
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
+      <div className="max-w-4xl mx-auto space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold">Settings</h1>
+          <p className="text-zinc-400 text-sm mt-1">
+            Configure providers, behavior tuning, affinity rules, instincts, and Voyager loop options.
+          </p>
+        </div>
+
+        <SettingsTabs<TabId> tabs={TABS} activeTab={activeTab} onChange={setActiveTab} />
+
+        <div>
+          {activeTab === 'ai' && <AiProviderTab />}
+          {activeTab === 'behavior' && (
+            <SettingsSection
+              section="behavior"
+              title="Behavior"
+              description="Tune how bots prioritize, schedule, and react to ongoing tasks."
+            />
+          )}
+          {activeTab === 'affinity' && (
+            <SettingsSection
+              section="affinity"
+              title="Affinity"
+              description="Adjust relationship modifiers, gift weights, and decay rates."
+            />
+          )}
+          {activeTab === 'instincts' && (
+            <SettingsSection
+              section="instincts"
+              title="Instincts"
+              description="Configure reflexes for combat, hunger, fear, and self-preservation."
+            />
+          )}
+          {activeTab === 'voyager' && (
+            <SettingsSection
+              section="voyager"
+              title="Voyager"
+              description="Tune curriculum, critic thresholds, and execution loop parameters."
+            />
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── AI provider tab (existing logic, untouched) ─────────────────────────
+
+function AiProviderTab() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [usage, setUsage] = useState<UsageMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -279,7 +376,7 @@ export default function SettingsPage() {
     }
   };
 
-  const updateRoute = (taskType: string, field: string, value: any) => {
+  const updateRoute = (taskType: string, field: string, value: unknown) => {
     setEditRoutes((prev) => ({
       ...prev,
       [taskType]: { ...prev[taskType], provider: prev[taskType]?.provider || settings?.defaultProvider || 'gemini', [field]: value },
@@ -291,343 +388,341 @@ export default function SettingsPage() {
   const providerNames = settings?.providers.map((p) => p.name) ?? [];
 
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 p-6">
-      <div className="max-w-4xl mx-auto space-y-8">
-        <div>
-          <h1 className="text-2xl font-bold">AI Settings</h1>
-          <p className="text-zinc-400 text-sm mt-1">Manage LLM providers, API keys, and task routing</p>
-        </div>
-
-        {feedback && (
-          <motion.div
-            initial={{ opacity: 0, y: -10 }}
-            animate={{ opacity: 1, y: 0 }}
-            className={`p-3 rounded text-sm ${feedback.type === 'success' ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700' : 'bg-red-900/50 text-red-300 border border-red-700'}`}
-          >
-            {feedback.message}
-          </motion.div>
-        )}
-
-        {/* ── AI Kill Switch ── */}
-        <section
-          className={`rounded-lg border p-5 ${
-            aiEnabled
-              ? 'bg-zinc-900 border-zinc-800'
-              : 'bg-red-950/40 border-red-800'
-          }`}
+    <div
+      role="tabpanel"
+      id="settings-panel-ai"
+      aria-labelledby="settings-tab-ai"
+      className="space-y-8"
+    >
+      {feedback && (
+        <motion.div
+          initial={{ opacity: 0, y: -10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className={`p-3 rounded text-sm ${feedback.type === 'success' ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700' : 'bg-red-900/50 text-red-300 border border-red-700'}`}
         >
-          <div className="flex items-center justify-between">
-            <div>
-              <h2 className="text-lg font-semibold flex items-center gap-2">
-                AI Enabled
-                <span
-                  className={`text-xs px-2 py-0.5 rounded ${
-                    aiEnabled
-                      ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
-                      : 'bg-red-900/60 text-red-200 border border-red-700'
-                  }`}
-                >
-                  {aiEnabled ? 'ONLINE' : 'KILL SWITCH ACTIVE'}
-                </span>
-              </h2>
-              <p className="text-zinc-400 text-sm mt-1">
-                {aiEnabled
-                  ? 'All bots are using the LLM. Toggle off to pause voyager loops and stop all LLM spend without disconnecting bots.'
-                  : 'LLM calls are blocked. All voyager loops paused. Bots stay connected but idle. No API spend.'}
-              </p>
-            </div>
-            <button
-              onClick={toggleAi}
-              disabled={togglingAi}
-              className={`relative inline-flex h-9 w-16 items-center rounded-full border-2 transition-colors ${
-                aiEnabled
-                  ? 'bg-emerald-600 border-emerald-500'
-                  : 'bg-zinc-700 border-zinc-600'
-              } disabled:opacity-50`}
-              aria-label="Toggle AI enabled"
-            >
+          {feedback.message}
+        </motion.div>
+      )}
+
+      {/* ── AI Kill Switch ── */}
+      <section
+        className={`rounded-lg border p-5 ${
+          aiEnabled
+            ? 'bg-zinc-900 border-zinc-800'
+            : 'bg-red-950/40 border-red-800'
+        }`}
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h2 className="text-lg font-semibold flex items-center gap-2">
+              AI Enabled
               <span
-                className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
-                  aiEnabled ? 'translate-x-8' : 'translate-x-1'
+                className={`text-xs px-2 py-0.5 rounded ${
+                  aiEnabled
+                    ? 'bg-emerald-900/50 text-emerald-300 border border-emerald-700'
+                    : 'bg-red-900/60 text-red-200 border border-red-700'
                 }`}
-              />
-            </button>
+              >
+                {aiEnabled ? 'ONLINE' : 'KILL SWITCH ACTIVE'}
+              </span>
+            </h2>
+            <p className="text-zinc-400 text-sm mt-1">
+              {aiEnabled
+                ? 'All bots are using the LLM. Toggle off to pause voyager loops and stop all LLM spend without disconnecting bots.'
+                : 'LLM calls are blocked. All voyager loops paused. Bots stay connected but idle. No API spend.'}
+            </p>
           </div>
-        </section>
+          <button
+            onClick={toggleAi}
+            disabled={togglingAi}
+            className={`relative inline-flex h-9 w-16 items-center rounded-full border-2 transition-colors ${
+              aiEnabled
+                ? 'bg-emerald-600 border-emerald-500'
+                : 'bg-zinc-700 border-zinc-600'
+            } disabled:opacity-50`}
+            aria-label="Toggle AI enabled"
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                aiEnabled ? 'translate-x-8' : 'translate-x-1'
+              }`}
+            />
+          </button>
+        </div>
+      </section>
 
-        {/* ── Providers ── */}
-        <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
-          <h2 className="text-lg font-semibold mb-4">Providers</h2>
+      {/* ── Providers ── */}
+      <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
+        <h2 className="text-lg font-semibold mb-4">Providers</h2>
 
-          {(() => {
-            const KNOWN: { id: string; label: string }[] = [
-              { id: 'gemini', label: 'Gemini' },
-              { id: 'anthropic', label: 'Anthropic' },
-              { id: 'openai', label: 'OpenAI' },
-              { id: 'minimax', label: 'MiniMax' },
-              { id: 'voyage', label: 'Voyage AI (embeddings)' },
-              { id: 'ollama', label: 'Ollama (local)' },
-            ];
-            return KNOWN.map((known) => {
-              const p = settings?.providers.find((x) => x.name === known.id);
-              if (p) {
-                return (
-                  <div key={p.name} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0">
-                    <button
-                      onClick={() => toggleProvider(p)}
-                      className={`w-10 h-5 rounded-full relative transition ${p.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
-                      title={p.enabled ? 'Disable' : 'Enable'}
-                    >
-                      <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${p.enabled ? 'left-5' : 'left-0.5'}`} />
-                    </button>
-                    <div className="flex-1">
-                      <span className="font-mono text-sm font-semibold capitalize">{p.name}</span>
-                      <span className="text-zinc-500 text-xs ml-2">{p.model || 'default model'}</span>
-                    </div>
-                    <span className="text-zinc-500 text-xs font-mono">{p.keyMasked}</span>
-                    <span className="text-zinc-600 text-xs">max {p.maxConcurrentRequests} concurrent</span>
-                    <button onClick={() => removeProvider(p.name)} className="text-red-500 hover:text-red-400 text-xs" title="Remove">Remove</button>
-                  </div>
-                );
-              }
-              // Placeholder row for a known provider that hasn't been configured yet.
-              const help = KEY_HELP[known.id];
+        {(() => {
+          const KNOWN: { id: string; label: string }[] = [
+            { id: 'gemini', label: 'Gemini' },
+            { id: 'anthropic', label: 'Anthropic' },
+            { id: 'openai', label: 'OpenAI' },
+            { id: 'minimax', label: 'MiniMax' },
+            { id: 'voyage', label: 'Voyage AI (embeddings)' },
+            { id: 'ollama', label: 'Ollama (local)' },
+          ];
+          return KNOWN.map((known) => {
+            const p = settings?.providers.find((x) => x.name === known.id);
+            if (p) {
               return (
-                <div key={known.id} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0 opacity-60">
-                  <span className="w-10 h-5 rounded-full bg-zinc-800 inline-block" />
-                  <div className="flex-1">
-                    <span className="font-mono text-sm font-semibold capitalize">{known.label}</span>
-                    <span className="text-zinc-600 text-xs ml-2">not configured</span>
-                  </div>
-                  {help && (
-                    <a
-                      href={help}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-[10px] text-amber-400 hover:text-amber-300 underline"
-                      title="Where to get a key"
-                    >
-                      get key ↗
-                    </a>
-                  )}
+                <div key={p.name} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0">
                   <button
-                    onClick={() => {
-                      setNewProvider({ name: known.id, apiKey: '', model: '', maxConcurrent: 3 });
-                      // Scroll the form into view.
-                      setTimeout(() => {
-                        document.getElementById('add-provider-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }, 50);
-                    }}
-                    className="text-emerald-400 hover:text-emerald-300 text-xs font-medium"
+                    onClick={() => toggleProvider(p)}
+                    className={`w-10 h-5 rounded-full relative transition ${p.enabled ? 'bg-emerald-600' : 'bg-zinc-700'}`}
+                    title={p.enabled ? 'Disable' : 'Enable'}
                   >
-                    + Add API key
+                    <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${p.enabled ? 'left-5' : 'left-0.5'}`} />
                   </button>
+                  <div className="flex-1">
+                    <span className="font-mono text-sm font-semibold capitalize">{p.name}</span>
+                    <span className="text-zinc-500 text-xs ml-2">{p.model || 'default model'}</span>
+                  </div>
+                  <span className="text-zinc-500 text-xs font-mono">{p.keyMasked}</span>
+                  <span className="text-zinc-600 text-xs">max {p.maxConcurrentRequests} concurrent</span>
+                  <button onClick={() => removeProvider(p.name)} className="text-red-500 hover:text-red-400 text-xs" title="Remove">Remove</button>
                 </div>
               );
-            });
-          })()}
+            }
+            // Placeholder row for a known provider that hasn't been configured yet.
+            const help = KEY_HELP[known.id];
+            return (
+              <div key={known.id} className="flex items-center gap-4 py-3 border-b border-zinc-800 last:border-0 opacity-60">
+                <span className="w-10 h-5 rounded-full bg-zinc-800 inline-block" />
+                <div className="flex-1">
+                  <span className="font-mono text-sm font-semibold capitalize">{known.label}</span>
+                  <span className="text-zinc-600 text-xs ml-2">not configured</span>
+                </div>
+                {help && (
+                  <a
+                    href={help}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-[10px] text-amber-400 hover:text-amber-300 underline"
+                    title="Where to get a key"
+                  >
+                    get key ↗
+                  </a>
+                )}
+                <button
+                  onClick={() => {
+                    setNewProvider({ name: known.id, apiKey: '', model: '', maxConcurrent: 3 });
+                    // Scroll the form into view.
+                    setTimeout(() => {
+                      document.getElementById('add-provider-form')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }, 50);
+                  }}
+                  className="text-emerald-400 hover:text-emerald-300 text-xs font-medium"
+                >
+                  + Add API key
+                </button>
+              </div>
+            );
+          });
+        })()}
 
-          {/* Add provider form */}
-          <div id="add-provider-form" className="mt-4 pt-4 border-t border-zinc-800 scroll-mt-6">
-            <h3 className="text-sm font-medium text-zinc-400 mb-2">Add / Update Provider</h3>
-            <div className="grid grid-cols-2 gap-3">
-              <select
-                value={newProvider.name}
-                onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value, model: '' }))}
-                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-              >
-                <option value="gemini">Gemini</option>
-                <option value="anthropic">Anthropic</option>
-                <option value="openai">OpenAI</option>
-                <option value="minimax">MiniMax</option>
-                <option value="voyage">Voyage AI (embeddings)</option>
-                <option value="ollama">Ollama (local)</option>
-              </select>
-              <div>
+        {/* Add provider form */}
+        <div id="add-provider-form" className="mt-4 pt-4 border-t border-zinc-800 scroll-mt-6">
+          <h3 className="text-sm font-medium text-zinc-400 mb-2">Add / Update Provider</h3>
+          <div className="grid grid-cols-2 gap-3">
+            <select
+              value={newProvider.name}
+              onChange={(e) => setNewProvider((p) => ({ ...p, name: e.target.value, model: '' }))}
+              className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
+            >
+              <option value="gemini">Gemini</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="minimax">MiniMax</option>
+              <option value="voyage">Voyage AI (embeddings)</option>
+              <option value="ollama">Ollama (local)</option>
+            </select>
+            <div>
+              <input
+                type="password"
+                placeholder={newProvider.name === 'ollama' ? 'Not required (local)' : `${newProvider.name} API key`}
+                value={newProvider.apiKey}
+                onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
+                disabled={newProvider.name === 'ollama'}
+                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full disabled:opacity-50"
+              />
+              {KEY_HELP[newProvider.name] && (
+                <p className="text-[10px] text-zinc-500 mt-1">
+                  Get a key:{' '}
+                  <a
+                    href={KEY_HELP[newProvider.name]}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-amber-400 hover:text-amber-300 underline"
+                  >
+                    {KEY_HELP[newProvider.name].replace(/^https?:\/\//, '').split('/')[0]}
+                  </a>
+                </p>
+              )}
+            </div>
+            <div>
+              <input
+                type="text"
+                list={`models-${newProvider.name}`}
+                placeholder="Model (pick from list or type custom)"
+                value={newProvider.model}
+                onChange={(e) => setNewProvider((p) => ({ ...p, model: e.target.value }))}
+                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full"
+              />
+              <datalist id={`models-${newProvider.name}`}>
+                {(MODEL_CATALOG[newProvider.name] || []).map((m) => (
+                  <option key={m} value={m} />
+                ))}
+              </datalist>
+            </div>
+            <input
+              type="number"
+              placeholder="Max concurrent"
+              value={newProvider.maxConcurrent}
+              onChange={(e) => setNewProvider((p) => ({ ...p, maxConcurrent: parseInt(e.target.value) || 3 }))}
+              className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
+            />
+          </div>
+          <button
+            onClick={addProvider}
+            disabled={saving}
+            className="mt-3 px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium disabled:opacity-50"
+          >
+            {saving ? 'Saving...' : 'Save Provider'}
+          </button>
+        </div>
+      </section>
+
+      {/* ── Route Configuration ── */}
+      <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
+        <h2 className="text-lg font-semibold mb-4">Task Routing</h2>
+        <p className="text-zinc-400 text-xs mb-4">Route different task types to different providers. Leave empty to use the default provider.</p>
+
+        <div className="space-y-3">
+          {TASK_TYPES.map((taskType) => {
+            const route = editRoutes[taskType] || ({} as RouteConfig);
+            const routeProviderModels = MODEL_CATALOG[route.provider || ''] || [];
+            return (
+              <div key={taskType} className="grid grid-cols-6 gap-2 items-center">
+                <span className="text-sm font-mono text-amber-400">{taskType}</span>
+                <select
+                  value={route.provider || ''}
+                  onChange={(e) => updateRoute(taskType, 'provider', e.target.value)}
+                  className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                >
+                  <option value="">Default</option>
+                  {providerNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                <div>
+                  <input
+                    type="text"
+                    list={`route-models-${taskType}`}
+                    placeholder="Model (optional)"
+                    value={route.model || ''}
+                    onChange={(e) => updateRoute(taskType, 'model', e.target.value || undefined)}
+                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs w-full"
+                  />
+                  <datalist id={`route-models-${taskType}`}>
+                    {routeProviderModels.map((m) => (
+                      <option key={m} value={m} />
+                    ))}
+                  </datalist>
+                </div>
                 <input
-                  type="password"
-                  placeholder={newProvider.name === 'ollama' ? 'Not required (local)' : `${newProvider.name} API key`}
-                  value={newProvider.apiKey}
-                  onChange={(e) => setNewProvider((p) => ({ ...p, apiKey: e.target.value }))}
-                  disabled={newProvider.name === 'ollama'}
-                  className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full disabled:opacity-50"
+                  type="number"
+                  placeholder="Max tokens"
+                  value={route.maxTokens || ''}
+                  onChange={(e) => updateRoute(taskType, 'maxTokens', parseInt(e.target.value) || undefined)}
+                  className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
                 />
-                {KEY_HELP[newProvider.name] && (
-                  <p className="text-[10px] text-zinc-500 mt-1">
-                    Get a key:{' '}
-                    <a
-                      href={KEY_HELP[newProvider.name]}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-amber-400 hover:text-amber-300 underline"
-                    >
-                      {KEY_HELP[newProvider.name].replace(/^https?:\/\//, '').split('/')[0]}
-                    </a>
-                  </p>
+                <select
+                  value={route.fallback?.[0] || ''}
+                  onChange={(e) => updateRoute(taskType, 'fallback', e.target.value ? [e.target.value] : undefined)}
+                  className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                >
+                  <option value="">No fallback</option>
+                  {providerNames.map((n) => <option key={n} value={n}>{n}</option>)}
+                </select>
+                {taskType === 'codegen' && (
+                  <label className="flex items-center gap-1 text-xs text-zinc-400">
+                    <input
+                      type="checkbox"
+                      checked={route.useThinking || false}
+                      onChange={(e) => updateRoute(taskType, 'useThinking', e.target.checked)}
+                      className="rounded"
+                    />
+                    Thinking
+                  </label>
                 )}
               </div>
-              <div>
-                <input
-                  type="text"
-                  list={`models-${newProvider.name}`}
-                  placeholder="Model (pick from list or type custom)"
-                  value={newProvider.model}
-                  onChange={(e) => setNewProvider((p) => ({ ...p, model: e.target.value }))}
-                  className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm w-full"
-                />
-                <datalist id={`models-${newProvider.name}`}>
-                  {(MODEL_CATALOG[newProvider.name] || []).map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
-              </div>
-              <input
-                type="number"
-                placeholder="Max concurrent"
-                value={newProvider.maxConcurrent}
-                onChange={(e) => setNewProvider((p) => ({ ...p, maxConcurrent: parseInt(e.target.value) || 3 }))}
-                className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <button
-              onClick={addProvider}
-              disabled={saving}
-              className="mt-3 px-4 py-2 bg-emerald-700 hover:bg-emerald-600 rounded text-sm font-medium disabled:opacity-50"
-            >
-              {saving ? 'Saving...' : 'Save Provider'}
-            </button>
-          </div>
-        </section>
+            );
+          })}
+        </div>
 
-        {/* ── Route Configuration ── */}
+        <div className="flex gap-3 mt-4">
+          <button
+            onClick={saveRoutes}
+            disabled={saving}
+            className="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm font-medium disabled:opacity-50"
+          >
+            Save Routes
+          </button>
+          <button
+            onClick={reloadRouter}
+            disabled={saving}
+            className="px-4 py-2 bg-amber-700 hover:bg-amber-600 rounded text-sm font-medium disabled:opacity-50"
+          >
+            Reload Router
+          </button>
+        </div>
+      </section>
+
+      {/* ── Usage Stats ── */}
+      {usage && usage.totalCalls > 0 && (
         <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
-          <h2 className="text-lg font-semibold mb-4">Task Routing</h2>
-          <p className="text-zinc-400 text-xs mb-4">Route different task types to different providers. Leave empty to use the default provider.</p>
-
-          <div className="space-y-3">
-            {TASK_TYPES.map((taskType) => {
-              const route = editRoutes[taskType] || {};
-              const routeProviderModels = MODEL_CATALOG[route.provider || ''] || [];
-              return (
-                <div key={taskType} className="grid grid-cols-6 gap-2 items-center">
-                  <span className="text-sm font-mono text-amber-400">{taskType}</span>
-                  <select
-                    value={route.provider || ''}
-                    onChange={(e) => updateRoute(taskType, 'provider', e.target.value)}
-                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
-                  >
-                    <option value="">Default</option>
-                    {providerNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                  <div>
-                    <input
-                      type="text"
-                      list={`route-models-${taskType}`}
-                      placeholder="Model (optional)"
-                      value={route.model || ''}
-                      onChange={(e) => updateRoute(taskType, 'model', e.target.value || undefined)}
-                      className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs w-full"
-                    />
-                    <datalist id={`route-models-${taskType}`}>
-                      {routeProviderModels.map((m) => (
-                        <option key={m} value={m} />
-                      ))}
-                    </datalist>
-                  </div>
-                  <input
-                    type="number"
-                    placeholder="Max tokens"
-                    value={route.maxTokens || ''}
-                    onChange={(e) => updateRoute(taskType, 'maxTokens', parseInt(e.target.value) || undefined)}
-                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
-                  />
-                  <select
-                    value={route.fallback?.[0] || ''}
-                    onChange={(e) => updateRoute(taskType, 'fallback', e.target.value ? [e.target.value] : undefined)}
-                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
-                  >
-                    <option value="">No fallback</option>
-                    {providerNames.map((n) => <option key={n} value={n}>{n}</option>)}
-                  </select>
-                  {taskType === 'codegen' && (
-                    <label className="flex items-center gap-1 text-xs text-zinc-400">
-                      <input
-                        type="checkbox"
-                        checked={route.useThinking || false}
-                        onChange={(e) => updateRoute(taskType, 'useThinking', e.target.checked)}
-                        className="rounded"
-                      />
-                      Thinking
-                    </label>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          <div className="flex gap-3 mt-4">
-            <button
-              onClick={saveRoutes}
-              disabled={saving}
-              className="px-4 py-2 bg-blue-700 hover:bg-blue-600 rounded text-sm font-medium disabled:opacity-50"
-            >
-              Save Routes
-            </button>
-            <button
-              onClick={reloadRouter}
-              disabled={saving}
-              className="px-4 py-2 bg-amber-700 hover:bg-amber-600 rounded text-sm font-medium disabled:opacity-50"
-            >
-              Reload Router
-            </button>
-          </div>
-        </section>
-
-        {/* ── Usage Stats ── */}
-        {usage && usage.totalCalls > 0 && (
-          <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">
-            <h2 className="text-lg font-semibold mb-4">Token Usage</h2>
-            <div className="grid grid-cols-3 gap-4 mb-4">
-              <div className="text-center">
-                <div className="text-2xl font-bold text-emerald-400">{usage.totalCalls.toLocaleString()}</div>
-                <div className="text-xs text-zinc-500">Total Calls</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-blue-400">{(usage.totalInputTokens + usage.totalOutputTokens).toLocaleString()}</div>
-                <div className="text-xs text-zinc-500">Total Tokens</div>
-              </div>
-              <div className="text-center">
-                <div className="text-2xl font-bold text-amber-400">${usage.totalEstimatedCostUsd.toFixed(4)}</div>
-                <div className="text-xs text-zinc-500">Est. Cost</div>
-              </div>
+          <h2 className="text-lg font-semibold mb-4">Token Usage</h2>
+          <div className="grid grid-cols-3 gap-4 mb-4">
+            <div className="text-center">
+              <div className="text-2xl font-bold text-emerald-400">{usage.totalCalls.toLocaleString()}</div>
+              <div className="text-xs text-zinc-500">Total Calls</div>
             </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-blue-400">{(usage.totalInputTokens + usage.totalOutputTokens).toLocaleString()}</div>
+              <div className="text-xs text-zinc-500">Total Tokens</div>
+            </div>
+            <div className="text-center">
+              <div className="text-2xl font-bold text-amber-400">${usage.totalEstimatedCostUsd.toFixed(4)}</div>
+              <div className="text-xs text-zinc-500">Est. Cost</div>
+            </div>
+          </div>
 
-            {Object.keys(usage.byProvider).length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium text-zinc-400 mb-2">By Provider</h3>
-                {Object.entries(usage.byProvider).map(([name, data]) => (
-                  <div key={name} className="flex items-center justify-between py-1 text-sm">
-                    <span className="font-mono capitalize">{name}</span>
-                    <span className="text-zinc-500">{data.calls} calls, {data.tokens.toLocaleString()} tokens, ${data.cost.toFixed(4)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+          {Object.keys(usage.byProvider).length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-medium text-zinc-400 mb-2">By Provider</h3>
+              {Object.entries(usage.byProvider).map(([name, data]) => (
+                <div key={name} className="flex items-center justify-between py-1 text-sm">
+                  <span className="font-mono capitalize">{name}</span>
+                  <span className="text-zinc-500">{data.calls} calls, {data.tokens.toLocaleString()} tokens, ${data.cost.toFixed(4)}</span>
+                </div>
+              ))}
+            </div>
+          )}
 
-            {Object.keys(usage.byTaskType).length > 0 && (
-              <div className="mt-4">
-                <h3 className="text-sm font-medium text-zinc-400 mb-2">By Task Type</h3>
-                {Object.entries(usage.byTaskType).map(([type, data]) => (
-                  <div key={type} className="flex items-center justify-between py-1 text-sm">
-                    <span className="font-mono text-amber-400">{type}</span>
-                    <span className="text-zinc-500">{data.calls} calls, {data.tokens.toLocaleString()} tokens, ${data.cost.toFixed(4)}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
-        )}
-      </div>
+          {Object.keys(usage.byTaskType).length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-medium text-zinc-400 mb-2">By Task Type</h3>
+              {Object.entries(usage.byTaskType).map(([type, data]) => (
+                <div key={type} className="flex items-center justify-between py-1 text-sm">
+                  <span className="font-mono text-amber-400">{type}</span>
+                  <span className="text-zinc-500">{data.calls} calls, {data.tokens.toLocaleString()} tokens, ${data.cost.toFixed(4)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

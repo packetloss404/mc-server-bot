@@ -247,7 +247,12 @@ export interface SchematicInfo {
   filename: string;
   size: { x: number; y: number; z: number };
   blockCount: number;
-  palette?: string[];
+  /**
+   * Per-block-type counts (block name → block count). Populated by the
+   * server when the schematic is small enough to fully parse; absent for
+   * very large schematics that we only size-estimate.
+   */
+  palette?: Record<string, number>;
 }
 
 export type BuildOriginMode = 'coords' | 'auto-flat' | `bot:${string}` | `player:${string}`;
@@ -634,8 +639,12 @@ export const api = {
   // ─── Builds ───
   getSchematics: () =>
     fetchJSON<{ schematics: SchematicInfo[] }>('/api/schematics').catch(() => ({ schematics: [] })),
+  getSchematic: (filename: string) =>
+    fetchJSON<{ schematic: SchematicInfo }>(`/api/schematics/${encodeURIComponent(filename)}`),
   getBuilds: () =>
     fetchJSON<{ builds: BuildRecord[] }>('/api/builds').catch(() => ({ builds: [] })),
+  getBuild: (id: string) =>
+    fetchJSON<{ build: BuildRecord }>(`/api/builds/${encodeURIComponent(id)}`),
   startBuild: (
     filename: string,
     origin: { x: number; y: number; z: number } | null,
@@ -822,4 +831,59 @@ export const api = {
     fetchJSON<{ memories: SocialMemoryEntry[]; emotionalState: EmotionalState | null }>(
       `/api/bots/${name}/memories`,
     ).catch(() => ({ memories: [] as SocialMemoryEntry[], emotionalState: null })),
+
+  // ─── Skill stats & difficulty ───
+  getSkillStats: () =>
+    fetchJSON<SkillStatsResponse>('/api/skills/stats'),
+  getDifficulty: () =>
+    fetchJSON<DifficultyResponse>('/api/difficulty'),
+
+  // ─── Runtime config (behavior / affinity / instincts / voyager) ───
+  getConfig: () =>
+    fetchJSON<{ sections: Record<string, Record<string, unknown>> }>('/api/config'),
+  getConfigSection: (section: string) =>
+    fetchJSON<{ section: string; values: Record<string, unknown>; restartRequired: string[] }>(
+      `/api/config/${section}`,
+    ),
+  patchConfigSection: (section: string, values: Record<string, unknown>) =>
+    fetchJSON<{ section: string; values: Record<string, unknown>; restartRequiredFields: string[] }>(
+      `/api/config/${section}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ values }),
+      },
+    ),
 };
+
+// Response shapes confirmed from src/server/api.ts (/api/skills/stats handler)
+// and src/voyager/DifficultyBalancer.ts (DifficultyState interface).
+export interface SkillStatsEntry {
+  name: string;
+  description: string | null;
+  successCount: number;
+  failureCount: number;
+  quality: number | null;
+}
+
+export interface SkillStatsResponse {
+  total: number;
+  totalSuccesses: number;
+  totalFailures: number;
+  averageQuality: number;
+  neverUsed: number;
+  topPerformers: SkillStatsEntry[];
+  topFailures: SkillStatsEntry[];
+}
+
+export type DifficultyTier = 'peaceful' | 'easy' | 'normal' | 'hard' | 'challenge';
+
+export interface DifficultyResponse {
+  tier: DifficultyTier;
+  playerCount: number;
+  averagePlayerSkill: number;
+  botAutonomy: number;
+  eventFrequency: number;
+  botChatFrequency: number;
+  combatAggressiveness: number;
+  helpfulness: number;
+}

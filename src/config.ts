@@ -81,3 +81,12 @@ export function loadConfig(configPath?: string): Config {
   const raw = fs.readFileSync(filePath, 'utf-8');
   return yaml.load(raw) as Config;
 }
+
+/**
+ * Type-safe accessor for a top-level Config section. Returns the live object
+ * reference, so mutating the returned section is observed by any subsystem
+ * holding the same reference (e.g. AffinityManager — see configPersist.ts).
+ */
+export function getSection<K extends keyof Config>(config: Config, name: K): Config[K] {
+  return config[name];
+}

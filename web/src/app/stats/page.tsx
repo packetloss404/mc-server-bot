@@ -1,11 +1,20 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Link from 'next/link';
 import { motion } from 'framer-motion';
 import { useBotStore } from '@/lib/store';
-import { api } from '@/lib/api';
+import {
+  api,
+  type SkillStatsResponse,
+  type DifficultyResponse,
+  type DifficultyTier,
+} from '@/lib/api';
 import { getPersonalityColor, PERSONALITY_ICONS } from '@/lib/constants';
 import { PageHeader } from '@/components/PageHeader';
+import { StatCard } from '@/components/ui/StatCard';
+import { ProgressBar } from '@/components/ui/ProgressBar';
+import { StatusBadge } from '@/components/ui/StatusBadge';
 
 interface BotStats {
   name: string;
@@ -14,6 +23,286 @@ interface BotStats {
   failedTasks: number;
   successRate: number;
   relationships: number;
+}
+
+const TIER_COLORS: Record<DifficultyTier, string> = {
+  peaceful: '#3B82F6',
+  easy: '#10B981',
+  normal: '#A1A1AA',
+  hard: '#F59E0B',
+  challenge: '#EF4444',
+};
+
+function SkillLibraryPanel() {
+  const [data, setData] = useState<SkillStatsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await api.getSkillStats();
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  const successRate =
+    data && data.totalSuccesses + data.totalFailures > 0
+      ? data.totalSuccesses / (data.totalSuccesses + data.totalFailures)
+      : 0;
+
+  return (
+    <div className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-zinc-300">Skill Library</h2>
+        <Link
+          href="/skills"
+          className="text-[11px] text-zinc-500 hover:text-zinc-300 transition-colors"
+        >
+          View all skills -&gt;
+        </Link>
+      </div>
+
+      {loading && !data ? (
+        <div className="py-8 text-center">
+          <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-2" />
+          <p className="text-[11px] text-zinc-500">Loading skill stats...</p>
+        </div>
+      ) : error ? (
+        <div className="py-6 text-center">
+          <p className="text-[11px] text-red-400">{error}</p>
+        </div>
+      ) : !data || data.total === 0 ? (
+        <div className="py-8 text-center">
+          <p className="text-xs text-zinc-500">No skills learned yet</p>
+          <p className="text-[10px] text-zinc-600 mt-1">
+            Skills appear as bots complete tasks
+          </p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard label="Total Skills" value={data.total} hint={`${data.neverUsed} never used`} />
+            <StatCard
+              label="Avg Quality"
+              value={data.averageQuality.toFixed(2)}
+              intent="success"
+            />
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[11px] text-zinc-400 font-medium">Success rate</span>
+              <span className="text-[11px] text-zinc-300 tabular-nums">
+                {Math.round(successRate * 100)}%
+              </span>
+            </div>
+            <ProgressBar
+              value={successRate}
+              max={1}
+              intent={successRate >= 0.7 ? 'success' : successRate >= 0.4 ? 'warning' : 'danger'}
+              height="md"
+            />
+            <p className="text-[10px] text-zinc-500 mt-1">
+              {data.totalSuccesses} successes / {data.totalFailures} failures
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">
+                Top performers
+              </p>
+              {data.topPerformers.length === 0 ? (
+                <p className="text-[11px] text-zinc-600">No successful runs yet</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {data.topPerformers.slice(0, 5).map((s) => (
+                    <li
+                      key={s.name}
+                      className="flex items-center justify-between gap-2 text-[11px]"
+                    >
+                      <span className="text-zinc-300 truncate" title={s.description ?? s.name}>
+                        {s.name}
+                      </span>
+                      <span className="shrink-0 px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-400 font-mono">
+                        {s.successCount}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+
+            <div>
+              <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold mb-2">
+                Needs attention
+              </p>
+              {data.topFailures.length === 0 ? (
+                <p className="text-[11px] text-zinc-600">No failures recorded</p>
+              ) : (
+                <ul className="space-y-1.5">
+                  {data.topFailures.slice(0, 5).map((s) => (
+                    <li
+                      key={s.name}
+                      className="flex items-center justify-between gap-2 text-[11px]"
+                    >
+                      <span className="text-zinc-300 truncate" title={s.description ?? s.name}>
+                        {s.name}
+                      </span>
+                      <span className="shrink-0 px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 font-mono">
+                        {s.failureCount}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DifficultyPanel() {
+  const [data, setData] = useState<DifficultyResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const res = await api.getDifficulty();
+        if (!cancelled) {
+          setData(res);
+          setError(null);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'Failed to load');
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, []);
+
+  return (
+    <div className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-zinc-300">Difficulty</h2>
+        {data && (
+          // StatusBadge resolves color from its known status map, which doesn't
+          // include the difficulty-tier vocabulary — render a local pill so the
+          // header chip matches the big tier card below.
+          <span
+            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-semibold uppercase tracking-wider"
+            style={{
+              backgroundColor: `${TIER_COLORS[data.tier]}20`,
+              color: TIER_COLORS[data.tier],
+            }}
+          >
+            <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: TIER_COLORS[data.tier] }} />
+            {data.tier}
+          </span>
+        )}
+      </div>
+
+      {loading && !data ? (
+        <div className="py-8 text-center">
+          <div className="w-5 h-5 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-2" />
+          <p className="text-[11px] text-zinc-500">Loading difficulty...</p>
+        </div>
+      ) : error ? (
+        <div className="py-6 text-center">
+          <p className="text-[11px] text-red-400">{error}</p>
+        </div>
+      ) : data ? (
+        <>
+          <div
+            className="rounded-lg p-3 border"
+            style={{
+              backgroundColor: `${TIER_COLORS[data.tier]}10`,
+              borderColor: `${TIER_COLORS[data.tier]}40`,
+            }}
+          >
+            <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+              Current tier
+            </p>
+            <p
+              className="text-2xl font-bold mt-0.5 capitalize"
+              style={{ color: TIER_COLORS[data.tier] }}
+            >
+              {data.tier}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <StatCard label="Players" value={data.playerCount} />
+            <StatCard
+              label="Avg Skill"
+              value={data.averagePlayerSkill.toFixed(2)}
+              hint="0 = new, 1 = expert"
+            />
+          </div>
+
+          <div className="space-y-3">
+            <p className="text-[10px] uppercase tracking-wider text-zinc-500 font-semibold">
+              Behavior modifiers
+            </p>
+            <ProgressBar
+              value={data.botAutonomy}
+              max={1}
+              label="Bot autonomy"
+              showPercent
+            />
+            <ProgressBar
+              value={data.eventFrequency}
+              max={1}
+              label="Event frequency"
+              showPercent
+              intent="warning"
+            />
+            <ProgressBar
+              value={data.combatAggressiveness}
+              max={1}
+              label="Combat aggressiveness"
+              showPercent
+              intent="danger"
+            />
+            <ProgressBar
+              value={data.helpfulness}
+              max={1}
+              label="Helpfulness"
+              showPercent
+              intent="success"
+            />
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
 }
 
 export default function StatsPage() {
@@ -66,6 +355,12 @@ export default function StatsPage() {
   return (
     <div className="p-6 lg:p-8 space-y-6 max-w-5xl">
       <PageHeader title="Stats & Leaderboards" subtitle={`${stats.length} bots tracked`} />
+
+      {/* Skill library + difficulty overview (server-wide; always visible) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <SkillLibraryPanel />
+        <DifficultyPanel />
+      </div>
 
       {loading ? (
         <div className="py-16 text-center">

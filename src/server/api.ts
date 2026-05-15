@@ -5,6 +5,15 @@ import path from 'path';
 import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
+import { Config, getSection } from '../config';
+import {
+  persistConfig,
+  PATCHABLE_SECTIONS,
+  PatchableSection,
+  RESTART_REQUIRED_FIELDS,
+  findRestartRequiredFields,
+  validatePatch,
+} from '../util/configPersist';
 import { EventLog } from './EventLog';
 import { CommanderService } from '../control/CommanderService';
 import { CommandCenter } from '../control/CommandCenter';
@@ -40,7 +49,7 @@ export interface APIServerResult {
   chainCoordinator: ChainCoordinator;
 }
 
-export function createAPIServer(botManager: BotManager): APIServerResult {
+export function createAPIServer(botManager: BotManager, config?: Config): APIServerResult {
   const app = express();
   const httpServer = http.createServer(app);
 
@@ -1904,6 +1913,95 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     const handle = botManager.getWorker(req.params.name as string) as any;
     if (!handle) return res.status(404).json({ error: 'Bot not found' });
     res.json({ diagnostics: handle.getCachedDiagnostics?.() ?? null });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  //  Runtime config — read + edit hot-reloadable values
+  //  Whitelist: behavior | affinity | instincts | voyager.
+  //  PATCH mutates the live config object in place (preserving the
+  //  reference so subsystems like AffinityManager see the change),
+  //  then persists to config.yml atomically. Fields listed in
+  //  RESTART_REQUIRED_FIELDS still get persisted, but are reported
+  //  back so the dashboard can warn the operator.
+  // ═══════════════════════════════════════════════════════════════
+  const isPatchableSection = (name: string): name is PatchableSection =>
+    (PATCHABLE_SECTIONS as readonly string[]).includes(name);
+
+  app.get('/api/config', (_req: Request, res: Response) => {
+    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
+    const sections: Record<string, unknown> = {};
+    for (const name of PATCHABLE_SECTIONS) {
+      sections[name] = getSection(config, name);
+    }
+    res.json({ sections });
+  });
+
+  app.get('/api/config/:section', (req: Request, res: Response) => {
+    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
+    const section = req.params.section as string;
+    if (!isPatchableSection(section)) {
+      return res.status(400).json({
+        error: `Unknown or non-patchable section '${section}'. Allowed: ${PATCHABLE_SECTIONS.join(', ')}`,
+      });
+    }
+    res.json({
+      section,
+      values: getSection(config, section),
+      restartRequired: Array.from(RESTART_REQUIRED_FIELDS[section]),
+    });
+  });
+
+  app.patch('/api/config/:section', (req: Request, res: Response) => {
+    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
+    const section = req.params.section as string;
+    if (!isPatchableSection(section)) {
+      return res.status(400).json({
+        error: `Unknown or non-patchable section '${section}'. Allowed: ${PATCHABLE_SECTIONS.join(', ')}`,
+      });
+    }
+    const body = req.body ?? {};
+    const incoming = body.values;
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
+      return res.status(400).json({ error: 'body must be { values: { ... } }' });
+    }
+
+    const validated = validatePatch(section, incoming as Record<string, unknown>);
+    if (!validated.ok) {
+      return res.status(400).json({
+        error: 'Invalid patch values',
+        details: validated.errors,
+      });
+    }
+
+    const current = getSection(config, section) as Record<string, unknown>;
+    // Shallow merge in place so any MAIN-THREAD subsystem holding a reference
+    // (AffinityManager) sees new values on the next read. Worker-thread
+    // subsystems (BotInstance / VoyagerLoop) capture their own Config at
+    // worker start — those changes only take effect after the worker restarts;
+    // findRestartRequiredFields flags every field in those sections.
+    for (const [key, value] of Object.entries(validated.values)) {
+      current[key] = value;
+    }
+
+    try {
+      persistConfig(config);
+    } catch (err: any) {
+      logger.error({ err: err.message, section }, 'Failed to persist config.yml');
+      return res.status(500).json({ error: `Failed to persist config.yml: ${err.message}` });
+    }
+
+    const restartRequiredFields = findRestartRequiredFields(section, validated.values);
+    logger.info(
+      { section, fields: Object.keys(validated.values), restartRequiredFields, droppedFields: validated.errors },
+      'Runtime config patched',
+    );
+    res.json({
+      section,
+      values: current,
+      restartRequiredFields,
+      // Fields that the validator dropped or coerced — surface them to the UI.
+      warnings: validated.errors,
+    });
   });
 
   return {

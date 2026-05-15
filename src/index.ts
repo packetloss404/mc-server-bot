@@ -74,7 +74,7 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager, config);
 
   // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);

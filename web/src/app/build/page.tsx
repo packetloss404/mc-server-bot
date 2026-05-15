@@ -6,6 +6,7 @@ import { api, SchematicInfo, MissionRecord, Campaign, BuildOriginMode } from '@/
 import { useBotStore, useCampaignStore, useSchematicPlacementStore } from '@/lib/store';
 import { SchematicMiniMap } from '@/components/build/SchematicMiniMap';
 import { CampaignStatus } from '@/components/build/CampaignStatus';
+import { MaterialList } from '@/components/build/MaterialList';
 import { PageHeader } from '@/components/PageHeader';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -577,6 +578,13 @@ export default function BuildPage() {
               </div>
               <ProgressBar value={activeBuild.placedBlocks ?? 0} max={activeBuild.totalBlocks ?? 0} />
             </div>
+
+            {/* Material Breakdown (Litematica-style) */}
+            <MaterialList
+              buildId={activeBuild.id}
+              schematicFile={activeBuild.schematicFile}
+              initialBuild={activeBuild}
+            />
 
             {/* Per-Bot Assignments */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">

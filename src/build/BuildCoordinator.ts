@@ -17,6 +17,13 @@ export interface SchematicInfo {
   filename: string;
   size: { x: number; y: number; z: number };
   blockCount: number;
+  /**
+   * Optional per-block-type count map (block name → number of blocks of that
+   * type in the schematic). Only populated for schematics small enough to
+   * parse without estimation — large schematics (size-estimated or
+   * volume > 200k) omit this since we don't iterate the full block list.
+   */
+  palette?: Record<string, number>;
 }
 
 export interface BuildJob {
@@ -305,7 +312,13 @@ export class BuildCoordinator {
       if (volume > 200_000) {
         return { filename, size, blockCount: Math.round(volume * 0.15) };
       }
-      return { filename, size, blockCount: cached.blocks.length };
+      // Tally palette counts so the dashboard can render a material list.
+      // Cheap: cached.blocks is already in memory, this is one pass.
+      const palette: Record<string, number> = {};
+      for (const b of cached.blocks) {
+        palette[b.name] = (palette[b.name] ?? 0) + 1;
+      }
+      return { filename, size, blockCount: cached.blocks.length, palette };
     } catch (err: any) {
       logger.warn({ filename, err: err.message }, 'Failed to parse schematic');
       return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };

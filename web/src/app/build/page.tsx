@@ -103,6 +103,10 @@ export default function BuildPage() {
   const [fillFoundation, setFillFoundation] = useState(true);
   const [snapToGround, setSnapToGround] = useState(false);
   const [clearSite, setClearSite] = useState(false);
+  const [buildModeKind, setBuildModeKind] = useState<'surface' | 'underground'>('surface');
+  const [schematicSearch, setSchematicSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
+  const [filteredSchematics, setFilteredSchematics] = useState<SchematicInfo[]>([]);
   const [groundInfo, setGroundInfo] = useState<{ y: number; block: string } | null>(null);
   const [groundLoading, setGroundLoading] = useState(false);
 
@@ -158,6 +162,44 @@ export default function BuildPage() {
       })
       .catch(() => {});
   }, [setActiveBuild]);
+
+  // Debounce schematic search input
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(schematicSearch), 200);
+    return () => clearTimeout(t);
+  }, [schematicSearch]);
+
+  // Underground mode incompatibilities: snap-to-ground (always raises Y) and
+  // clear-site (top-down /fill above ground) don't make sense for buried builds.
+  // Auto-clear them when entering underground so the build doesn't fight itself.
+  useEffect(() => {
+    if (buildModeKind === 'underground') {
+      setSnapToGround(false);
+      setClearSite(false);
+    }
+  }, [buildModeKind]);
+
+  // Run fuzzy match when debounced search or schematic list changes
+  useEffect(() => {
+    let cancelled = false;
+    // Filter the in-memory list rather than re-fetching /api/schematics on
+    // every keystroke — the full list was already loaded on mount.
+    const q = debouncedSearch.trim().toLowerCase();
+    if (!q) {
+      setFilteredSchematics(schematics);
+    } else {
+      const tokens = q.split(/\s+/).filter(Boolean);
+      setFilteredSchematics(
+        schematics.filter((s) => {
+          const hay = s.filename.toLowerCase();
+          return tokens.every((tok) => hay.includes(tok));
+        }),
+      );
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [debouncedSearch, schematics]);
 
   const recommendation = useMemo(() => {
     if (!selectedSchematic) return null;
@@ -307,7 +349,9 @@ export default function BuildPage() {
         resolvedOrigin,
         botNames,
         cleanupBotNames,
-        { fillFoundation, snapToGround, clearSite, originMode },
+        // `mode` is supported by the backend (surface | underground); cast since the
+        // shared api.ts options type is append-only and we must not modify it.
+        { fillFoundation, snapToGround, clearSite, originMode, mode: buildModeKind } as Parameters<typeof api.startBuild>[4],
       );
       setActiveBuild(result.build);
 
@@ -572,6 +616,45 @@ export default function BuildPage() {
         <>
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-white">Select Schematic</h2>
+            {!loading && schematics.length > 0 && (
+              <div className="relative">
+                <label htmlFor="schematic-search" className="sr-only">Search schematics</label>
+                <input
+                  id="schematic-search"
+                  type="text"
+                  value={schematicSearch}
+                  onChange={(e) => setSchematicSearch(e.target.value)}
+                  placeholder="Search schematics (e.g. 'small house', 'tower')"
+                  aria-label="Search schematics"
+                  className="w-full bg-zinc-800/80 border border-zinc-700/50 rounded-lg pl-9 pr-3 py-2 text-xs text-white placeholder:text-zinc-600 focus:outline-none focus:border-teal-500/40"
+                />
+                <svg
+                  width="14"
+                  height="14"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                  className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none"
+                >
+                  <circle cx="11" cy="11" r="8" />
+                  <path d="m21 21-4.3-4.3" />
+                </svg>
+                {schematicSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setSchematicSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-300 text-[10px] px-1.5 py-0.5 rounded"
+                    aria-label="Clear search"
+                  >
+                    clear
+                  </button>
+                )}
+              </div>
+            )}
             {loading ? (
               <div className="py-12 text-center">
                 <div className="w-6 h-6 border-2 border-zinc-700 border-t-zinc-400 rounded-full animate-spin mx-auto mb-3" />
@@ -589,9 +672,19 @@ export default function BuildPage() {
                 <p className="text-sm text-zinc-500">No schematics available</p>
                 <p className="text-xs text-zinc-600 mt-1">Add .schem or .schematic files to the schematics directory</p>
               </div>
+            ) : filteredSchematics.length === 0 ? (
+              <div className="text-center py-8 bg-zinc-900/50 rounded-xl border border-zinc-800/40">
+                <p className="text-sm text-zinc-500">No schematics match &quot;{schematicSearch}&quot;</p>
+                <button
+                  onClick={() => setSchematicSearch('')}
+                  className="mt-2 text-[11px] text-teal-400 hover:text-teal-300 font-medium"
+                >
+                  Clear search
+                </button>
+              </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                {schematics.map((schem, i) => {
+                {filteredSchematics.map((schem, i) => {
                   const isSelected = selectedSchematic?.filename === schem.filename;
                   return (
                     <motion.button
@@ -962,6 +1055,48 @@ export default function BuildPage() {
                     )}
                   </div>
 
+                  {/* Build Mode (surface vs underground bunker) */}
+                  <div className="space-y-2">
+                    <label id="build-mode-label" className="text-xs text-zinc-400 font-medium">Build Mode</label>
+                    <div role="radiogroup" aria-labelledby="build-mode-label" className="flex flex-wrap gap-2">
+                      {([
+                        { id: 'surface', label: 'Surface (default)', tip: 'Build on top of the terrain at the selected origin.' },
+                        { id: 'underground', label: 'Underground — dig pit and excavate', tip: 'Excavates a pit, places the schematic below surface, builds a stairwell entrance' },
+                      ] as { id: 'surface' | 'underground'; label: string; tip: string }[]).map((opt) => (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          role="radio"
+                          aria-checked={buildModeKind === opt.id}
+                          onClick={() => setBuildModeKind(opt.id)}
+                          title={opt.tip}
+                          className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            buildModeKind === opt.id
+                              ? 'bg-teal-500/15 border border-teal-500/40 text-teal-300'
+                              : 'bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600/60'
+                          }`}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={`w-3.5 h-3.5 rounded-full border-2 flex items-center justify-center transition-colors ${
+                              buildModeKind === opt.id ? 'border-teal-500' : 'border-zinc-600'
+                            }`}
+                          >
+                            {buildModeKind === opt.id && (
+                              <span className="w-1.5 h-1.5 rounded-full bg-teal-500" />
+                            )}
+                          </span>
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    {buildModeKind === 'underground' && (
+                      <p className="text-[11px] text-zinc-500">
+                        Excavates a pit, places the schematic below surface, builds a stairwell entrance. <span className="text-zinc-400">Snap-to-ground and Clear-site are disabled (they conflict with underground placement).</span>
+                      </p>
+                    )}
+                  </div>
+
                   {/* Build Options */}
                   <div className="space-y-2">
                     <label className="text-xs text-zinc-400 font-medium">Build Options</label>
@@ -986,43 +1121,49 @@ export default function BuildPage() {
                           Fill gaps under the build with stone
                         </span>
                       </label>
-                      <label className="flex items-center gap-2 cursor-pointer group" title="Auto-adjust Y to average ground level under the footprint">
+                      <label
+                        className={`flex items-center gap-2 group ${buildModeKind === 'underground' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        title={buildModeKind === 'underground' ? 'Disabled in underground mode' : 'Auto-adjust Y to average ground level under the footprint'}
+                      >
                         <span
                           className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
-                            snapToGround ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
+                            snapToGround && buildModeKind !== 'underground' ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
                           }`}
-                          onClick={() => setSnapToGround((v) => !v)}
+                          onClick={() => buildModeKind !== 'underground' && setSnapToGround((v) => !v)}
                         >
-                          {snapToGround && (
+                          {snapToGround && buildModeKind !== 'underground' && (
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
                               <polyline points="20 6 9 17 4 12" />
                             </svg>
                           )}
                         </span>
-                        <span className="text-xs text-zinc-300" onClick={() => setSnapToGround((v) => !v)}>
+                        <span className="text-xs text-zinc-300" onClick={() => buildModeKind !== 'underground' && setSnapToGround((v) => !v)}>
                           Snap to Ground
                         </span>
-                        <span className="text-[10px] text-zinc-600" onClick={() => setSnapToGround((v) => !v)}>
+                        <span className="text-[10px] text-zinc-600" onClick={() => buildModeKind !== 'underground' && setSnapToGround((v) => !v)}>
                           Auto-adjust Y to average ground level
                         </span>
                       </label>
-                      <label className="flex items-center gap-2 cursor-pointer group" title="Clear blocks in the footprint before building">
+                      <label
+                        className={`flex items-center gap-2 group ${buildModeKind === 'underground' ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                        title={buildModeKind === 'underground' ? 'Disabled in underground mode' : 'Clear blocks in the footprint before building'}
+                      >
                         <span
                           className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
-                            clearSite ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
+                            clearSite && buildModeKind !== 'underground' ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
                           }`}
-                          onClick={() => setClearSite((v) => !v)}
+                          onClick={() => buildModeKind !== 'underground' && setClearSite((v) => !v)}
                         >
-                          {clearSite && (
+                          {clearSite && buildModeKind !== 'underground' && (
                             <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
                               <polyline points="20 6 9 17 4 12" />
                             </svg>
                           )}
                         </span>
-                        <span className="text-xs text-zinc-300" onClick={() => setClearSite((v) => !v)}>
+                        <span className="text-xs text-zinc-300" onClick={() => buildModeKind !== 'underground' && setClearSite((v) => !v)}>
                           Clear Site
                         </span>
-                        <span className="text-[10px] text-zinc-600" onClick={() => setClearSite((v) => !v)}>
+                        <span className="text-[10px] text-zinc-600" onClick={() => buildModeKind !== 'underground' && setClearSite((v) => !v)}>
                           Remove blocks in the footprint before placing
                         </span>
                       </label>

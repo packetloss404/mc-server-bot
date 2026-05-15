@@ -18,7 +18,7 @@ export function setupSocketEvents(
   const prevStates = new Map<string, string>();
   const prevInventory = new Map<string, string>();
 
-  // Poll cached bot state every 2 seconds and emit changes
+  // Poll cached bot state every 1 second and emit changes
   setInterval(() => {
     const workers = botManager.getAllWorkers();
     for (const handle of workers) {
@@ -71,7 +71,7 @@ export function setupSocketEvents(
         }
       }
     }
-  }, 10000);
+  }, 1000);
 
   // World time broadcast every 30 seconds
   setInterval(() => {
@@ -132,5 +132,5 @@ export function setupSocketEvents(
     }
   }, 60000);
 
-  logger.info('Socket.IO event broadcasting initialized (10s polling)');
+  logger.info('Socket.IO event broadcasting initialized (1s polling)');
 }

@@ -21,8 +21,6 @@ interface Props {
 export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 300 }: Props) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
-  const bots = useBotStore((s) => s.botList);
-  const players = useBotStore((s) => s.playerList);
   const markers = useWorldStore((s) => s.markers);
 
   // Refs for rAF loop
@@ -31,8 +29,6 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
   const draggingRef = useRef(false);
   const dragStartRef = useRef({ x: 0, y: 0 });
   const cursorWorldRef = useRef<{ x: number; z: number } | null>(null);
-  const botsRef = useRef(bots);
-  const playersRef = useRef(players);
   const markersRef = useRef(markers);
   const originRef = useRef(origin);
   const schematicRef = useRef(schematic);
@@ -42,24 +38,24 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
   // Terrain
   const terrainCanvas = useRef<OffscreenCanvas | null>(null);
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
+  const terrainLoadingRef = useRef<{ cx: number; cz: number } | null>(null);
+  const terrainDebounceRef = useRef<number | null>(null);
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
-  // Sync refs
-  useEffect(() => { botsRef.current = bots; }, [bots]);
-  useEffect(() => { playersRef.current = players; }, [players]);
+  // Sync refs (markers/origin/schematic remain ref-synced; bots/players are
+  // read directly from the Zustand store inside the rAF loop to avoid
+  // stale-ref issues when the parent doesn't re-render on store updates).
   useEffect(() => { markersRef.current = markers; }, [markers]);
   useEffect(() => { originRef.current = origin; }, [origin]);
   useEffect(() => { schematicRef.current = schematic; }, [schematic]);
 
-  // Load terrain
-  const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
-    const cx = Math.round(centerX);
-    const cz = Math.round(centerZ);
-    if (terrainMeta.current) {
-      const dx = Math.abs(terrainMeta.current.cx - cx);
-      const dz = Math.abs(terrainMeta.current.cz - cz);
-      if (dx < TERRAIN_RADIUS / 2 && dz < TERRAIN_RADIUS / 2) return;
+  // Load terrain — internal (no debounce, just dedup)
+  const fetchTerrain = useCallback(async (cx: number, cz: number) => {
+    // Dedup: skip if an identical center is already in flight
+    if (terrainLoadingRef.current && terrainLoadingRef.current.cx === cx && terrainLoadingRef.current.cz === cz) {
+      return;
     }
+    terrainLoadingRef.current = { cx, cz };
     setTerrainStatus('loading');
     try {
       const data = await api.getTerrain(cx, cz, TERRAIN_RADIUS, TERRAIN_STEP);
@@ -79,8 +75,38 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
       setTerrainStatus('loaded');
     } catch {
       setTerrainStatus('error');
+    } finally {
+      if (terrainLoadingRef.current && terrainLoadingRef.current.cx === cx && terrainLoadingRef.current.cz === cz) {
+        terrainLoadingRef.current = null;
+      }
     }
   }, []);
+
+  // Debounced public loader: collapses bursts of pan-driven reloads.
+  const loadTerrain = useCallback((centerX: number, centerZ: number) => {
+    const cx = Math.round(centerX);
+    const cz = Math.round(centerZ);
+    if (terrainMeta.current) {
+      const dx = Math.abs(terrainMeta.current.cx - cx);
+      const dz = Math.abs(terrainMeta.current.cz - cz);
+      if (dx < TERRAIN_RADIUS / 2 && dz < TERRAIN_RADIUS / 2) {
+        // Within cached region — cancel any pending debounce so a previously
+        // scheduled fetch for a distant center doesn't fire stale.
+        if (terrainDebounceRef.current !== null) {
+          window.clearTimeout(terrainDebounceRef.current);
+          terrainDebounceRef.current = null;
+        }
+        return;
+      }
+    }
+    if (terrainDebounceRef.current !== null) {
+      window.clearTimeout(terrainDebounceRef.current);
+    }
+    terrainDebounceRef.current = window.setTimeout(() => {
+      terrainDebounceRef.current = null;
+      void fetchTerrain(cx, cz);
+    }, 200);
+  }, [fetchTerrain]);
 
   // Center on origin and load terrain
   useEffect(() => {
@@ -88,10 +114,20 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
     offsetRef.current = { x: -origin.x * scaleRef.current, y: -origin.z * scaleRef.current };
     initializedRef.current = true;
     const timeout = window.setTimeout(() => {
-      void loadTerrain(origin.x, origin.z);
+      loadTerrain(origin.x, origin.z);
     }, 0);
     return () => window.clearTimeout(timeout);
   }, [origin, loadTerrain]);
+
+  // Cleanup terrain debounce on unmount
+  useEffect(() => {
+    return () => {
+      if (terrainDebounceRef.current !== null) {
+        window.clearTimeout(terrainDebounceRef.current);
+        terrainDebounceRef.current = null;
+      }
+    };
+  }, []);
 
   // Draw loop
   useEffect(() => {
@@ -176,8 +212,10 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
         }
       }
 
-      // Bot/player dots
-      for (const bot of botsRef.current) {
+      // Bot/player dots — read directly from the store so we never render
+      // stale data (the parent may not re-render on every store update).
+      const storeState = useBotStore.getState();
+      for (const bot of storeState.botList) {
         if (!bot.position) continue;
         const sx = cx + bot.position.x * scale + offset.x;
         const sy = cy + bot.position.z * scale + offset.y;
@@ -189,7 +227,7 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
         ctx.fillStyle = '#fff'; ctx.font = '9px system-ui'; ctx.textAlign = 'center';
         ctx.fillText(bot.name, sx, sy - 8);
       }
-      for (const p of playersRef.current) {
+      for (const p of storeState.playerList) {
         if (!p.isOnline || !p.position) continue;
         const sx = cx + p.position.x * scale + offset.x;
         const sy = cy + p.position.z * scale + offset.y;
@@ -199,17 +237,47 @@ export function SchematicMiniMap({ schematic, origin, onOriginChange, height = 3
         ctx.fillRect(sx - half, sy - half, half * 2, half * 2);
       }
 
-      // Schematic footprint — placed
+      // Schematic footprint — placed.
+      // drawSchematicFootprint signature:
+      //   (ctx, worldX, worldZ, sizeX, sizeZ, scale, offsetX, offsetZ, canvasW, canvasH, mode)
+      // where offsetX/offsetZ are the *world coordinates* currently at the canvas center.
+      // Our local offset is in pixels; convert with offsetWorld = -offset.{x,y} / scale.
       const sch = schematicRef.current;
+      const offsetWorldX = -offset.x / scale;
+      const offsetWorldZ = -offset.y / scale;
       if (placedRef.current) {
-        drawSchematicFootprint(ctx, cx, cy, scale, offset, placedRef.current, sch.size.x, sch.size.z, 'placed');
+        drawSchematicFootprint(
+          ctx,
+          placedRef.current.x,
+          placedRef.current.z,
+          sch.size.x,
+          sch.size.z,
+          scale,
+          offsetWorldX,
+          offsetWorldZ,
+          w,
+          h,
+          'placed',
+        );
       }
 
       // Schematic footprint — preview following cursor
       const cursor = cursorWorldRef.current;
       if (cursor && !draggingRef.current) {
         const snapped = { x: Math.floor(cursor.x), z: Math.floor(cursor.z) };
-        drawSchematicFootprint(ctx, cx, cy, scale, offset, snapped, sch.size.x, sch.size.z, 'preview');
+        drawSchematicFootprint(
+          ctx,
+          snapped.x,
+          snapped.z,
+          sch.size.x,
+          sch.size.z,
+          scale,
+          offsetWorldX,
+          offsetWorldZ,
+          w,
+          h,
+          'preview',
+        );
       }
 
       // HUD

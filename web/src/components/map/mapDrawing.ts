@@ -11,7 +11,18 @@ export const TERRAIN_STEP = 1;
 
 /**
  * Draw a schematic footprint outline on the map canvas.
- * @param mode - 'placed' for solid green outline, 'preview' for dashed amber
+ *
+ * @param ctx       Canvas 2D context.
+ * @param worldX    World X coordinate of the footprint's origin (NW corner).
+ * @param worldZ    World Z coordinate of the footprint's origin (NW corner).
+ * @param sizeX     Footprint width in blocks (world X axis).
+ * @param sizeZ     Footprint depth in blocks (world Z axis).
+ * @param scale     Pixels per block.
+ * @param offsetX   World X coordinate currently at the canvas center.
+ * @param offsetZ   World Z coordinate currently at the canvas center.
+ * @param canvasW   Canvas width in CSS pixels.
+ * @param canvasH   Canvas height in CSS pixels.
+ * @param mode      'placed' for solid green outline, 'preview' for dashed amber.
  */
 export function drawSchematicFootprint(
   ctx: CanvasRenderingContext2D,

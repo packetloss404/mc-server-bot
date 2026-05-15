@@ -12,8 +12,14 @@ import {
   useBuildStore,
   useChainStore,
   useCampaignStore,
+  useDecisionStore,
+  type DecisionRecord,
 } from '@/lib/store';
 import { api } from '@/lib/api';
+import { setFaviconStatus } from '@/lib/favicon';
+import { toast as showToast, showBanner, dismissBanner } from '@/components/Toast';
+
+const CONNECTION_BANNER_ID = 'socket-connection-lost';
 
 export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
@@ -86,9 +92,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       api.getBots().then((data) => setBots(data.bots)).catch(() => {});
     });
 
-    // Player events
-    socket.on('player:position', (data: { name: string; x: number; y: number; z: number }) => {
-      updatePlayerPosition(data.name, data.x, data.y, data.z);
+    // Player events. Server emits `{ player, x, y, z }` (see api.ts).
+    socket.on('player:position', (data: { player: string; x: number; y: number; z: number }) => {
+      if (data && data.player && typeof data.x === 'number') {
+        updatePlayerPosition(data.player, data.x, data.y, data.z);
+      }
     });
 
     socket.on('player:join', (data: { name: string }) => {
@@ -103,6 +111,84 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('bot:chat', () => {
       incrementUnreadChats();
     });
+
+    // ── Newly wired listeners ──────────────────────────────────────────────
+    const onBotDied = (data: { bot: string; position: { x: number; y: number; z: number } | null }) => {
+      const pos = data.position
+        ? `${Math.round(data.position.x)}, ${Math.round(data.position.y)}, ${Math.round(data.position.z)}`
+        : 'unknown location';
+      showToast(`${data.bot} died at ${pos}`, 'error');
+    };
+    socket.on('bot:died', onBotDied);
+
+    // (player:position is handled by the single listener registered above with
+    // the server's `{ player, x, y, z }` payload shape.)
+
+    // ── Decision trace listener ────────────────────────────────────────────
+    // Pushes each forwarded decision into the per-bot Zustand buffer that
+    // useBotDecisions reads. Server emits TraceRecord-shaped payloads
+    // (id, type, botName, task, timestamp, summary, decision, candidates,
+    // details). We normalize into DecisionRecord at the boundary.
+    const onBotDecision = (raw: Record<string, unknown> | null | undefined) => {
+      if (!raw || typeof raw !== 'object') return;
+      const botName = typeof raw.botName === 'string' ? raw.botName : '';
+      if (!botName) return;
+      const record: DecisionRecord = {
+        id: String(raw.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+        type: String(raw.type ?? 'action'),
+        botName,
+        task: typeof raw.task === 'string' ? raw.task : undefined,
+        timestamp: typeof raw.timestamp === 'number' ? raw.timestamp : Date.now(),
+        summary: typeof raw.summary === 'string' ? raw.summary : undefined,
+        decision: typeof raw.decision === 'string' ? raw.decision : undefined,
+        action: typeof raw.action === 'string'
+          ? raw.action
+          : (typeof raw.decision === 'string' ? raw.decision : undefined),
+        reason: typeof raw.reason === 'string'
+          ? raw.reason
+          : (typeof raw.summary === 'string' ? raw.summary : undefined),
+        target: typeof raw.target === 'string' ? raw.target : undefined,
+        metadata: (raw.metadata && typeof raw.metadata === 'object')
+          ? raw.metadata as Record<string, unknown>
+          : undefined,
+        alternatives: Array.isArray(raw.alternatives)
+          ? raw.alternatives as DecisionRecord['alternatives']
+          : undefined,
+        candidates: Array.isArray(raw.candidates)
+          ? raw.candidates as DecisionRecord['candidates']
+          : undefined,
+        details: (raw.details && typeof raw.details === 'object')
+          ? raw.details as Record<string, unknown>
+          : undefined,
+      };
+      useDecisionStore.getState().pushDecision(botName, record);
+    };
+    socket.on('bot:decision', onBotDecision);
+
+    // ── Favicon-as-status + connection banner ──────────────────────────────
+    // Drive favicon from connection state. Set initial color from current
+    // socket state so we don't wait for the next event.
+    setFaviconStatus(socket.connected ? 'green' : 'amber');
+
+    const onFaviconConnect = () => {
+      setFaviconStatus('green');
+      dismissBanner(CONNECTION_BANNER_ID);
+    };
+    const onFaviconDisconnect = () => {
+      setFaviconStatus('red');
+      showBanner('Lost connection to server — retrying...', 'warning', {
+        dismissible: false,
+        id: CONNECTION_BANNER_ID,
+      });
+    };
+    const onReconnectAttempt = () => {
+      setFaviconStatus('amber');
+    };
+    socket.on('connect', onFaviconConnect);
+    socket.on('disconnect', onFaviconDisconnect);
+    // socket.io-client emits these on the socket's manager; bind via .io too.
+    socket.io.on('reconnect_attempt', onReconnectAttempt);
+    socket.io.on('reconnect_error', onReconnectAttempt);
 
     // ── Control platform events: on any change, refetch the affected list. ──
     // Refetches are debounced so bursty events (e.g. build:progress per-block)
@@ -179,6 +265,11 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
       clearInterval(playerInterval);
+      socket.off('bot:died', onBotDied);
+      socket.off('connect', onFaviconConnect);
+      socket.off('disconnect', onFaviconDisconnect);
+      socket.io.off('reconnect_attempt', onReconnectAttempt);
+      socket.io.off('reconnect_error', onReconnectAttempt);
       socket.off('connect');
       socket.off('disconnect');
       socket.off('bot:position');
@@ -211,6 +302,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('campaign:completed'); socket.off('campaign:failed');
       socket.off('campaign:cancelled'); socket.off('campaign:paused');
       socket.off('campaign:resumed'); socket.off('campaign:deleted');
+      socket.off('bot:decision', onBotDecision);
     };
   }, [
     setBots, updatePosition, updateHealth, updateState,

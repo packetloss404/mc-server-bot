@@ -465,6 +465,20 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       if (position && typeof position === 'object') {
         botManager.getPlayerPositionCache().recordPosition(playerName, position);
       }
+      if (
+        position &&
+        typeof position === 'object' &&
+        typeof position.x === 'number' &&
+        typeof position.y === 'number' &&
+        typeof position.z === 'number'
+      ) {
+        io.emit('player:position', {
+          player: playerName,
+          x: position.x,
+          y: position.y,
+          z: position.z,
+        });
+      }
     }
     res.json({ handled: true });
   });

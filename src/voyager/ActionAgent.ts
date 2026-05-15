@@ -58,20 +58,37 @@ Use these when no primitive covers the task (swimming, eating, fleeing):
 - bot.toss(itemType, metadata, count) — drop items (itemType is the numeric ID: use item.type from inventory)
 - await bot.fish() — start fishing (requires fishing rod equipped)
 
-### Swimming pattern:
+### Swimming / underwater pattern:
+The bot has an instinct that handles drowning automatically — prefer letting it run. If you must surface manually:
 \`\`\`
-bot.setControlState('jump', true);
-bot.setControlState('forward', true);
-await bot.waitForTicks(40); // swim up for 2 seconds
-bot.clearControlStates();
+// First try walking out — if you're standing on solid ground in shallow water
+// (head submerged, feet on a block), walking forward is faster than swimming.
+const feet = bot.blockAt(bot.entity.position.offset(0, -1, 0));
+if (feet && feet.name !== 'water' && feet.name !== 'lava') {
+  await moveTo(bot.entity.position.x + 4, bot.entity.position.y, bot.entity.position.z, 2, 5);
+} else {
+  // Genuine deep-water surface: look straight up (negative pitch = up in mineflayer)
+  // and swim with jump+forward.
+  await bot.look(bot.entity.yaw, -Math.PI / 2);
+  bot.setControlState('jump', true);
+  bot.setControlState('forward', true);
+  await bot.waitForTicks(40);
+  bot.clearControlStates();
+}
 \`\`\`
 
 ### Eating pattern:
 \`\`\`
-const food = bot.inventory.items().find(i => i.foodRecovery > 0);
-if (food) {
-  await bot.equip(food, 'hand');
-  await bot.consume();
+if (bot.food < 19) {
+  const food = bot.inventory.items().find(i => i.foodRecovery > 0);
+  if (food) {
+    await bot.equip(food, 'hand');
+    // bot.consume() can hang if the server rejects the eat — cap it.
+    await Promise.race([
+      bot.consume(),
+      new Promise(r => setTimeout(r, 5000)),
+    ]);
+  }
 }
 \`\`\`
 
@@ -107,6 +124,9 @@ if (threat) {
 9. Do NOT write infinite loops or recursive functions.
 10. maxDistance MUST be 32 (or smaller) for bot.findBlock(). Never use 64 or higher — it scans 8x more chunks and is a CPU hog.
 11. Output ONLY the function code. No explanation. No markdown fences.
+12. NEVER target the block directly under the bot's feet for mining or digging — it removes the bot's support and causes a fall. Operate horizontally or above; mineBlock() will refuse the support block and return an error.
+13. Tree harvesting (chop/fell/carve trees, collect logs) is a HORIZONTAL task. Call mineBlock('oak_log' | 'spruce_log' | 'birch_log' | etc., N). Do NOT dig downward, do NOT clear the floor, do NOT mine dirt under the trees. Trees grow UP — mine the trunk at eye level.
+14. "Clear an area" means remove obstructing blocks at eye-level / above, NOT digging out the floor. The floor is the bot's support; never remove it.
 
 ## Performance rules (avoid CPU waste)
 - **Snapshot inventory once.** Call \`const inv = bot.inventory.items();\` once at the top, then reuse \`inv.find(...)\` instead of calling \`bot.inventory.items()\` repeatedly.

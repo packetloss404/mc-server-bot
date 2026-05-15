@@ -3,6 +3,16 @@ import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
 
 const FLEE_HEALTH_THRESHOLD = 8; // 4 hearts
+const SWORD_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
+
+function equipBestSword(bot: Bot): Promise<void> | undefined {
+  const items = bot.inventory.items();
+  for (const tier of SWORD_TIERS) {
+    const sword = items.find((i) => i.name === `${tier}_sword`);
+    if (sword) return bot.equip(sword, 'hand').catch(() => undefined);
+  }
+  return undefined;
+}
 
 export async function attack(bot: Bot, entityName: string, maxDuration = 30000): Promise<ActionResult> {
   if (typeof entityName !== 'string') {
@@ -22,6 +32,10 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
   if (!target) {
     return { success: false, message: `No ${entityName} nearby, please explore first` };
   }
+
+  // Equip best available sword — fighting with bare hands is 2-3× slower
+  // and the bot takes more damage during the longer engagement.
+  await equipBestSword(bot);
 
   bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
 

@@ -1315,36 +1315,93 @@ export class BotInstance {
     if (!this.bot) return;
 
     this.state = BotState.INSTINCT;
+    const oxygen = (this.bot.entity as any).oxygenLevel ?? 300;
+    const pos = this.bot.entity.position;
+
+    // Already safe? Stop early.
+    if (oxygen >= this.config.instincts.drowningSurfaceClearOxygen && !this.isUnderwater()) {
+      this.stopInstinct('reached-air');
+      return;
+    }
+
+    // Prefer walking to shore over swimming up. Search a small horizontal disc
+    // for a non-water column with air above it — that's a beach/edge we can
+    // pathfind to without re-entering the surface logic next tick.
+    const shore = this.findNearbyShore(pos, 6);
+    if (shore) {
+      const { goals } = require('mineflayer-pathfinder');
+      this.bot.clearControlStates();
+      this.bot.pathfinder.setGoal(new goals.GoalNear(shore.x, shore.y, shore.z, 1));
+      logger.warn({
+        bot: this.name,
+        instinct: 'surface-via-shore',
+        oxygen,
+        shore: { x: shore.x, y: shore.y, z: shore.z },
+      }, 'Instinct action');
+      return;
+    }
+
+    // No reachable shore — swim upward. Look up so the swim impulse goes
+    // vertical; clear horizontal controls so we don't drift into walls.
     if (this.bot.pathfinder.isMoving()) {
       this.bot.pathfinder.stop();
     }
 
-    const oxygen = (this.bot.entity as any).oxygenLevel ?? 300;
-    const pos = this.bot.entity.position;
-    const currentBlock = this.bot.blockAt(pos);
     const yaw = this.bot.entity.yaw;
+    // In mineflayer pitch convention, negative pitch = looking up.
     void this.bot.look(yaw, -Math.PI / 2, true).catch(() => undefined);
 
     this.bot.setControlState('jump', true);
     this.bot.setControlState('forward', true);
     this.bot.setControlState('sprint', oxygen < this.config.instincts.drowningOxygenThreshold / 2);
-
-    if (currentBlock?.name === 'water' || currentBlock?.name === 'bubble_column') {
-      this.bot.setControlState('back', false);
-      this.bot.setControlState('left', false);
-      this.bot.setControlState('right', false);
-    }
+    this.bot.setControlState('back', false);
+    this.bot.setControlState('left', false);
+    this.bot.setControlState('right', false);
 
     logger.warn({
       bot: this.name,
-      instinct: 'surface',
+      instinct: 'surface-swim',
       oxygen,
       position: { x: Number(pos.x.toFixed(1)), y: Number(pos.y.toFixed(1)), z: Number(pos.z.toFixed(1)) },
     }, 'Instinct action');
+  }
 
-    if (oxygen >= this.config.instincts.drowningSurfaceClearOxygen && !this.isUnderwater()) {
-      this.stopInstinct('reached-air');
+  /**
+   * Scan a horizontal disc for a column whose top block is solid-walkable with
+   * air above — i.e. a beach/edge we can pathfind to. Returns null if nothing
+   * suitable is in range.
+   */
+  private findNearbyShore(from: Vec3, radius: number): { x: number; y: number; z: number } | null {
+    if (!this.bot) return null;
+    const baseX = Math.floor(from.x);
+    const baseY = Math.floor(from.y);
+    const baseZ = Math.floor(from.z);
+    const minY = baseY - 2;
+    const maxY = baseY + 2;
+    let best: { x: number; y: number; z: number; dist: number } | null = null;
+
+    for (let dx = -radius; dx <= radius; dx++) {
+      for (let dz = -radius; dz <= radius; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > radius * radius) continue;
+        // Look for a solid top block with air directly above, scanning a small
+        // vertical window so we catch ledges slightly above/below us too.
+        for (let y = maxY; y >= minY; y--) {
+          const here = this.bot.blockAt(new Vec3(baseX + dx, y, baseZ + dz));
+          const above = this.bot.blockAt(new Vec3(baseX + dx, y + 1, baseZ + dz));
+          if (!here || !above) continue;
+          if (here.name === 'water' || here.name === 'lava' || here.boundingBox !== 'block') continue;
+          if (above.name !== 'air' && above.name !== 'cave_air') continue;
+          if (!best || d2 < best.dist) {
+            best = { x: baseX + dx, y: y + 1, z: baseZ + dz, dist: d2 };
+          }
+          break; // top-most solid in this column — done with this column
+        }
+      }
     }
+
+    return best ? { x: best.x, y: best.y, z: best.z } : null;
   }
 
   private isDrowning(): boolean {

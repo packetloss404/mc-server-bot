@@ -250,6 +250,8 @@ export interface SchematicInfo {
   palette?: string[];
 }
 
+export type BuildOriginMode = 'coords' | 'auto-flat' | `bot:${string}` | `player:${string}`;
+
 export interface BuildRecord {
   id: string;
   schematicFile: string;
@@ -592,15 +594,23 @@ export const api = {
     fetchJSON<{ builds: BuildRecord[] }>('/api/builds').catch(() => ({ builds: [] })),
   startBuild: (
     filename: string,
-    origin: { x: number; y: number; z: number },
+    origin: { x: number; y: number; z: number } | null,
     botNames: string[],
     cleanupBotNames?: string[],
-    options?: { fillFoundation?: boolean; snapToGround?: boolean },
-  ) =>
-    fetchJSON<{ build: BuildRecord }>('/api/builds', {
+    options?: {
+      fillFoundation?: boolean;
+      snapToGround?: boolean;
+      clearSite?: boolean;
+      originMode?: BuildOriginMode;
+    },
+  ) => {
+    const body: Record<string, unknown> = { filename, botNames, cleanupBotNames, ...options };
+    if (origin) body.origin = origin;
+    return fetchJSON<{ build: BuildRecord }>('/api/builds', {
       method: 'POST',
-      body: JSON.stringify({ filename, origin, botNames, cleanupBotNames, ...options }),
-    }),
+      body: JSON.stringify(body),
+    });
+  },
   cancelBuild: (id: string) =>
     fetchJSON<{ success: boolean }>(`/api/builds/${id}/cancel`, { method: 'POST' }),
   pauseBuild: (id: string) =>

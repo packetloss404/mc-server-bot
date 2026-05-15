@@ -9,7 +9,10 @@ import { SkillLibrary } from './SkillLibrary';
 import { Task } from './CurriculumAgent';
 import { renderObservation } from './Observation';
 import { buildTaskGuidance } from './TaskGuidance';
+import { buildTerrainSummary, formatTerrainSummary } from './TerrainSummary';
 import { logger } from '../util/logger';
+
+const BUILD_TASK_PATTERN = /build|bunker|shelter|house|tower|wall|base|fort/i;
 
 export interface GeneratedCode {
   functionName: string;
@@ -194,6 +197,20 @@ export class ActionAgent {
     const taskGuidance = buildTaskGuidance(task);
     const obsText = this.formatCompactObservation(obs, taskGuidance.category, !previousError && !previousCode);
 
+    // For build-style tasks, prepend a deterministic terrain summary so the LLM
+    // can reason about slope, water, and obstacles before generating code.
+    let terrainBlock = '';
+    const isBuildTask =
+      taskGuidance.category === 'building' || BUILD_TASK_PATTERN.test(task.description);
+    if (isBuildTask) {
+      try {
+        const terrain = buildTerrainSummary(bot);
+        terrainBlock = `${formatTerrainSummary(terrain)}\n\n`;
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'ActionAgent: buildTerrainSummary failed, continuing without terrain block');
+      }
+    }
+
     // Enrich skill query with chatlog summary on retries (like original Voyager)
     const chatlogSummary = eventLog ? ActionAgent.summarizeChatlog(eventLog) : '';
     const baseQuery = task.keywords.join(' ') + ' ' + task.description;
@@ -223,7 +240,7 @@ export class ActionAgent {
 
     for (let attempt = 1; attempt <= ActionAgent.MAX_PARSE_RETRIES; attempt++) {
       const iterativeContext = this.buildIterativeContext(lastRaw, lastError, lastCritique, eventLog, blockerSummary, worldMemorySummary);
-      const userMessage = `${iterativeContext}
+      const userMessage = `${terrainBlock}${iterativeContext}
 ${obsText}
 Task: ${task.description}
 Task category: ${taskGuidance.category}

@@ -30,6 +30,7 @@ import { BlackboardManager } from '../voyager/BlackboardManager';
 import { SharedWorldModel } from '../voyager/SharedWorldModel';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
+import { parseBuildIntent } from '../control/BuildIntentResolver';
 
 export interface BotOptions {
   name: string;
@@ -671,6 +672,43 @@ export class BotInstance {
       if (!this.isDirectlyAddressed(message)) {
         logger.info({ bot: this.name, player: username, message }, 'Ignoring non-direct owner chat');
         return;
+      }
+
+      // Cheap regex-based build-intent detector. Runs before LLM dispatch so a
+      // "build me a house here" message becomes a structured intent without
+      // round-tripping through the chat model. Only logs for now — wiring to
+      // BuildCoordinator is the next step.
+      // TODO: dispatch the resolved intent to BuildCoordinator once the wiring
+      // story lands.
+      const buildIntent = parseBuildIntent(message);
+      if (buildIntent) {
+        const player = this.bot.players[username];
+        const playerPos = player?.entity?.position ?? null;
+        const resolvedAbsolute = buildIntent.anchor === 'player_position' && playerPos
+          ? {
+              x: Math.round(playerPos.x + buildIntent.offset.x),
+              y: Math.round(playerPos.y),
+              z: Math.round(playerPos.z + buildIntent.offset.z),
+            }
+          : buildIntent.absolute ?? null;
+        logger.info(
+          {
+            bot: this.name,
+            player: username,
+            intent: buildIntent,
+            playerPos: playerPos
+              ? {
+                  x: Number(playerPos.x.toFixed(1)),
+                  y: Number(playerPos.y.toFixed(1)),
+                  z: Number(playerPos.z.toFixed(1)),
+                }
+              : null,
+            resolvedAbsolute,
+          },
+          'BuildIntent: detected'
+        );
+        // Fall through to handleChat so the bot still acknowledges the player
+        // verbally. The actual build dispatch will be added in a follow-up.
       }
 
       // Generate AI chat response

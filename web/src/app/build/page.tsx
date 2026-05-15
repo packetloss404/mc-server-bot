@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { api, SchematicInfo, MissionRecord, Campaign } from '@/lib/api';
+import { api, SchematicInfo, MissionRecord, Campaign, BuildOriginMode } from '@/lib/api';
 import { useBotStore, useCampaignStore, useSchematicPlacementStore } from '@/lib/store';
 import { SchematicMiniMap } from '@/components/build/SchematicMiniMap';
 import { CampaignStatus } from '@/components/build/CampaignStatus';
@@ -102,8 +102,15 @@ export default function BuildPage() {
   const [buildMission, setBuildMission] = useState<MissionRecord | null>(null);
   const [fillFoundation, setFillFoundation] = useState(true);
   const [snapToGround, setSnapToGround] = useState(false);
+  const [clearSite, setClearSite] = useState(false);
   const [groundInfo, setGroundInfo] = useState<{ y: number; block: string } | null>(null);
   const [groundLoading, setGroundLoading] = useState(false);
+
+  // Origin selection mode (where to place the build)
+  type OriginModeKind = 'coords' | 'auto-flat' | 'bot' | 'player';
+  const [originModeKind, setOriginModeKind] = useState<OriginModeKind>('coords');
+  const [originBotName, setOriginBotName] = useState<string>('');
+  const [originPlayerName, setOriginPlayerName] = useState<string>('');
 
   const botList = useBotStore((s) => s.botList);
   const playerList = useBotStore((s) => s.playerList);
@@ -278,16 +285,46 @@ export default function BuildPage() {
 
       setCreateProgress('Starting build...');
       const cleanupBotNames = botMode === 'create' ? botNames : undefined;
-      const result = await api.startBuild(selectedSchematic.filename, origin, botNames, cleanupBotNames, { fillFoundation, snapToGround });
+
+      // Build origin payload based on the selected origin mode
+      let resolvedOrigin: { x: number; y: number; z: number } | null = origin;
+      let originMode: BuildOriginMode = 'coords';
+      if (originModeKind === 'auto-flat') {
+        resolvedOrigin = null;
+        originMode = 'auto-flat';
+      } else if (originModeKind === 'bot') {
+        if (!originBotName) throw new Error('Pick a bot to anchor the build');
+        resolvedOrigin = null;
+        originMode = `bot:${originBotName}`;
+      } else if (originModeKind === 'player') {
+        if (!originPlayerName) throw new Error('Pick a player to anchor the build');
+        resolvedOrigin = null;
+        originMode = `player:${originPlayerName}`;
+      }
+
+      const result = await api.startBuild(
+        selectedSchematic.filename,
+        resolvedOrigin,
+        botNames,
+        cleanupBotNames,
+        { fillFoundation, snapToGround, clearSite, originMode },
+      );
       setActiveBuild(result.build);
 
       // Create a mission to track this build
       const schematicName = selectedSchematic.filename.replace(/\.(schem|schematic)$/i, '');
+      const originLabel = originModeKind === 'coords'
+        ? `at (${origin.x}, ${origin.y}, ${origin.z})`
+        : originModeKind === 'auto-flat'
+          ? 'on an auto-selected flat area'
+          : originModeKind === 'bot'
+            ? `at ${originBotName}'s location`
+            : `at ${originPlayerName}'s location`;
       try {
         const missionResult = await api.createMission({
           type: 'build_schematic',
           title: `Build: ${schematicName}`,
-          description: `Building ${schematicName} at (${origin.x}, ${origin.y}, ${origin.z}) with ${botNames.length} bot(s). ${selectedSchematic.blockCount.toLocaleString()} blocks total.`,
+          description: `Building ${schematicName} ${originLabel} with ${botNames.length} bot(s). ${selectedSchematic.blockCount.toLocaleString()} blocks total.`,
           assigneeType: 'bot',
           assigneeIds: botNames,
           priority: 'normal',
@@ -605,7 +642,79 @@ export default function BuildPage() {
                 <div className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5 space-y-5">
                   <h2 className="text-sm font-semibold text-white">Build Configuration</h2>
 
-                  {/* Origin Coordinates */}
+                  {/* Origin Placement Mode */}
+                  <div className="space-y-2">
+                    <label className="text-xs text-zinc-400 font-medium">Where to Build</label>
+                    <div className="flex flex-wrap gap-2">
+                      {([
+                        { id: 'coords', label: 'Pick coordinates' },
+                        { id: 'auto-flat', label: 'Auto-flat (recommended)' },
+                        { id: 'bot', label: "At bot's location" },
+                        { id: 'player', label: "At player's location" },
+                      ] as { id: OriginModeKind; label: string }[]).map((opt) => (
+                        <button
+                          key={opt.id}
+                          onClick={() => setOriginModeKind(opt.id)}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
+                            originModeKind === opt.id
+                              ? 'bg-teal-500/15 border border-teal-500/40 text-teal-300'
+                              : 'bg-zinc-800/60 border border-zinc-700/40 text-zinc-400 hover:text-zinc-300 hover:border-zinc-600/60'
+                          }`}
+                        >
+                          {opt.label}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-zinc-500">
+                      {originModeKind === 'coords' && 'Enter exact X / Y / Z below, or use the map / buttons to fill them in.'}
+                      {originModeKind === 'auto-flat' && 'The bot will search a 24-block radius for a flat, tree-free spot.'}
+                      {originModeKind === 'bot' && 'The build will anchor at the chosen bot\u2019s current position when it starts.'}
+                      {originModeKind === 'player' && 'The build will anchor at the chosen player\u2019s current position when it starts.'}
+                    </p>
+
+                    {/* Bot picker (for "At bot's location") */}
+                    {originModeKind === 'bot' && (
+                      connectedBots.length === 0 ? (
+                        <p className="text-[11px] text-zinc-600">No connected bots available. Connect a bot or pick another mode.</p>
+                      ) : (
+                        <select
+                          value={originBotName}
+                          onChange={(e) => setOriginBotName(e.target.value)}
+                          className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white"
+                        >
+                          <option value="">-- choose a bot --</option>
+                          {connectedBots.map((b) => (
+                            <option key={b.name} value={b.name}>{b.name}</option>
+                          ))}
+                        </select>
+                      )
+                    )}
+
+                    {/* Player picker (for "At player's location") */}
+                    {originModeKind === 'player' && (
+                      (() => {
+                        const onlinePlayers = playerList.filter((p) => p.isOnline);
+                        if (onlinePlayers.length === 0) {
+                          return <p className="text-[11px] text-zinc-600">No online players detected.</p>;
+                        }
+                        return (
+                          <select
+                            value={originPlayerName}
+                            onChange={(e) => setOriginPlayerName(e.target.value)}
+                            className="bg-zinc-800/80 border border-zinc-700/50 rounded-lg px-3 py-2 text-xs text-white"
+                          >
+                            <option value="">-- choose a player --</option>
+                            {onlinePlayers.map((p) => (
+                              <option key={p.name} value={p.name}>{p.name}</option>
+                            ))}
+                          </select>
+                        );
+                      })()
+                    )}
+                  </div>
+
+                  {/* Origin Coordinates (only when picking coords) */}
+                  {originModeKind === 'coords' && (
                   <div className="space-y-2">
                     <label className="text-xs text-zinc-400 font-medium">Origin Coordinates</label>
                     <div className="flex items-center gap-3">
@@ -712,6 +821,7 @@ export default function BuildPage() {
                       <MiniMapSection schematic={selectedSchematic} origin={origin} setOrigin={setOrigin} onOriginPicked={fetchGroundHeight} />
                     )}
                   </div>
+                  )}
 
                   {/* Bot Selector -- Tabbed */}
                   <div className="space-y-3">
@@ -896,6 +1006,26 @@ export default function BuildPage() {
                           Auto-adjust Y to average ground level
                         </span>
                       </label>
+                      <label className="flex items-center gap-2 cursor-pointer group" title="Clear blocks in the footprint before building">
+                        <span
+                          className={`w-4 h-4 rounded border-2 flex items-center justify-center transition-colors ${
+                            clearSite ? 'border-teal-500 bg-teal-500' : 'border-zinc-600 group-hover:border-zinc-500'
+                          }`}
+                          onClick={() => setClearSite((v) => !v)}
+                        >
+                          {clearSite && (
+                            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="4">
+                              <polyline points="20 6 9 17 4 12" />
+                            </svg>
+                          )}
+                        </span>
+                        <span className="text-xs text-zinc-300" onClick={() => setClearSite((v) => !v)}>
+                          Clear Site
+                        </span>
+                        <span className="text-[10px] text-zinc-600" onClick={() => setClearSite((v) => !v)}>
+                          Remove blocks in the footprint before placing
+                        </span>
+                      </label>
                     </div>
                   </div>
 
@@ -999,9 +1129,14 @@ export default function BuildPage() {
 
                   {/* Start Button */}
                   {(() => {
-                    const canStart = botMode === 'existing'
+                    const hasOrigin =
+                      originModeKind === 'coords' ||
+                      originModeKind === 'auto-flat' ||
+                      (originModeKind === 'bot' && originBotName.length > 0) ||
+                      (originModeKind === 'player' && originPlayerName.length > 0);
+                    const canStart = (botMode === 'existing'
                       ? selectedBots.size > 0
-                      : namePrefix.trim().length > 0 && botCount > 0;
+                      : namePrefix.trim().length > 0 && botCount > 0) && hasOrigin;
                     const buttonLabel = botMode === 'existing'
                       ? `Start Build with ${selectedBots.size} Bot${selectedBots.size !== 1 ? 's' : ''}`
                       : `Create ${botCount} Bot${botCount !== 1 ? 's' : ''} & Start Build`;

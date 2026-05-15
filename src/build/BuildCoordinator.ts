@@ -9,6 +9,7 @@ import { EventLog } from '../server/EventLog';
 import { logger } from '../util/logger';
 import { atomicWriteJsonSync } from '../util/atomicWrite';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
+import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -70,7 +71,17 @@ export class BuildCoordinator {
   private persistPath: string;
   private persistTimer: NodeJS.Timeout | null = null;
   /** Original options for each job, kept for resume. */
-  private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean }>();
+  private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean; mode?: 'surface' | 'underground' }>();
+  /**
+   * Per-job context for underground builds. Captured at startBuild time and
+   * consumed after executeBuild resolves to run the bunker entry stairwell.
+   */
+  private bunkerContext = new Map<string, {
+    origin: { x: number; y: number; z: number };
+    schSize: { x: number; y: number; z: number };
+    surfaceY: number;
+    probeBotName: string;
+  }>();
   /**
    * Per-job queue of extra blocks that need to be absorbed by an alive bot whose
    * original assignment has completed. Keyed by the receiving bot name.
@@ -318,6 +329,14 @@ export class BuildCoordinator {
        *                    PlayerPresenceTracker if a recent location is known)
        */
       originMode?: 'coords' | 'auto-flat' | `bot:${string}` | `player:${string}`;
+      /**
+       * Build placement mode.
+       *  - 'surface' (default): place the schematic at the resolved origin Y.
+       *  - 'underground': resample the surface, push origin Y below it so the
+       *    schematic top sits at surface_y - 2 (leaving a soil cap), excavate
+       *    the pit, and build a stairwell entrance after placement completes.
+       */
+      mode?: 'surface' | 'underground';
     },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
@@ -348,10 +367,31 @@ export class BuildCoordinator {
     }
 
     // ── Options ──
-    const fillFoundation = options?.fillFoundation !== false; // default true
-    const snapToGround = options?.snapToGround === true; // default false
-    const clearSiteEnabled = options?.clearSite !== false; // default true
+    let fillFoundation = options?.fillFoundation !== false; // default true
+    let snapToGround = options?.snapToGround === true; // default false
+    let clearSiteEnabled = options?.clearSite !== false; // default true
     const originMode = options?.originMode ?? 'coords';
+
+    // Auto-promote bunker-named schematics to underground mode when caller
+    // hasn't specified `mode` explicitly. Lets builds dropped via name alone
+    // do the right thing without a UI tweak.
+    let mode: 'surface' | 'underground' = options?.mode ?? 'surface';
+    if (!options?.mode && /bunker|tunnel|vault/i.test(schematicFile)) {
+      logger.warn(
+        { schematicFile },
+        'Schematic name matches bunker/tunnel/vault — auto-promoting to underground mode',
+      );
+      mode = 'underground';
+    }
+
+    // Underground mode disables surface-mode site prep entirely. The pit
+    // excavation in prepareBunkerSite replaces clearSite + fillFoundation,
+    // and the resampled surface Y replaces snapToGround.
+    if (mode === 'underground') {
+      fillFoundation = false;
+      snapToGround = false;
+      clearSiteEnabled = false;
+    }
 
     // Find a connected bot handle EARLY so origin resolution can use it.
     let probeHandle: any = null;
@@ -367,6 +407,38 @@ export class BuildCoordinator {
     // Map originMode -> concrete {x, y, z}. The supplied `origin` is the
     // fallback for 'coords' mode and a hint elsewhere (e.g. Y for player mode).
     origin = await this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize);
+
+    // ── Underground mode: resample surface and excavate the pit ──
+    // Must run AFTER origin resolution (we need the chosen x,z) but BEFORE
+    // foundation fill / snap-to-ground, which would otherwise undo the pit.
+    let bunkerSurfaceY: number | null = null;
+    if (mode === 'underground') {
+      if (!probeHandle) {
+        throw new Error('Underground build requires a connected bot to excavate the pit');
+      }
+      const surfaceY = await sampleSurfaceY(probeHandle, origin.x, origin.z);
+      if (surfaceY == null) {
+        throw new Error(
+          `Underground build: could not sample surface Y around (${origin.x}, ${origin.z})`,
+        );
+      }
+      // Place the schematic so its TOP block sits at surface_y - 2, leaving a
+      // one-block soil cap (the block at surface_y - 1) intact above it.
+      const desiredOriginY = surfaceY - schSize.y - 1;
+      logger.info(
+        { surfaceY, oldOriginY: origin.y, newOriginY: desiredOriginY, schSize },
+        'Underground mode: shifting origin Y below resampled surface',
+      );
+      origin = { x: origin.x, y: desiredOriginY, z: origin.z };
+      bunkerSurfaceY = surfaceY;
+
+      // Excavate the pit. Throws if bedrock or nearby liquid would break the build.
+      const bunkerResult = await prepareBunkerSite(probeHandle, origin, schSize);
+      logger.info(
+        { excavated: bunkerResult.excavated, warnings: bunkerResult.warnings.length },
+        'Underground mode: pit excavated',
+      );
+    }
 
     const ox = origin.x, oy = origin.y, oz = origin.z;
     const blocks: BlockEntry[] = cached.blocks.map((b) => ({
@@ -629,7 +701,24 @@ export class BuildCoordinator {
       fillFoundation: options?.fillFoundation,
       snapToGround: options?.snapToGround,
       clearSite: options?.clearSite,
+      mode,
     });
+    // Stash the data runBunkerEntry will need after executeBuild resolves.
+    if (mode === 'underground' && bunkerSurfaceY != null && probeHandle) {
+      // Find which botName our probeHandle corresponds to so we can re-resolve
+      // it later (probeHandle may have died or reconnected by then).
+      let probeBotName = botNames[0];
+      for (const n of botNames) {
+        const h = this.botManager.getWorker(n) as any;
+        if (h === probeHandle) { probeBotName = n; break; }
+      }
+      this.bunkerContext.set(jobId, {
+        origin: { x: origin.x, y: origin.y, z: origin.z },
+        schSize,
+        surfaceY: bunkerSurfaceY,
+        probeBotName,
+      });
+    }
     this.persistJobs();
 
     // Emit started event
@@ -829,6 +918,42 @@ export class BuildCoordinator {
     });
 
     await Promise.all(promises);
+
+    // ── Post-placement bunker entry build (underground mode only) ──
+    // Runs ONCE per job after every bot has finished its slice. Uses any
+    // still-connected bot as the op'd probe; failures here are non-fatal —
+    // the bunker itself is built, just the stairwell may be missing.
+    const bunker = this.bunkerContext.get(jobId);
+    if (bunker && !this.cancelledJobs.has(jobId)) {
+      const anyPlaced = job.placedBlocks > 0;
+      if (anyPlaced) {
+        let entryHandle: any = this.botManager.getWorker(bunker.probeBotName);
+        if (!entryHandle || !(typeof entryHandle.isBotConnected === 'function' && await entryHandle.isBotConnected())) {
+          // Fall back to any other connected bot.
+          entryHandle = null;
+          for (const a of assignments) {
+            const h = this.botManager.getWorker(a.botName) as any;
+            if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+              entryHandle = h; break;
+            }
+          }
+        }
+        if (entryHandle) {
+          try {
+            const entry = await runBunkerEntry(entryHandle, bunker.origin, bunker.schSize, bunker.surfaceY);
+            logger.info(
+              { jobId, placed: entry.blocksPlaced, torches: entry.torchesPlaced, warnings: entry.warnings.length },
+              'Bunker entry stairwell built',
+            );
+          } catch (err: any) {
+            logger.warn({ jobId, err: err.message }, 'Bunker entry build failed (bunker itself is intact)');
+          }
+        } else {
+          logger.warn({ jobId }, 'Bunker entry skipped — no connected bot available');
+        }
+      }
+      this.bunkerContext.delete(jobId);
+    }
 
     // Final status
     if (!this.cancelledJobs.has(jobId)) {

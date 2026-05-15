@@ -205,7 +205,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   // Event relay endpoints (for Java plugin)
   app.post('/api/events/chat', (req: Request, res: Response) => {
-    const { playerName, message, nearestBot } = req.body;
+    const { playerName, message, nearestBot, playerPosition } = req.body;
     const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
 
     // Feed chat into the player intent model regardless of nearest-bot routing —
@@ -216,6 +216,12 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         detail: message,
         timestamp: Date.now(),
       });
+
+      // Optional position payload from the Java plugin — keeps the cache warm
+      // so other code can resolve "where is player X" without a live bot LOS.
+      if (playerPosition && typeof playerPosition === 'object') {
+        botManager.getPlayerPositionCache().recordPosition(playerName, playerPosition);
+      }
 
       // If the chat looks like a help-seeking ask directed at a specific bot,
       // record an affinity event so the relationship summary reflects it.
@@ -246,6 +252,7 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     if (typeof playerName === 'string') {
       botManager.getPlayerPresenceTracker().recordLeave(playerName);
       botManager.getPlayerIntentModel().clearPlayer(playerName);
+      botManager.getPlayerPositionCache().clear(playerName);
     }
     res.json({ handled: true });
   });
@@ -324,6 +331,10 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
         position: position ?? undefined,
         timestamp: Date.now(),
       });
+      // Keep the position cache warm whenever the plugin sends movement events.
+      if (position && typeof position === 'object') {
+        botManager.getPlayerPositionCache().recordPosition(playerName, position);
+      }
     }
     res.json({ handled: true });
   });
@@ -1162,10 +1173,19 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
       res.status(400).json({ error: 'origin {x,y,z} is required when originMode is "coords" (default)' });
       return;
     }
+    // Validate `mode` if present so a typo doesn't silently fall back to surface.
+    const requestedMode = options?.mode;
+    if (requestedMode !== undefined && requestedMode !== 'surface' && requestedMode !== 'underground') {
+      res.status(400).json({ error: `options.mode must be "surface" or "underground" (got: ${requestedMode})` });
+      return;
+    }
     try {
       // Placeholder origin for non-coords modes so resolveOrigin has a safe fallback.
       const resolvedOrigin = origin ?? { x: 0, y: 64, z: 0 };
-      const job = await buildCoordinator.startBuild(schematicFile, resolvedOrigin, botNames, options);
+      const startOptions = options
+        ? { ...options, mode: requestedMode as 'surface' | 'underground' | undefined }
+        : undefined;
+      const job = await buildCoordinator.startBuild(schematicFile, resolvedOrigin, botNames, startOptions);
       res.status(201).json({ build: job });
     } catch (err: any) {
       logger.error({ err }, 'Failed to start build');

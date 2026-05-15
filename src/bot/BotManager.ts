@@ -21,6 +21,7 @@ import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { BotReputation } from '../voyager/BotReputation';
 import { PlayerPresenceTracker } from './PlayerPresenceTracker';
 import { PlayerPositionCache } from '../control/PlayerPositionCache';
+import { TownManager } from '../town/TownManager';
 
 interface SavedBot {
   name: string;
@@ -49,6 +50,7 @@ export class BotManager {
   private botReputation: BotReputation;
   private playerPresenceTracker: PlayerPresenceTracker;
   private playerPositionCache: PlayerPositionCache;
+  private townManager: TownManager;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -71,6 +73,7 @@ export class BotManager {
     this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
     this.playerPresenceTracker = new PlayerPresenceTracker(this.difficultyBalancer);
     this.playerPositionCache = new PlayerPositionCache();
+    this.townManager = new TownManager();
   }
 
   async spawnBot(
@@ -256,6 +259,7 @@ export class BotManager {
   getBotReputation(): BotReputation { return this.botReputation; }
   getPlayerPresenceTracker(): PlayerPresenceTracker { return this.playerPresenceTracker; }
   getPlayerPositionCache(): PlayerPositionCache { return this.playerPositionCache; }
+  getTownManager(): TownManager { return this.townManager; }
 
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
     // Broadcast swarm directive to all workers — this clears local queues and interrupts current tasks

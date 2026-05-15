@@ -978,7 +978,118 @@ export const api = {
    * is a binary tar.gz stream, not JSON.
    */
   getBackupDownloadUrl: () => `${API_BASE}/api/admin/backup`,
+
+  // ─── Towns (Autonomous Town Builder, Phase 1) ───
+  //
+  // Backend is being implemented in parallel by another agent against the
+  // contract documented in TOWN_BUILDER_SPEC.md §12 and reflected here.
+  // We swallow GET failures so the dashboard doesn't blow up when the
+  // backend hasn't shipped these endpoints yet — the page renders an
+  // empty state.
+  listTowns: () =>
+    fetchJSON<{ towns: TownDTO[] }>('/api/towns').catch(() => ({ towns: [] as TownDTO[] })),
+  getTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(`/api/towns/${encodeURIComponent(id)}`),
+  createTown: (data: {
+    name: string;
+    capital: { x: number; y: number; z: number };
+    stylePreset: 'medieval-communal' | 'mid-century-civic';
+    mayorTitle?: string;
+  }) =>
+    fetchJSON<{ town: TownDTO }>('/api/towns', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateTown: (id: string, data: Partial<TownDTO>) =>
+    fetchJSON<{ town: TownDTO }>(`/api/towns/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteTown: (id: string) =>
+    fetchJSON<{ ok: boolean }>(`/api/towns/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  getTownBuildings: (id: string) =>
+    fetchJSON<{ buildings: TownBuildingDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/buildings`,
+    ).catch(() => ({ buildings: [] as TownBuildingDTO[] })),
+  getTownResidents: (id: string) =>
+    fetchJSON<{ residents: TownResidentDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/residents`,
+    ).catch(() => ({ residents: [] as TownResidentDTO[] })),
+  getTownDistricts: (id: string) =>
+    fetchJSON<{ districts: TownDistrictDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/districts`,
+    ).catch(() => ({ districts: [] as TownDistrictDTO[] })),
+  getTownEvents: (id: string, params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ events: TownEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/events${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ events: [] as TownEventDTO[] }));
+  },
+  addTownResident: (id: string, data: { botName: string; role: string }) =>
+    fetchJSON<{ resident: TownResidentDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/residents`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
 };
+
+// ─── Town DTOs (mirror townStore types — kept here so api.ts stays
+// self-contained and import order doesn't matter). The Town* prefix avoids
+// clashing with any backend types the rest of api.ts may grow into. ─
+
+export interface TownDTO {
+  id: string;
+  name: string;
+  foundedAt: number;
+  capital: { x: number; y: number; z: number };
+  tier: 'founding' | 'village' | 'town';
+  status: 'active' | 'dormant' | 'abandoned';
+  population: number;
+  alliance: 'allied' | 'rival' | 'neutral' | null;
+  parentTownId?: string | null;
+  styleSeed: 'medieval-communal' | 'mid-century-civic';
+  mayorTitle?: string;
+}
+
+export interface TownDistrictDTO {
+  id: string;
+  townId: string;
+  name: string;
+  stylePreset: 'medieval-communal' | 'mid-century-civic';
+  isDefault: boolean;
+}
+
+export interface TownBuildingDTO {
+  id: string;
+  townId: string;
+  districtId?: string | null;
+  name: string;
+  status: 'planned' | 'building' | 'complete' | 'damaged' | 'destroyed';
+  origin?: { x: number; y: number; z: number };
+}
+
+export interface TownResidentDTO {
+  id: string;
+  townId: string;
+  botName: string;
+  joinedAt: number;
+  currentRole?: string | null;
+  status: 'alive' | 'dead' | 'departed';
+}
+
+export interface TownEventDTO {
+  id: string;
+  townId: string;
+  kind: string;
+  severity: string;
+  payload: unknown;
+  occurredAt: number;
+  highlightScore: number;
+}
 
 export interface AdminInfo {
   uptimeSec: number;

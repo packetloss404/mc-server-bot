@@ -20,6 +20,7 @@ import { CommanderService } from '../control/CommanderService';
 import { CommandCenter } from '../control/CommandCenter';
 import { MissionManager } from '../control/MissionManager';
 import { MarkerStore } from '../control/MarkerStore';
+import { townToDTO } from '../town/TownManager';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -172,6 +173,23 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
   const campaignManager = new CampaignManager(botManager, buildCoordinator, io, eventLog);
   const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
+
+  // ── Town side-channel: forward build completion into TownManager ──
+  // Phase 1 stub. No town↔build linkage exists yet, so this only records an
+  // event when a future caller annotates a BuildJob with `.townId`.
+  // CampaignManager already wraps io.emit; stacking another wrap is safe.
+  {
+    const townManager = botManager.getTownManager();
+    const origEmit = io.emit.bind(io);
+    (io as any).emit = function (event: string, ...args: any[]): boolean {
+      if (event === 'build:completed' && args[0]) {
+        try { townManager.onBuildCompleted(args[0]); } catch (err: any) {
+          logger.warn({ err: err?.message }, 'TownManager build:completed hook failed');
+        }
+      }
+      return origEmit(event as any, ...args as any[]);
+    };
+  }
 
   // Wire build dependencies into CommanderService now that they exist.
   commanderService.setBuildCoordinator(buildCoordinator);
@@ -2358,6 +2376,149 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     // case future changes reorder. Ascending startMs = left-to-right waterfall.
     trace.sort((a, b) => a.startMs - b.startMs);
     res.json({ trace });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  //  Town Builder (Phase 1) — founding flow, CRUD, residents, events
+  // ═══════════════════════════════════════════════════════════════
+  app.get('/api/towns', (_req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const towns = tm.listTowns().map((t) => townToDTO(t, tm.listResidents(t.id)));
+    res.json({ towns });
+  });
+
+  app.get('/api/towns/:id', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const town = tm.getTown(String(req.params.id));
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ town: townToDTO(town, tm.listResidents(town.id)) });
+  });
+
+  app.post('/api/towns', (req: Request, res: Response) => {
+    const { name, capital, stylePreset, mayorTitle, mayorPlayerName } = req.body ?? {};
+    if (!name || typeof name !== 'string') {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (
+      !capital ||
+      typeof capital.x !== 'number' ||
+      typeof capital.y !== 'number' ||
+      typeof capital.z !== 'number'
+    ) {
+      res.status(400).json({ error: 'capital must be { x, y, z } (numbers)' });
+      return;
+    }
+    if (stylePreset !== 'medieval-communal' && stylePreset !== 'mid-century-civic') {
+      res.status(400).json({ error: 'stylePreset must be medieval-communal or mid-century-civic' });
+      return;
+    }
+    try {
+      const tm = botManager.getTownManager();
+      const { town } = tm.createTown({
+        name,
+        capital,
+        stylePreset,
+        mayorTitle,
+        mayorPlayerName,
+      });
+      io.emit('town:event', {
+        townId: town.id,
+        kind: 'town_founded',
+        severity: 'major',
+        ts: town.foundedAt,
+        highlightScore: 100,
+        payload: { name: town.name, stylePreset },
+      });
+      res.status(201).json({ town: townToDTO(town, tm.listResidents(town.id)) });
+    } catch (err: any) {
+      logger.error({ err: err?.message }, 'createTown failed');
+      res.status(500).json({ error: 'Failed to create town' });
+    }
+  });
+
+  app.patch('/api/towns/:id', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const updated = tm.updateTown(String(req.params.id), req.body ?? {});
+    if (!updated) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ town: townToDTO(updated, tm.listResidents(updated.id)) });
+  });
+
+  app.delete('/api/towns/:id', (req: Request, res: Response) => {
+    const ok = botManager.getTownManager().abandonTown(String(req.params.id));
+    if (!ok) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ ok: true });
+  });
+
+  app.get('/api/towns/:id/buildings', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ buildings: tm.listBuildings(String(req.params.id)) });
+  });
+
+  app.get('/api/towns/:id/residents', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ residents: tm.listResidents(String(req.params.id)) });
+  });
+
+  app.get('/api/towns/:id/districts', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    res.json({ districts: tm.listDistricts(String(req.params.id)) });
+  });
+
+  app.get('/api/towns/:id/events', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '100'), 10);
+    const sinceRaw = req.query.since != null ? Number.parseInt(String(req.query.since), 10) : NaN;
+    const events = tm.listEvents(String(req.params.id), {
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+      since: Number.isFinite(sinceRaw) ? sinceRaw : undefined,
+    });
+    res.json({ events });
+  });
+
+  app.post('/api/towns/:id/residents', (req: Request, res: Response) => {
+    const { botName, role } = req.body ?? {};
+    if (!botName || typeof botName !== 'string') {
+      res.status(400).json({ error: 'botName is required' });
+      return;
+    }
+    try {
+      const resident = botManager.getTownManager().addResident(String(req.params.id), { botName, role });
+      if (!resident) {
+        res.status(404).json({ error: 'Town not found' });
+        return;
+      }
+      res.status(201).json({ resident });
+    } catch (err: any) {
+      // Most likely a UNIQUE (town_id, bot_name) collision.
+      logger.warn({ err: err?.message }, 'addResident failed');
+      res.status(409).json({ error: err?.message ?? 'Failed to add resident' });
+    }
   });
 
   return {

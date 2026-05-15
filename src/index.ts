@@ -65,6 +65,9 @@ async function main() {
   }
 
   const botManager = new BotManager(config, llmClient);
+  // TownManager is instantiated inside BotManager (so spawn hooks can reach it
+  // via getTownManager()). Log here for boot visibility.
+  logger.info({ towns: botManager.getTownManager().listTowns().length }, 'TownManager booted');
   let memoryInterval: NodeJS.Timeout | null = null;
   const snapshotDir = path.join(process.cwd(), 'diagnostics', 'heapsnapshots');
   const snapshotThresholdsMb = [512, 1024, 2048, 3072];
@@ -255,6 +258,9 @@ async function main() {
 
     // Disconnect and remove all bots (also saves bots.json)
     await botManager.removeAllBots();
+
+    // Close the Town DB connection
+    try { botManager.getTownManager().shutdown(); } catch { /* swallow */ }
 
     logger.info('DyoBot shutdown complete');
     process.exit(0);

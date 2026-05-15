@@ -54,7 +54,9 @@ export function LogStream({ path = '/api/admin/logs/stream' }: LogStreamProps) {
     const url = `${API_BASE}${path}`;
     let source: EventSource | null = null;
     try {
-      source = new EventSource(url);
+      // withCredentials=true so the auth cookie rides along when
+      // DASHBOARD_AUTH_SECRET is set; otherwise the SSE request returns 401.
+      source = new EventSource(url, { withCredentials: true });
     } catch (err: any) {
       setError(err?.message ?? 'Failed to open EventSource');
       return;

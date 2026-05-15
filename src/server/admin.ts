@@ -162,22 +162,18 @@ export function registerAdminRoutes(
   });
 
   // ── GET /api/admin/backup — streaming tar.gz of data + skills + config ───
+  // SECURITY: data/llm-settings.json contains raw provider API keys and is
+  // EXCLUDED from the backup. Operators who need to migrate keys must export
+  // them out-of-band. config.yml is included but should not contain secrets
+  // (all secrets live in env vars or llm-settings.json).
   app.get('/api/admin/backup', (req: Request, res: Response) => {
     const cwd = process.cwd();
-    const candidates = ['data', 'skills', 'config.yml', path.join('data', 'llm-settings.json')];
-    // De-dup and filter to existing entries. `data` already covers
-    // `data/llm-settings.json`, but the spec lists it explicitly so we
-    // dedupe defensively rather than passing the same entry twice to tar.
+    const candidates = ['data', 'skills', 'config.yml'];
     const seen = new Set<string>();
     const includes: string[] = [];
     for (const entry of candidates) {
       const abs = path.resolve(cwd, entry);
       if (seen.has(abs)) continue;
-      // Skip child paths whose parent is already included.
-      const parentIncluded = includes.some(
-        (existing) => abs === path.resolve(cwd, existing) || abs.startsWith(path.resolve(cwd, existing) + path.sep),
-      );
-      if (parentIncluded) continue;
       if (fs.existsSync(abs)) {
         seen.add(abs);
         includes.push(entry);
@@ -194,7 +190,13 @@ export function registerAdminRoutes(
     res.setHeader('Content-Type', 'application/gzip');
     res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-    const tarProc = spawn('tar', ['-czf', '-', ...includes], { cwd });
+    // Exclude the credential file from the data/ entry.
+    const tarProc = spawn('tar', [
+      '-czf', '-',
+      '--exclude=data/llm-settings.json',
+      '--exclude=data/llm-settings.json.bak',
+      ...includes,
+    ], { cwd });
     let stderrBuf = '';
     tarProc.stderr.on('data', (chunk: Buffer) => {
       stderrBuf += chunk.toString('utf8');

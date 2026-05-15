@@ -64,9 +64,26 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   const app = express();
   const httpServer = http.createServer(app);
 
-  // CORS — allow the Next.js dev server and common local ports
+  // CORS — when auth is enabled, restrict to an explicit allowlist via the
+  // DASHBOARD_ALLOWED_ORIGINS env var (comma-separated) to prevent CSRF
+  // (credentialed requests from arbitrary origins). When auth is disabled
+  // (local dev), keep the reflective behavior so any dev port works.
+  const allowedOriginsEnv = process.env.DASHBOARD_ALLOWED_ORIGINS;
+  const allowedOrigins = allowedOriginsEnv
+    ? allowedOriginsEnv.split(',').map((s) => s.trim()).filter(Boolean)
+    : null;
+  const corsOrigin: cors.CorsOptions['origin'] = process.env.DASHBOARD_AUTH_SECRET
+    ? (allowedOrigins
+        ? (origin, cb) => {
+            // Same-origin (no Origin header) and explicit allowlist are accepted.
+            if (!origin) return cb(null, true);
+            if (allowedOrigins.includes(origin)) return cb(null, true);
+            cb(new Error(`CORS: origin '${origin}' not in DASHBOARD_ALLOWED_ORIGINS`));
+          }
+        : false) // auth on, no allowlist set -> same-origin only
+    : true;     // auth off -> reflective (dev mode)
   app.use(cors({
-    origin: true,
+    origin: corsOrigin,
     credentials: true,
   }));
 

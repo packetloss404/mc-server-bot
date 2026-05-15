@@ -353,7 +353,7 @@ export class GoalGenerator {
         priority: 'safety',
         urgency: 6,
         description: 'Find or build shelter — it is nighttime',
-        keywords: ['shelter', 'build', 'night', 'safety'],
+        keywords: ['shelter', 'enclose', 'wall', 'roof', 'door', 'night', 'safety'],
         source: 'nighttime without shelter',
       });
     }

@@ -989,6 +989,7 @@ export class VoyagerLoop {
 
     // 3. Execute with retries
     let lastError: string | undefined;
+    let previousErrorKey: string | undefined;
     let eventLog = '';
     for (let attempt = 0; attempt < this.config.voyager.maxRetriesPerTask; attempt++) {
       if (!this.running) return false;
@@ -1161,7 +1162,35 @@ export class VoyagerLoop {
         }
       }
 
+      // Abandon if the same error occurs twice in a row (first 80 chars match)
+      const currentErrorKey = (lastError || '').slice(0, 80);
+      if (previousErrorKey !== undefined && currentErrorKey === previousErrorKey) {
+        logger.info({ bot: this.botName, task: task.description, error: currentErrorKey }, 'Abandoning task: same error appeared twice consecutively');
+        this.decisionTrace.record('retry_decision', task.description,
+          `Abandoned: same error appeared twice in a row (${currentErrorKey})`,
+          'abandon', { attempt: attempt + 1, error: currentErrorKey, reason: 'duplicate_error' });
+        return false;
+      }
+      previousErrorKey = currentErrorKey;
+
       if (attempt < this.config.voyager.maxRetriesPerTask - 1) {
+        // Backoff before retrying so we don't hammer the LLM / spin uselessly.
+        // `attempt` is 0-indexed (the iteration that just failed). The try we are
+        // about to launch is (attempt + 2) in 1-indexed terms. Per spec
+        // (1-indexed): attempt 1 -> 0, attempt 2 -> 2s, attempt 3 -> 4s,
+        // attempt 4 -> 8s, capped at 10s. In 0-indexed terms that simplifies to
+        // 1000 * 2^(attempt + 1).
+        const nextAttempt1Indexed = attempt + 2;
+        const backoffDelay = nextAttempt1Indexed === 1
+          ? 0
+          : Math.min(1000 * Math.pow(2, nextAttempt1Indexed - 1), 10000);
+        if (backoffDelay > 0) {
+          logger.info({ bot: this.botName, attempt: attempt + 1, backoffMs: backoffDelay },
+            `Backing off ${backoffDelay}ms before retry ${attempt + 2}/${this.config.voyager.maxRetriesPerTask}`);
+          await new Promise((r) => setTimeout(r, backoffDelay));
+          if (!this.running) return false;
+        }
+
         // Enrich the critique with recovery hints
         const enrichedCritique = recovery
           ? `${recovery.hint}\n\n${criticResult.critique || ''}`

@@ -3,7 +3,11 @@ import { goals } from 'mineflayer-pathfinder';
 import { ActionResult } from './types';
 
 const FLEE_HEALTH_THRESHOLD = 8; // 4 hearts
+const KITE_HEALTH_THRESHOLD = 14; // 7 hearts — switch to conservative ranged/kite mode
 const SWORD_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
+
+// Hostile mobs where keeping range is important (explosions, ranged attacks, etc.)
+const RANGED_HOSTILES = new Set(['creeper', 'skeleton', 'witch', 'stray', 'pillager']);
 
 function equipBestSword(bot: Bot): Promise<void> | undefined {
   const items = bot.inventory.items();
@@ -12,6 +16,24 @@ function equipBestSword(bot: Bot): Promise<void> | undefined {
     if (sword) return bot.equip(sword, 'hand').catch(() => undefined);
   }
   return undefined;
+}
+
+function findBow(bot: Bot) {
+  return bot.inventory.items().find((i) => i.name === 'bow');
+}
+
+function hasArrows(bot: Bot): boolean {
+  return bot.inventory.items().some((i) => i.name === 'arrow');
+}
+
+function retreatFrom(bot: Bot, target: any, distance: number): void {
+  const pos = bot.entity.position;
+  const dx = pos.x - target.position.x;
+  const dz = pos.z - target.position.z;
+  const mag = Math.sqrt(dx * dx + dz * dz) || 1;
+  const fleeX = pos.x + (dx / mag) * distance;
+  const fleeZ = pos.z + (dz / mag) * distance;
+  bot.pathfinder.setGoal(new goals.GoalNear(fleeX, pos.y, fleeZ, 1), true);
 }
 
 export async function attack(bot: Bot, entityName: string, maxDuration = 30000): Promise<ActionResult> {
@@ -33,17 +55,42 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     return { success: false, message: `No ${entityName} nearby, please explore first` };
   }
 
-  // Equip best available sword — fighting with bare hands is 2-3× slower
-  // and the bot takes more damage during the longer engagement.
-  await equipBestSword(bot);
+  const isCreeper = target.name === 'creeper';
+  const isSkeleton = target.name === 'skeleton' || target.name === 'stray';
 
-  bot.pathfinder.setGoal(new goals.GoalFollow(target, 2), true);
+  // For skeletons, prefer bow + arrows if available — staying out of melee range
+  // avoids most of their kiting damage.
+  let usingBow = false;
+  if (isSkeleton) {
+    const bow = findBow(bot);
+    if (bow && hasArrows(bot)) {
+      try {
+        await bot.equip(bow, 'hand');
+        usingBow = true;
+      } catch {
+        // fall back to sword
+      }
+    }
+  }
+
+  if (!usingBow) {
+    // Equip best available sword — fighting with bare hands is 2-3× slower
+    // and the bot takes more damage during the longer engagement.
+    await equipBestSword(bot);
+  }
+
+  // Creepers explode at ~3-block range; keep follow distance well outside the
+  // detonation radius and rely on hit-and-retreat inside the interval.
+  const followDist = isCreeper ? 5 : 2;
+  bot.pathfinder.setGoal(new goals.GoalFollow(target, followDist), true);
 
   return new Promise<ActionResult>((resolve, reject) => {
     let hits = 0;
     const startTime = Date.now();
     let droppedItem: any = null;
     let finished = false;
+    let drawingBow = false;
+    let bowDrawStart = 0;
 
     const onEntityDead = (entity: any) => {
       if (entity === target) {
@@ -70,6 +117,9 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
       clearInterval(attackInterval);
       clearTimeout(timeoutId);
       bot.pathfinder.stop();
+      if (drawingBow) {
+        try { bot.deactivateItem(); } catch { /* ignore */ }
+      }
       bot.removeListener('entityDead', onEntityDead);
       bot.removeListener('entitySpawn', onEntitySpawn);
       bot.removeListener('death', onBotDeath);
@@ -136,6 +186,83 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
       }
 
       const dist = bot.entity.position.distanceTo(target.position);
+
+      // Creeper-specific hit-and-retreat: stay in the 3.5–5 block band.
+      if (isCreeper) {
+        if (dist < 4) {
+          // Too close — retreat 6 blocks before attacking.
+          retreatFrom(bot, target, 6);
+          return;
+        }
+        if (dist >= 3.5 && dist <= 5) {
+          bot.attack(target);
+          hits++;
+        }
+        // dist > 5: pathfinder follow will close the gap on its own.
+        return;
+      }
+
+      // Generic kite mode for ranged hostiles when health is low-but-not-flee.
+      const inKiteMode = bot.health < KITE_HEALTH_THRESHOLD && RANGED_HOSTILES.has(target.name || '');
+      if (inKiteMode) {
+        if (dist < 4) {
+          retreatFrom(bot, target, 5);
+          return;
+        }
+        if (usingBow) {
+          // Charge and release bow shots while keeping distance.
+          try {
+            (bot as any).lookAt(target.position.offset(0, target.height || 1.6, 0), true);
+          } catch { /* ignore */ }
+          if (!drawingBow) {
+            try {
+              bot.activateItem();
+              drawingBow = true;
+              bowDrawStart = Date.now();
+            } catch { /* ignore */ }
+          } else if (Date.now() - bowDrawStart >= 1200) {
+            try {
+              bot.deactivateItem();
+              hits++;
+            } catch { /* ignore */ }
+            drawingBow = false;
+          }
+          return;
+        }
+        // No bow — only swing when in a safe melee window.
+        if (dist >= 3.5 && dist <= 4.5) {
+          bot.attack(target);
+          hits++;
+        }
+        return;
+      }
+
+      // Skeleton bow combat when healthy: snipe at range, retreat if too close.
+      if (usingBow) {
+        if (dist < 5) {
+          retreatFrom(bot, target, 6);
+          return;
+        }
+        try {
+          (bot as any).lookAt(target.position.offset(0, target.height || 1.6, 0), true);
+        } catch { /* ignore */ }
+        if (!drawingBow) {
+          try {
+            bot.activateItem();
+            drawingBow = true;
+            bowDrawStart = Date.now();
+          } catch { /* ignore */ }
+        } else if (Date.now() - bowDrawStart >= 1200) {
+          try {
+            bot.deactivateItem();
+            hits++;
+          } catch { /* ignore */ }
+          drawingBow = false;
+        }
+        return;
+      }
+
+      // Default melee engagement.
       if (dist < 3) {
         bot.attack(target);
         hits++;

@@ -8,6 +8,7 @@ import { placeBlock } from '../actions/placeBlock';
 import { attack } from '../actions/attack';
 import { smelt } from '../actions/smelt';
 import { depositToContainer, inspectContainer, withdrawFromContainer } from '../actions/container';
+import { dropJunk } from '../actions/dropJunk';
 
 export interface ExecutionResult {
   success: boolean;
@@ -244,6 +245,16 @@ export class CodeExecutor {
         pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'inspectContainer', containerName });
         return result;
       },
+      dropJunk: async (minFreeSlots = 6, threshold = 30) => {
+        throwIfInterrupted();
+        pushLog(`[primitive] dropJunk(minFreeSlots=${minFreeSlots}, threshold=${threshold})`);
+        pushEvent('primitive_start', `dropJunk minFreeSlots=${minFreeSlots} threshold=${threshold}`, { primitive: 'dropJunk', minFreeSlots, threshold });
+        const result = await dropJunk(bot, minFreeSlots, threshold);
+        const message = result.message || 'dropJunk completed';
+        pushLog(`[primitive] dropJunk result: ${message}`);
+        pushEvent(result.success ? 'primitive_success' : 'primitive_failure', message, { primitive: 'dropJunk', minFreeSlots, threshold, ...(result.data || {}) });
+        return result;
+      },
       setBlock: async (name: string, x: number, y: number, z: number, state?: string) => {
         const blockSpec = state ? `minecraft:${name}[${state}]` : `minecraft:${name}`;
         bot.chat(`/setblock ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)} ${blockSpec} replace`);
@@ -382,6 +393,14 @@ export class CodeExecutor {
                 return;
               }
 
+              if (iteration > 8) {
+                pushLog(`[primitive] exploreUntil: giving up after ${iteration} iterations without finding target`);
+                pushEvent('primitive_failure', 'exploreUntil exhausted iterations', { primitive: 'exploreUntil', iteration });
+                cleanUp();
+                resolve(null);
+                return;
+              }
+
               const stepX = dir.x === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.x;
               const stepY = dir.y === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.y;
               const stepZ = dir.z === 0 ? 0 : (Math.floor(Math.random() * 20) + 10) * dir.z;
@@ -406,7 +425,7 @@ export class CodeExecutor {
             pushEvent('primitive_failure', 'exploreUntil timed out', { primitive: 'exploreUntil', maxTime });
             cleanUp();
             resolve(null);
-          }, Math.min(maxTime, 1200) * 1000);
+          }, Math.min(maxTime, 30) * 1000);
 
           explore();
         });

@@ -29,10 +29,11 @@ async function smeltItem(itemName, fuelName, count) // smelt items in a furnace
 async function placeItem(name, x, y, z)  // place blocks
 async function killMob(name, maxMs)      // fight mobs
 async function moveTo(x, y, z, range, timeoutSec) // pathfind to a target
-async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target
+async function exploreUntil(direction, maxTime, callback) // explore until callback returns a target. maxTime is in seconds and is hard-capped at 30 — don't pass anything larger.
 async function withdrawItem(containerName, itemName, count) // withdraw from chest/barrel/etc
 async function depositItem(containerName, itemName, count)  // deposit into chest/barrel/etc
 async function inspectContainer(containerName) // inspect container contents
+async function dropJunk(minFreeSlots = 6, threshold = 30) // proactively drop low-value items (cobblestone, dirt, gravel, saplings, etc.) when inventory used >= threshold slots. Never drops tools, weapons, armor, food, ores, logs, or planks. Cheap — returns immediately when inventory is below threshold. Call at the start of mining/gathering loops to keep slots free.
 \`\`\`
 
 ## Bot state / observation APIs
@@ -152,6 +153,7 @@ if (threat) {
 - If the target is nearby, use the appropriate primitive.
 - If the target is not nearby, explore outward with exploreUntil(...) and then use the primitive.
 - Do not stop after only locating a target when the task implies going to it, collecting it, or interacting with it.
+- exploreUntil maxTime should be 15–30 seconds. If the target is rare, exploring once for 30s and giving up is better than exploring for 60s+ (the bot can try again on the next task cycle).
 
 ## Previously saved skills
 You may call previously saved skill functions shown in context. They accept (bot) as parameter.

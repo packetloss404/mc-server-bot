@@ -13,6 +13,7 @@ import {
   useChainStore,
   useCampaignStore,
   useDecisionStore,
+  useMovementTrailStore,
   type DecisionRecord,
 } from '@/lib/store';
 import { api } from '@/lib/api';
@@ -25,8 +26,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   const {
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
-    setPlayers, updatePlayerPosition, addPlayer, removePlayer,
-    incrementUnreadChats,
+    setPlayers, updatePlayerPosition,
   } = useBotStore();
 
   const fetchAll = useCallback(() => {
@@ -89,7 +89,12 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     });
 
     socket.on('bot:disconnect', () => {
-      api.getBots().then((data) => setBots(data.bots)).catch(() => {});
+      api.getBots().then((data) => {
+        setBots(data.bots);
+        // Drop movement trails for any bot that's no longer in the list, so
+        // disconnected bots don't leak their ring buffers indefinitely.
+        useMovementTrailStore.getState().pruneToActive(data.bots.map((b: { name: string }) => b.name));
+      }).catch(() => {});
     });
 
     // Player events. Server emits `{ player, x, y, z }` (see api.ts).
@@ -99,18 +104,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       }
     });
 
-    socket.on('player:join', (data: { name: string }) => {
-      addPlayer(data.name);
-    });
-
-    socket.on('player:leave', (data: { name: string }) => {
-      removePlayer(data.name);
-    });
-
-    // Chat events
-    socket.on('bot:chat', () => {
-      incrementUnreadChats();
-    });
+    // `player:join`, `player:leave`, and `bot:chat` listeners removed —
+    // the server never emits those names. Player presence is handled by the
+    // 30s `getPlayers` poll above; chat unread counts come from the chat tab's
+    // own state. Re-add listeners here once the server actually emits them.
 
     // ── Newly wired listeners ──────────────────────────────────────────────
     const onBotDied = (data: { bot: string; position: { x: number; y: number; z: number } | null }) => {
@@ -280,9 +277,6 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('bot:spawn');
       socket.off('bot:disconnect');
       socket.off('player:position');
-      socket.off('player:join');
-      socket.off('player:leave');
-      socket.off('bot:chat');
       socket.off('marker:created'); socket.off('marker:updated'); socket.off('marker:deleted');
       socket.off('zone:created'); socket.off('zone:updated'); socket.off('zone:deleted');
       socket.off('route:created'); socket.off('route:updated'); socket.off('route:deleted');
@@ -307,8 +301,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   }, [
     setBots, updatePosition, updateHealth, updateState,
     updateInventory, pushEvent, setConnected, setWorld,
-    setPlayers, updatePlayerPosition, addPlayer, removePlayer,
-    incrementUnreadChats, fetchAll,
+    setPlayers, updatePlayerPosition, fetchAll,
   ]);
 
   return <>{children}</>;

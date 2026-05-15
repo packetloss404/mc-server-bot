@@ -40,8 +40,26 @@ interface MapOverlayStore {
   closeRouteDialog: () => void;
 
   // Context menu
-  contextMenu: { screenX: number; screenY: number; worldX: number; worldZ: number } | null;
-  openContextMenu: (data: { screenX: number; screenY: number; worldX: number; worldZ: number }) => void;
+  contextMenu:
+    | {
+        screenX: number;
+        screenY: number;
+        worldX: number;
+        worldZ: number;
+        /** Bot name if the click landed on a bot dot. */
+        botName?: string;
+        /** Marker id if the click landed on a saved marker. */
+        markerId?: string;
+      }
+    | null;
+  openContextMenu: (data: {
+    screenX: number;
+    screenY: number;
+    worldX: number;
+    worldZ: number;
+    botName?: string;
+    markerId?: string;
+  }) => void;
   closeContextMenu: () => void;
 
   // Data setters

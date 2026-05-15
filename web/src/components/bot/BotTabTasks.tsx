@@ -2,30 +2,55 @@
 
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
-import { api, type BotDetailed } from '@/lib/api';
+import { api, type BotDetailed, type RetryAttempt } from '@/lib/api';
+import { useBotPolling, useHasBotPolling } from '@/lib/useBotPolling';
 
 interface Props {
   botName: string;
 }
 
 export function BotTabTasks({ botName }: Props) {
-  const [bot, setBot] = useState<BotDetailed | null>(null);
+  const shared = useBotPolling();
+  const hasShared = useHasBotPolling();
+  const [localBot, setLocalBot] = useState<BotDetailed | null>(null);
   const [taskInput, setTaskInput] = useState('');
   const [sendingTask, setSendingTask] = useState(false);
   const [showCompleted, setShowCompleted] = useState(false);
   const [showFailed, setShowFailed] = useState(false);
+  /** Map of failed task description -> whether its retry list is expanded. */
+  const [expandedRetries, setExpandedRetries] = useState<Record<string, boolean>>({});
+  const [retries, setRetries] = useState<Record<string, RetryAttempt[]>>({});
 
+  // Prefer the shared 3s polling tick from BotPollingProvider; only fall back
+  // to a local 10s fetch when this tab is rendered outside a provider.
   useEffect(() => {
+    if (hasShared) return;
     const load = () => {
       api
         .getBotDetailed(botName)
-        .then((data) => setBot(data.bot))
+        .then((data) => setLocalBot(data.bot))
         .catch(() => {});
     };
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
+  }, [botName, hasShared]);
+
+  // Retry telemetry comes from /api/bots/:name/tasks (not /detailed), so it
+  // keeps its own fetch — slowed to 10s since retries change infrequently.
+  useEffect(() => {
+    const load = () => {
+      api
+        .getBotTasks(botName)
+        .then((data) => setRetries(data.retries ?? {}))
+        .catch(() => {});
+    };
+    load();
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, [botName]);
+
+  const bot = hasShared ? shared.bot : localBot;
 
   const handleQueueTask = async () => {
     if (!taskInput.trim()) return;
@@ -40,6 +65,10 @@ export function BotTabTasks({ botName }: Props) {
   };
 
   const voyager = bot?.voyager;
+
+  const toggleRetries = (taskDescription: string) => {
+    setExpandedRetries((prev) => ({ ...prev, [taskDescription]: !prev[taskDescription] }));
+  };
 
   return (
     <motion.div
@@ -135,16 +164,45 @@ export function BotTabTasks({ botName }: Props) {
                 <motion.div
                   initial={{ height: 0, opacity: 0 }}
                   animate={{ height: 'auto', opacity: 1 }}
-                  className="space-y-0.5 ml-4 overflow-hidden"
+                  className="space-y-1 ml-4 overflow-hidden"
                 >
                   {voyager.failedTasks
                     .slice(-15)
                     .reverse()
-                    .map((task, i) => (
-                      <div key={i} className="text-xs text-red-400/60 truncate flex items-center gap-1.5">
-                        <span className="text-red-500/60">&#10007;</span> {task}
-                      </div>
-                    ))}
+                    .map((task, i) => {
+                      const taskRetries = retries[task] ?? [];
+                      const isExpanded = !!expandedRetries[task];
+                      return (
+                        <div key={i} className="text-xs">
+                          <div className="text-red-400/60 flex items-center gap-1.5">
+                            <span className="text-red-500/60">&#10007;</span>
+                            <span className="truncate flex-1">{task}</span>
+                            {taskRetries.length > 0 && (
+                              <button
+                                onClick={() => toggleRetries(task)}
+                                className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors shrink-0"
+                                aria-label={`${isExpanded ? 'Hide' : 'Show'} retries for ${task}`}
+                              >
+                                {isExpanded ? '▼' : '▶'} {taskRetries.length} {taskRetries.length === 1 ? 'retry' : 'retries'}
+                              </button>
+                            )}
+                          </div>
+                          {isExpanded && taskRetries.length > 0 && (
+                            <div className="ml-6 mt-1 space-y-0.5 border-l border-zinc-800/60 pl-2">
+                              {taskRetries.map((r, ri) => (
+                                <div key={ri} className="text-[10px] text-zinc-500">
+                                  <span className="text-zinc-400">#{r.attempt}</span>
+                                  <span className="text-zinc-600 ml-2">{new Date(r.timestamp).toLocaleTimeString()}</span>
+                                  <div className="text-red-400/50 ml-3 truncate" title={r.error}>
+                                    {r.error}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                 </motion.div>
               )}
             </div>

@@ -145,6 +145,17 @@ const NAV_ITEMS = [
     ),
   },
   {
+    href: '/build/history',
+    label: 'Build History',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M3 3v5h5" />
+        <path d="M3.05 13A9 9 0 1 0 6 5.3L3 8" />
+        <path d="M12 7v5l4 2" />
+      </svg>
+    ),
+  },
+  {
     href: '/chains',
     label: 'Supply Chains',
     icon: (
@@ -195,6 +206,16 @@ const NAV_ITEMS = [
       </svg>
     ),
   },
+  {
+    href: '/admin',
+    label: 'Admin',
+    icon: (
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12 2l9 4v6c0 5-3.5 9-9 10-5.5-1-9-5-9-10V6l9-4z" />
+        <path d="M9 12l2 2 4-4" />
+      </svg>
+    ),
+  },
 ];
 
 export function Sidebar() {
@@ -242,7 +263,17 @@ export function Sidebar() {
       {/* Navigation */}
       <nav className="flex-1 px-3 py-4 space-y-0.5 overflow-y-auto">
         {NAV_ITEMS.map((item) => {
-          const active = pathname === item.href || (item.href !== '/' && pathname.startsWith(item.href));
+          // Pick the longest matching href, so `/build/history` highlights its
+          // own entry instead of /build. Exact match wins; otherwise longest prefix.
+          const exact = pathname === item.href;
+          const isPrefix = item.href !== '/' && pathname.startsWith(`${item.href}/`);
+          const moreSpecific = NAV_ITEMS.some(
+            (other) =>
+              other.href !== item.href &&
+              other.href.length > item.href.length &&
+              (pathname === other.href || pathname.startsWith(`${other.href}/`)),
+          );
+          const active = exact || (isPrefix && !moreSpecific);
           const showChatBadge = item.badge === true && unreadChats > 0;
           const showFleetBadge = item.badge === 'fleet' && fleetSelectionCount > 0;
           return (

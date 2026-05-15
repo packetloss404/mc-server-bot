@@ -9,7 +9,7 @@ import { OllamaClient } from './OllamaClient';
 import { MiniMaxClient } from './MiniMaxClient';
 import { OpenAIClient } from './OpenAIClient';
 import { VoyageAIClient } from './VoyageAIClient';
-import { ModelRouter } from './ModelRouter';
+import { ModelRouter, type LLMCallEvent } from './ModelRouter';
 import type { TokenLedger } from './TokenLedger';
 
 const SETTINGS_PATH = path.join(process.cwd(), 'data', 'llm-settings.json');
@@ -45,12 +45,26 @@ export class LLMSettings {
   private settings: LLMSettingsData;
   private ledger: TokenLedger;
   private currentRouter: ModelRouter | null = null;
+  /** Listener re-applied after every buildRouter() so hot-reload keeps emitting. */
+  private callListener: ((event: LLMCallEvent) => void) | null = null;
 
   constructor(ledger: TokenLedger) {
     this.ledger = ledger;
     this.settings = this.load();
     // Merge env vars as initial providers if no settings file exists
     this.seedFromEnv();
+  }
+
+  /**
+   * Register a listener that fires on every LLM call routed through this
+   * settings instance. Survives hot-reload (re-applied after each
+   * buildRouter()).
+   */
+  setCallListener(fn: (event: LLMCallEvent) => void): void {
+    this.callListener = fn;
+    if (this.currentRouter) {
+      this.currentRouter.setCallListener(fn);
+    }
   }
 
   /** Get current settings (API keys are masked). */
@@ -190,6 +204,12 @@ export class LLMSettings {
       routes: Object.keys(this.settings.routes).length > 0 ? this.settings.routes : undefined,
       isEnabled: () => this.isAiEnabled(),
     }, this.ledger);
+
+    // Re-apply any previously registered call listener so the live timeline
+    // keeps receiving events after /api/llm/reload.
+    if (this.callListener) {
+      this.currentRouter.setCallListener(this.callListener);
+    }
 
     return this.currentRouter;
   }

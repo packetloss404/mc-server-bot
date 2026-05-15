@@ -13,6 +13,9 @@ export function getSocket(): Socket {
       reconnection: true,
       reconnectionDelay: 2000,
       reconnectionAttempts: Infinity,
+      // Send the auth cookie on the Socket.IO handshake so cross-origin
+      // (Next dev server → API) connections carry the dashboard auth cookie.
+      withCredentials: true,
     });
   }
   return socket;

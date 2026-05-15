@@ -17,6 +17,10 @@ export function BotTabRelationships({ botName, personality }: Props) {
 
   const accentColor = getPersonalityColor(personality);
 
+  // Relationships + conversations are NOT in /detailed, so this tab keeps its
+  // own fetch — but at 10s rather than 5s since the shared BotPollingProvider
+  // already keeps the rest of the page (vitals, position, current task) fresh
+  // every 3s. Relationship scores rarely move faster than the slower cadence.
   useEffect(() => {
     const load = () => {
       api
@@ -29,7 +33,7 @@ export function BotTabRelationships({ botName, personality }: Props) {
         .catch(() => {});
     };
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, [botName]);
 

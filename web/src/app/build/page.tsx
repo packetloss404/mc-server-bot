@@ -4,9 +4,11 @@ import { useEffect, useState, useMemo, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { api, SchematicInfo, MissionRecord, Campaign, BuildOriginMode } from '@/lib/api';
 import { useBotStore, useCampaignStore, useSchematicPlacementStore } from '@/lib/store';
+import Link from 'next/link';
 import { SchematicMiniMap } from '@/components/build/SchematicMiniMap';
 import { CampaignStatus } from '@/components/build/CampaignStatus';
 import { MaterialList } from '@/components/build/MaterialList';
+import { SchematicUpload } from '@/components/build/SchematicUpload';
 import { PageHeader } from '@/components/PageHeader';
 
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -622,6 +624,26 @@ export default function BuildPage() {
       {/* Schematic Selection */}
       {!activeBuild && (
         <>
+          {/* Upload new schematic */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white">Upload Schematic</h2>
+              <Link
+                href="/build/history"
+                className="text-[11px] text-zinc-400 hover:text-teal-300 font-medium transition-colors"
+              >
+                View build history &rarr;
+              </Link>
+            </div>
+            <SchematicUpload
+              onUploaded={() => {
+                // Refresh the schematic list after a successful upload.
+                api.getSchematics()
+                  .then((data) => setSchematics(data.schematics))
+                  .catch(() => {});
+              }}
+            />
+          </div>
           <div className="space-y-3">
             <h2 className="text-sm font-semibold text-white">Select Schematic</h2>
             {!loading && schematics.length > 0 && (

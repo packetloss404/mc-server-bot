@@ -18,7 +18,79 @@ interface WorkerData {
   personality: string;
   mode: string;
   spawnLocation?: { x: number; y: number; z: number };
+  workerSlotIndex: number;
   configPath?: string;
+}
+
+/**
+ * Lazy prismarine-viewer state. We only spin up the WebGL/Express server the
+ * first time the dashboard asks for the port — paying the ~50MB-per-bot
+ * three.js + express + socket.io cost up front for every bot would dwarf the
+ * mineflayer connection itself, and most bots will never have their View tab
+ * opened.
+ */
+let viewerPort: number | null = null;
+let viewerLastAttemptAt = 0;
+const VIEWER_RETRY_COOLDOWN_MS = 30_000;
+
+/**
+ * Start the viewer (if not already started) and return its port, or null on
+ * failure. Safe to call repeatedly — subsequent calls return the cached port.
+ *
+ * Failure isn't permanent: prismarine-viewer can throw `EADDRINUSE` if a prior
+ * worker hasn't released the port yet, so we retry after a 30-second cooldown
+ * rather than latching off for the entire worker lifetime. EADDRINUSE in
+ * particular gets a one-shot fallback to (port + 1024).
+ */
+function ensureViewerStarted(slotIndex: number, getBot: () => any): number | null {
+  if (viewerPort != null) return viewerPort;
+  const now = Date.now();
+  if (now - viewerLastAttemptAt < VIEWER_RETRY_COOLDOWN_MS) return null;
+  const bot = getBot();
+  if (!bot || !bot.entity) {
+    // Bot hasn't spawned yet — don't burn the cooldown, the dashboard can retry.
+    return null;
+  }
+  viewerLastAttemptAt = now;
+
+  const basePort = 3100 + slotIndex;
+  const portsToTry = [basePort, basePort + 1024];
+
+  let mineflayerViewer: any;
+  try {
+    // require lazily so a broken prismarine-viewer install doesn't kill the
+    // whole worker at boot — it's optional infrastructure.
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    ({ mineflayer: mineflayerViewer } = require('prismarine-viewer'));
+  } catch (err: any) {
+    logger.warn(
+      { bot: (workerData as WorkerData).botName, err: err?.message },
+      'prismarine-viewer not installed; viewer tab will be unavailable',
+    );
+    // Push the cooldown out far so we don't keep paying the require cost.
+    viewerLastAttemptAt = now + 24 * 60 * 60 * 1000;
+    return null;
+  }
+
+  for (const port of portsToTry) {
+    try {
+      mineflayerViewer(bot, { port, firstPerson: false });
+      viewerPort = port;
+      logger.info({ bot: (workerData as WorkerData).botName, port }, 'prismarine-viewer started');
+      return port;
+    } catch (err: any) {
+      const code = err?.code;
+      logger.warn(
+        { bot: (workerData as WorkerData).botName, port, err: err?.message, code },
+        code === 'EADDRINUSE'
+          ? 'prismarine-viewer port in use, trying next'
+          : 'Failed to start prismarine-viewer',
+      );
+      if (code !== 'EADDRINUSE') break; // non-port errors won't be helped by a fallback port
+    }
+  }
+  // viewerPort remains null; viewerLastAttemptAt gates the next retry.
+  return null;
 }
 
 const data = workerData as WorkerData;
@@ -182,6 +254,10 @@ ipc.onRequest(async (type, args) => {
     }
     case 'getBotVersion':
       return (instance as any).bot?.version ?? null;
+    case 'getViewerPort':
+      // Lazy-mount: the viewer only spins up the first time the dashboard
+      // asks for it, then the port is cached for subsequent fetches.
+      return ensureViewerStarted(data.workerSlotIndex, () => (instance as any).bot);
     case 'getBlockAt': {
       const bot = (instance as any).bot;
       if (!bot) return null;

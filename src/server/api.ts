@@ -1,6 +1,7 @@
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
+import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
@@ -28,7 +29,17 @@ import { CampaignManager } from '../build/BuildCampaign';
 import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { parseBuildIntent } from '../control/BuildIntentResolver';
+import { registerAdminRoutes } from './admin';
 import { logger } from '../util/logger';
+import {
+  requireDashboardAuth,
+  isDashboardAuthenticated,
+  isDashboardAuthEnabled,
+  requirePluginAuth,
+  registerAuthRoutes,
+} from './auth';
+import { rateLimit } from './rateLimit';
+import type { TokenLedger } from '../ai/TokenLedger';
 
 export interface APIServerResult {
   app: express.Application;
@@ -49,7 +60,7 @@ export interface APIServerResult {
   chainCoordinator: ChainCoordinator;
 }
 
-export function createAPIServer(botManager: BotManager, config?: Config): APIServerResult {
+export function createAPIServer(botManager: BotManager, config?: Config, tokenLedger?: TokenLedger): APIServerResult {
   const app = express();
   const httpServer = http.createServer(app);
 
@@ -61,11 +72,40 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
 
   app.use(express.json());
 
+  // Trust the proxy (X-Forwarded-For) so req.ip reflects the real client.
+  // Required for the per-IP rate limiter to be meaningful behind a proxy.
+  app.set('trust proxy', true);
+
+  // Global rate limit (30 req/sec per IP) — applies to all routes.
+  // `/api/events/*` gets a looser, dedicated limit registered below.
+  app.use(rateLimit({ capacity: 30, refillPerSec: 30 }));
+
   const dashboardDir = path.join(process.cwd(), 'dashboard');
   app.use('/dashboard', express.static(dashboardDir));
   app.get('/', (_req: Request, res: Response) => {
     res.redirect('/dashboard/');
   });
+
+  // Auth: register public endpoints BEFORE the gating middleware so they
+  // remain reachable. `requireDashboardAuth` exempts `/api/auth/*`,
+  // `/api/events/*`, `/api/health`, and `/api/status` internally.
+  registerAuthRoutes(app);
+
+  app.get('/api/health', (_req: Request, res: Response) => {
+    res.json({ status: 'ok' });
+  });
+
+  // Plugin event endpoints get a tighter rate limit (60 req/sec) and require
+  // the X-Plugin-Token header when `PLUGIN_AUTH_TOKEN` is set.
+  app.use(
+    '/api/events',
+    rateLimit({ capacity: 60, refillPerSec: 60 }),
+    requirePluginAuth,
+  );
+
+  // Gate every other `/api/*` route behind dashboard auth. When
+  // `DASHBOARD_AUTH_SECRET` is unset this middleware passes through.
+  app.use('/api', requireDashboardAuth);
 
   // Event log (in-memory circular buffer)
   const eventLog = new EventLog(500);
@@ -82,12 +122,26 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
     schematicMatcher,
   });
 
-  // Socket.IO
+  // Socket.IO — also gated by DASHBOARD_AUTH_SECRET when set. Without this,
+  // the REST API is locked down but websockets are wide open (bot positions,
+  // chat, inventory, build progress streamed to any anonymous connection).
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: true,
       methods: ['GET', 'POST'],
+      credentials: true,
     },
+  });
+
+  // Socket.IO auth middleware: re-uses the same cookie/Bearer check as REST.
+  // Skipped entirely when no DASHBOARD_AUTH_SECRET is configured (single-user
+  // local-dev case preserved).
+  io.use((socket, next) => {
+    if (!isDashboardAuthEnabled()) return next();
+    // The handshake carries the original HTTP request — cookies + headers.
+    const req = socket.request as unknown as Request;
+    if (isDashboardAuthenticated(req)) return next();
+    next(new Error('unauthorized'));
   });
 
   io.on('connection', (socket) => {
@@ -123,6 +177,30 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
   missionManager.setBuildCoordinator(buildCoordinator);
   missionManager.setSchematicMatcher(schematicMatcher);
   logger.info('Control platform wired: CommandCenter ↔ MissionManager ↔ Squad/Role/Marker/Template');
+
+  // ── Operational admin endpoints (logs, backup, restart, heap snapshot) ──
+  // The restart hook flushes the persistent stores we have in scope here.
+  registerAdminRoutes(app, {
+    onRestart: async () => {
+      try { eventLog.shutdown(); } catch (err: any) { logger.warn({ err: err?.message }, 'eventLog.shutdown failed during admin restart'); }
+      try { chainCoordinator.shutdown(); } catch (err: any) { logger.warn({ err: err?.message }, 'chainCoordinator.shutdown failed during admin restart'); }
+      try { campaignManager.shutdown(); } catch (err: any) { logger.warn({ err: err?.message }, 'campaignManager.shutdown failed during admin restart'); }
+      try {
+        if (typeof (botManager as any).shutdownPersistence === 'function') {
+          (botManager as any).shutdownPersistence();
+        } else {
+          const mgrs: any[] = [botManager.getAffinityManager(), botManager.getBlackboardManager()];
+          for (const mgr of mgrs) {
+            if (mgr && typeof mgr.shutdown === 'function') {
+              try { mgr.shutdown(); } catch { /* ignore */ }
+            }
+          }
+        }
+      } catch (err: any) {
+        logger.warn({ err: err?.message }, 'botManager persistence flush failed during admin restart');
+      }
+    },
+  });
 
   // ═══════════════════════════════════════
   //  ENDPOINTS — all use cached worker state
@@ -511,6 +589,23 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
     res.json({ bot: detailed });
   });
 
+  // Bot prismarine-viewer port — lazy-mounts the viewer on first call.
+  // Returns { port: number | null }; null means the viewer couldn't start
+  // (bot not connected yet, or prismarine-viewer threw on init).
+  app.get('/api/bots/:name/viewer-port', async (req: Request, res: Response) => {
+    const handle = botManager.getWorker(req.params.name as string);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    try {
+      const port = await handle.getViewerPort();
+      res.json({ port });
+    } catch (err: any) {
+      res.json({ port: null, error: err?.message ?? 'Failed to fetch viewer port' });
+    }
+  });
+
   // Bot inventory — from cached detailed status
   app.get('/api/bots/:name/inventory', (req: Request, res: Response) => {
     const handle = botManager.getWorker(req.params.name as string);
@@ -564,6 +659,8 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
       longTermGoal: detailed.voyager.longTermGoal,
       completedTasks: detailed.voyager.completedTasks,
       failedTasks: detailed.voyager.failedTasks,
+      // Per-task retry telemetry: { [taskDescription]: [{attempt, error, timestamp}] }
+      retries: detailed.voyager.retryHistory ?? {},
     });
   });
 
@@ -810,6 +907,112 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
     res.json({ name: skillName, code });
   });
 
+  // Helpers for skill PUT/DELETE — load/save the canonical index.json without
+  // disturbing per-skill metadata (embeddings, success counts) we don't own.
+  const skillsDir = path.join(process.cwd(), 'skills');
+  const skillIndexPath = path.join(skillsDir, 'index.json');
+  const isSafeSkillName = (name: string) => /^[a-zA-Z0-9_-]+$/.test(name);
+  const readSkillIndex = (): any[] => {
+    if (!fs.existsSync(skillIndexPath)) return [];
+    try {
+      const raw = JSON.parse(fs.readFileSync(skillIndexPath, 'utf-8'));
+      return Array.isArray(raw) ? raw : Object.values(raw);
+    } catch {
+      return [];
+    }
+  };
+  const writeSkillIndex = (entries: any[]) => {
+    fs.writeFileSync(skillIndexPath, JSON.stringify(entries, null, 2));
+    // Invalidate the GET /api/skills cache so the new state is visible.
+    skillsCache = null;
+  };
+
+  // Edit a skill: replace code (validated for parseability) + optional metadata.
+  app.put('/api/skills/:name', (req: Request, res: Response) => {
+    const skillName = req.params.name as string;
+    if (!isSafeSkillName(skillName)) {
+      res.status(400).json({ error: 'Invalid skill name' });
+      return;
+    }
+    const { code, description, keywords } = req.body ?? {};
+    if (typeof code !== 'string' || code.length === 0) {
+      res.status(400).json({ error: 'code (non-empty string) is required' });
+      return;
+    }
+    if (code.length > 200_000) {
+      res.status(400).json({ error: 'code too large (200KB max)' });
+      return;
+    }
+    if (description !== undefined && typeof description !== 'string') {
+      res.status(400).json({ error: 'description must be a string' });
+      return;
+    }
+    if (keywords !== undefined && (!Array.isArray(keywords) || keywords.some((k: unknown) => typeof k !== 'string'))) {
+      res.status(400).json({ error: 'keywords must be string[]' });
+      return;
+    }
+    // Sanity-check that the JS parses. new Function throws SyntaxError if not.
+    try {
+      // eslint-disable-next-line no-new-func
+      new Function(code);
+    } catch (err: any) {
+      res.status(400).json({ error: `Code has a syntax error: ${err?.message || err}` });
+      return;
+    }
+    const entries = readSkillIndex();
+    const idx = entries.findIndex((e: any) => e?.name === skillName);
+    if (idx < 0) {
+      res.status(404).json({ error: 'Skill not found' });
+      return;
+    }
+    const fileName: string = entries[idx]?.file || `${skillName}.js`;
+    const filePath = path.join(skillsDir, fileName);
+    try {
+      fs.writeFileSync(filePath, code);
+    } catch (err: any) {
+      res.status(500).json({ error: `Failed to write skill file: ${err?.message}` });
+      return;
+    }
+    if (typeof description === 'string') entries[idx].description = description;
+    if (Array.isArray(keywords)) entries[idx].keywords = keywords;
+    writeSkillIndex(entries);
+    logger.info({ name: skillName }, 'Skill updated via API');
+    res.json({
+      skill: {
+        name: skillName,
+        description: entries[idx].description ?? null,
+        keywords: entries[idx].keywords ?? [],
+        code,
+      },
+    });
+  });
+
+  // Delete a skill: remove its file and index entry.
+  app.delete('/api/skills/:name', (req: Request, res: Response) => {
+    const skillName = req.params.name as string;
+    if (!isSafeSkillName(skillName)) {
+      res.status(400).json({ error: 'Invalid skill name' });
+      return;
+    }
+    const entries = readSkillIndex();
+    const idx = entries.findIndex((e: any) => e?.name === skillName);
+    if (idx < 0) {
+      res.status(404).json({ error: 'Skill not found' });
+      return;
+    }
+    const fileName: string = entries[idx]?.file || `${skillName}.js`;
+    const filePath = path.join(skillsDir, fileName);
+    try {
+      if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, fileName }, 'Failed to delete skill file');
+    }
+    entries.splice(idx, 1);
+    writeSkillIndex(entries);
+    logger.info({ name: skillName }, 'Skill deleted via API');
+    res.json({ success: true });
+  });
+
   // Aggregate world state — from first bot's cached detailed status
   app.get('/api/world', (_req: Request, res: Response) => {
     const workers = botManager.getAllWorkers();
@@ -907,7 +1110,8 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
       description: `Task queued: ${description}`,
       metadata: { source: 'dashboard' },
     });
-    io.emit('bot:task', { bot: req.params.name, task: description, status: 'queued' });
+    // `bot:task` socket event removed per the dead-event audit (no listeners).
+    // Surfaced via the `activity` channel + activity log instead.
     io.emit('activity', event);
 
     res.json({ success: true });
@@ -1291,6 +1495,76 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
       res.status(500).json({ error: err.message });
     }
   });
+
+  // Upload a schematic file (multipart/form-data, field name "file").
+  // Accepts .schem and .schematic only; cap at 10MB.
+  const SCHEM_MAX_BYTES = 10 * 1024 * 1024;
+  const schematicUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: SCHEM_MAX_BYTES, files: 1 },
+  });
+  app.post(
+    '/api/schematics/upload',
+    (req: Request, res: Response, next) => {
+      schematicUpload.single('file')(req, res, (err: any) => {
+        if (err) {
+          // Multer codes: LIMIT_FILE_SIZE etc.
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            res.status(400).json({ error: `File too large; max ${SCHEM_MAX_BYTES} bytes` });
+            return;
+          }
+          res.status(400).json({ error: err.message || 'Upload failed' });
+          return;
+        }
+        next();
+      });
+    },
+    async (req: Request, res: Response) => {
+      try {
+        const file = (req as any).file as Express.Multer.File | undefined;
+        if (!file) {
+          res.status(400).json({ error: 'No file uploaded (use field name "file")' });
+          return;
+        }
+        // Sanitize: only allow extension + a safe basename. Strip directory components.
+        const rawName = path.basename(file.originalname || '').replace(/[^a-zA-Z0-9._-]/g, '_');
+        const ext = path.extname(rawName).toLowerCase();
+        if (ext !== '.schem' && ext !== '.schematic') {
+          res.status(400).json({ error: 'Only .schem or .schematic files are allowed' });
+          return;
+        }
+        if (!rawName || rawName === ext) {
+          res.status(400).json({ error: 'Invalid filename' });
+          return;
+        }
+        const destPath = path.join(schematicsDir, rawName);
+        // Ensure dir exists
+        if (!fs.existsSync(schematicsDir)) {
+          fs.mkdirSync(schematicsDir, { recursive: true });
+        }
+        // Reject if a schematic with this name already exists rather than
+        // silently overwriting — a build that loaded the previous bytes mid-
+        // upload would see a torn file. Caller can DELETE first if needed.
+        if (fs.existsSync(destPath)) {
+          res.status(409).json({ error: `Schematic '${rawName}' already exists. Delete it first if you want to replace it.` });
+          return;
+        }
+        // Atomic write: write to .tmp first, then rename onto destPath so any
+        // reader either sees the complete file or no file at all.
+        const tmpPath = `${destPath}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
+        fs.writeFileSync(tmpPath, file.buffer);
+        fs.renameSync(tmpPath, destPath);
+        schematicMatcher.refresh();
+        const info = await buildCoordinator.getSchematicInfoAsync(rawName);
+        res.status(201).json({
+          schematic: info ?? { filename: rawName, size: { x: 0, y: 0, z: 0 }, blockCount: 0 },
+        });
+      } catch (err: any) {
+        logger.error({ err: err?.message }, 'Schematic upload failed');
+        res.status(500).json({ error: err?.message || 'Upload failed' });
+      }
+    },
+  );
 
   // Get a single schematic's metadata
   app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
@@ -2028,6 +2302,45 @@ export function createAPIServer(botManager: BotManager, config?: Config): APISer
       // Fields that the validator dropped or coerced — surface them to the UI.
       warnings: validated.errors,
     });
+  });
+
+  // ═══════════════════════════════════════════════════════════════
+  //  LLM trace timeline — AgentOps-style waterfall for one bot
+  // ═══════════════════════════════════════════════════════════════
+  //
+  // Returns the last N LLM calls for a single bot from the shared TokenLedger,
+  // ordered by startMs ascending so the dashboard renders the waterfall
+  // left-to-right. Each record's startMs is the timestamp the ledger recorded
+  // (call completion time) minus its measured latencyMs.
+  app.get('/api/bots/:name/llm-trace', (req: Request, res: Response) => {
+    const name = String(req.params.name);
+    if (!tokenLedger) {
+      res.json({ trace: [] });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 50;
+    const records = tokenLedger.getRecords({ botName: name, limit });
+    const trace = records.map((r, idx) => {
+      const endMs = r.timestamp;
+      const startMs = endMs - (r.latencyMs ?? 0);
+      return {
+        id: `${name}-${endMs}-${idx}`,
+        taskType: r.taskType,
+        provider: r.provider,
+        model: r.model,
+        startMs,
+        endMs,
+        durationMs: r.latencyMs ?? 0,
+        inputTokens: r.inputTokens,
+        outputTokens: r.outputTokens,
+        success: r.success,
+      };
+    });
+    // getRecords returns oldest-first via slice(-limit); sort defensively in
+    // case future changes reorder. Ascending startMs = left-to-right waterfall.
+    trace.sort((a, b) => a.startMs - b.startMs);
+    res.json({ trace });
   });
 
   return {

@@ -53,6 +53,19 @@ export class TokenLedger {
     this.scheduleSave();
   }
 
+  /**
+   * Query raw records, optionally filtered by bot name. Returns oldest-first so
+   * waterfall timelines can render left-to-right.
+   */
+  getRecords(opts: { botName?: string; limit?: number } = {}): TokenUsageRecord[] {
+    let filtered = this.records;
+    if (opts.botName) {
+      filtered = filtered.filter((r) => r.botName === opts.botName);
+    }
+    const limit = opts.limit ?? 50;
+    return filtered.slice(-limit);
+  }
+
   getMetrics(): UsageMetrics {
     let totalCalls = 0;
     let totalInput = 0;

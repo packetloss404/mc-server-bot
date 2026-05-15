@@ -7,6 +7,7 @@ import { formatItemName, getItemCategoryColorByName } from '@/lib/items';
 import { EquipmentDisplay } from '@/components/EquipmentDisplay';
 import { getPersonalityColor } from '@/lib/constants';
 import { Slot } from '@/components/ui/Slot';
+import { useBotPolling, useHasBotPolling } from '@/lib/useBotPolling';
 
 interface Props {
   botName: string;
@@ -14,23 +15,32 @@ interface Props {
 }
 
 export function BotTabInventory({ botName, personality }: Props) {
-  const [bot, setBot] = useState<BotDetailed | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const shared = useBotPolling();
+  const hasShared = useHasBotPolling();
+  const [localBot, setLocalBot] = useState<BotDetailed | null>(null);
+  const [localError, setLocalError] = useState<string | null>(null);
 
+  // Inventory comes from /detailed, which the shared BotPollingProvider
+  // already polls every 3s. Fall back to a local 10s fetch only when this tab
+  // is rendered outside a provider.
   useEffect(() => {
+    if (hasShared) return;
     const load = () => {
       api
         .getBotDetailed(botName)
-        .then((data) => { setBot(data.bot); setError(null); })
+        .then((data) => { setLocalBot(data.bot); setLocalError(null); })
         .catch((err: unknown) => {
           const msg = err instanceof Error ? err.message : 'Failed to load inventory';
-          setError(msg);
+          setLocalError(msg);
         });
     };
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
-  }, [botName]);
+  }, [botName, hasShared]);
+
+  const bot = hasShared ? shared.bot : localBot;
+  const error = hasShared ? shared.error : localError;
 
   if (error && !bot) {
     return (

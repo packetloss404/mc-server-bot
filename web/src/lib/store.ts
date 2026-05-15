@@ -635,6 +635,83 @@ export const useDecisionStore = create<DecisionStore>((set) => ({
     }),
 }));
 
+// ─── Movement Trail Store ───
+//
+// Ring buffer of recent positions per bot, used by the map to draw fading
+// breadcrumb polylines behind each entity. Keyed by lowercase botName.
+
+export interface TrailPoint {
+  x: number;
+  z: number;
+  t: number;
+}
+
+const TRAIL_CAPACITY = 30;
+/** Minimum xz movement (blocks) before a new point is recorded — avoids spamming the buffer when a bot is stationary. */
+const TRAIL_MIN_DELTA = 0.4;
+
+interface MovementTrailStore {
+  /** Ring buffers, keyed by lowercase bot name. */
+  trailsByBot: Record<string, TrailPoint[]>;
+  /** Append a position. No-op if the delta from the last sample is too small. */
+  pushPoint: (botName: string, x: number, z: number) => void;
+  /** Erase a single bot's trail (e.g. on disconnect). */
+  clearTrail: (botName: string) => void;
+  /** Erase every bot's trail. */
+  clearAll: () => void;
+  /** Drop trails for any bot not in `activeBotNames`. Called after the bot
+   *  list refetches so disconnected bots don't leak ring buffers forever. */
+  pruneToActive: (activeBotNames: string[]) => void;
+}
+
+export const useMovementTrailStore = create<MovementTrailStore>((set) => ({
+  trailsByBot: {},
+
+  pushPoint: (botName, x, z) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      const existing = state.trailsByBot[key] ?? [];
+      const last = existing.length > 0 ? existing[existing.length - 1] : null;
+      if (
+        last &&
+        Math.abs(last.x - x) < TRAIL_MIN_DELTA &&
+        Math.abs(last.z - z) < TRAIL_MIN_DELTA
+      ) {
+        return {};
+      }
+      const next = existing.length >= TRAIL_CAPACITY
+        ? [...existing.slice(existing.length - TRAIL_CAPACITY + 1), { x, z, t: Date.now() }]
+        : [...existing, { x, z, t: Date.now() }];
+      return { trailsByBot: { ...state.trailsByBot, [key]: next } };
+    }),
+
+  clearTrail: (botName) =>
+    set((state) => {
+      const key = botName.toLowerCase();
+      if (!(key in state.trailsByBot)) return {};
+      const next = { ...state.trailsByBot };
+      delete next[key];
+      return { trailsByBot: next };
+    }),
+
+  clearAll: () => set({ trailsByBot: {} }),
+
+  pruneToActive: (activeBotNames) =>
+    set((state) => {
+      const activeKeys = new Set(activeBotNames.map((n) => n.toLowerCase()));
+      let changed = false;
+      const next: Record<string, TrailPoint[]> = {};
+      for (const [key, points] of Object.entries(state.trailsByBot)) {
+        if (activeKeys.has(key)) {
+          next[key] = points;
+        } else {
+          changed = true;
+        }
+      }
+      return changed ? { trailsByBot: next } : {};
+    }),
+}));
+
 // ─── Chain Store ───
 
 interface ChainStore {

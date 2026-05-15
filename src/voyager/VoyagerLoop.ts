@@ -122,6 +122,22 @@ export class VoyagerLoop {
   private currentTask: string | null = null;
   private lastCompletedTask: string | null = null;
   private lastFailedTask: string | null = null;
+  /** Timestamp of last acknowledgment chat; rate-limits to 1 per 10s per bot. */
+  private lastAckAt = 0;
+  /** Retry attempts per recent task description. Bounded to the last 20 tasks. */
+  private retryHistory: Map<string, { attempt: number; error: string; timestamp: number }[]> = new Map();
+  private static readonly RETRY_HISTORY_MAX_TASKS = 20;
+
+  private static readonly ACK_TEMPLATES: Record<string, string> = {
+    merchant: 'On it, [player].',
+    guard: 'Acknowledged.',
+    farmer: "I'll get right on it!",
+    elder: 'Hmm, I shall attend to this.',
+    explorer: 'Off I go!',
+    blacksmith: 'Steel be true.',
+  };
+  private static readonly ACK_DEFAULT = 'Working on it.';
+  private static readonly ACK_RATE_LIMIT_MS = 10_000;
 
   constructor(
     bot: Bot,
@@ -341,13 +357,13 @@ export class VoyagerLoop {
         .replace(/[^a-z0-9\s]/g, '')
         .split(/\s+/)
         .filter((w) => w.length > 2);
-      this.playerTaskQueue.push({ description, keywords });
+      this.playerTaskQueue.push({ description, keywords, requestedBy });
     });
   }
 
   queuePlayerTaskFront(description: string, requestedBy: string): void {
     const keywords = description.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
-    this.playerTaskQueue.unshift({ description, keywords });
+    this.playerTaskQueue.unshift({ description, keywords, requestedBy });
     logger.info({ bot: this.botName, task: description, requestedBy }, 'Player task prepended to front of queue');
   }
 
@@ -370,7 +386,7 @@ export class VoyagerLoop {
   private async decomposeAndQueue(description: string, requestedBy: string): Promise<void> {
     const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
     for (const task of subtasks) {
-      this.playerTaskQueue.push(task);
+      this.playerTaskQueue.push({ ...task, requestedBy });
     }
     logger.info({
       bot: this.botName,
@@ -653,6 +669,11 @@ export class VoyagerLoop {
     const plan = buildTaskPlan(task, progression);
     this.currentTask = task.description;
 
+    // Personality-flavored acknowledgment when starting a player-requested task.
+    if (playerTask && playerTask.requestedBy) {
+      this.maybeAcknowledgeTask(playerTask.requestedBy);
+    }
+
     logger.info({
       bot: this.botName,
       task: task.description,
@@ -718,6 +739,8 @@ export class VoyagerLoop {
       this.blackboardManager?.completeTask(this.activeBlackboardTask.description, this.botName);
       this.activeBlackboardTask = null;
     }
+    // Report completion of player-requested task back to the requester in chat.
+    if (playerTask) this.maybeReportCompletion(playerTask);
     this.currentTask = null;
   }
 
@@ -1117,6 +1140,7 @@ export class VoyagerLoop {
 
       // Retry with iterative refinement + error recovery analysis
       lastError = criticResult.reason;
+      this.recordRetryAttempt(task.description, attempt + 1, lastError);
       if (useDirectSkill && bestSkill) {
         this.skillLibrary.recordOutcome(bestSkill.name, false);
       }
@@ -1292,6 +1316,53 @@ export class VoyagerLoop {
       logger.warn({ err: err.message, item: itemName }, 'DependencyResolver failed, falling back to simple replacement');
       return [{ description: replaceHint }];
     }
+  }
+
+  /** Record a failed retry attempt; truncates errors and bounds the history. */
+  private recordRetryAttempt(taskDescription: string, attempt: number, error: string): void {
+    const list = this.retryHistory.get(taskDescription) ?? [];
+    list.push({
+      attempt,
+      // Excerpt — full critic critiques can be very long.
+      error: (error || 'unknown').slice(0, 240),
+      timestamp: Date.now(),
+    });
+    this.retryHistory.set(taskDescription, list);
+    if (this.retryHistory.size > VoyagerLoop.RETRY_HISTORY_MAX_TASKS) {
+      // Drop oldest entry (Map preserves insertion order).
+      const oldest = this.retryHistory.keys().next().value;
+      if (oldest !== undefined) this.retryHistory.delete(oldest);
+    }
+  }
+
+  /** Return the retry attempts recorded for recent tasks (keyed by task description). */
+  getRetryHistory(): Record<string, { attempt: number; error: string; timestamp: number }[]> {
+    const out: Record<string, { attempt: number; error: string; timestamp: number }[]> = {};
+    for (const [task, attempts] of this.retryHistory.entries()) {
+      out[task] = attempts.slice();
+    }
+    return out;
+  }
+
+  /** Chat a personality-flavored line when starting a player task, rate-limited to 1 per 10s. */
+  private maybeAcknowledgeTask(playerName: string): void {
+    const now = Date.now();
+    if (now - this.lastAckAt < VoyagerLoop.ACK_RATE_LIMIT_MS) return;
+    if (!this.bot.chat) return;
+    const template = VoyagerLoop.ACK_TEMPLATES[this.personality] ?? VoyagerLoop.ACK_DEFAULT;
+    const line = template.replace('[player]', playerName);
+    try {
+      this.bot.chat(line);
+      this.lastAckAt = now;
+    } catch { /* ignore chat failures */ }
+  }
+
+  /** Chat a short result when a player-requested task succeeds. */
+  private maybeReportCompletion(task: Task): void {
+    if (!task.requestedBy || !this.bot.chat) return;
+    try {
+      this.bot.chat(`${task.requestedBy}: Done — ${task.description}.`);
+    } catch { /* ignore chat failures */ }
   }
 
   private taskToSkillName(task: Task): string {

@@ -1,10 +1,30 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+
+/**
+ * Redirect to the login page when a 401 comes back from the backend.
+ * Guarded so we only fire it once per page-load and never during the
+ * login page itself (which would loop). SSR-safe (window check).
+ */
+let redirectingToLogin = false;
+function handleUnauthorized(): void {
+  if (typeof window === 'undefined') return;
+  if (redirectingToLogin) return;
+  if (window.location.pathname === '/login') return;
+  redirectingToLogin = true;
+  const next = encodeURIComponent(window.location.pathname + window.location.search);
+  window.location.replace(`/login?next=${next}`);
+}
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
   });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('unauthorized');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `API error: ${res.status}`);
@@ -14,9 +34,14 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
 
 async function fetchVoid(path: string, options?: RequestInit): Promise<void> {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
   });
+  if (res.status === 401) {
+    handleUnauthorized();
+    throw new Error('unauthorized');
+  }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     throw new Error(body.error || `API error: ${res.status}`);
@@ -76,6 +101,12 @@ export interface BotCombat {
   instinctActive: boolean;
 }
 
+export interface RetryAttempt {
+  attempt: number;
+  error: string;
+  timestamp: number;
+}
+
 export interface BotDetailed extends BotStatus {
   personalityDisplayName: string;
   health: number;
@@ -97,6 +128,8 @@ export interface BotDetailed extends BotStatus {
     failedTasks: string[];
     internalState?: string;
     queuedTaskCount?: number;
+    /** Map of task description -> retry attempts. Surfaced in the Tasks tab. */
+    retryHistory?: Record<string, RetryAttempt[]>;
   } | null;
   armor?: BotArmor;
   offhand?: EquipmentSlot | null;
@@ -449,14 +482,57 @@ export interface EmotionalState {
   lastUpdated: number;
 }
 
+// LLM trace timeline entry — one bar on the AgentOps-style waterfall
+export interface LLMTraceEntry {
+  id: string;
+  taskType: string;
+  provider: string;
+  model: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  success: boolean;
+  error?: string;
+}
+
 // API functions
 export const api = {
+  // ─── Auth ───
+  getAuthStatus: () =>
+    fetchJSON<{ enabled: boolean; authenticated: boolean; pluginAuthEnabled: boolean }>(
+      '/api/auth/status',
+    ),
+  login: (secret: string) =>
+    fetchJSON<{ ok: boolean; enabled?: boolean }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ secret }),
+    }),
+  logout: () =>
+    fetchJSON<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+
   // Bots
   getBots: () => fetchJSON<{ bots: BotStatus[] }>('/api/bots'),
   getBotDetailed: (name: string) => fetchJSON<{ bot: BotDetailed }>(`/api/bots/${name}/detailed`),
+  // Fetches the prismarine-viewer HTTP port for a bot. Lazy-mounted on the
+  // server: the first call spins up the viewer, subsequent calls return the
+  // cached port. Returns { port: null } when the bot isn't connected yet or
+  // the viewer failed to initialize.
+  getBotViewerPort: (name: string) =>
+    fetchJSON<{ port: number | null }>(`/api/bots/${name}/viewer-port`).catch(
+      () => ({ port: null as number | null }),
+    ),
   getBotRelationships: (name: string) => fetchJSON<{ relationships: Record<string, number> }>(`/api/bots/${name}/relationships`),
   getBotConversations: (name: string) => fetchJSON<{ conversations: Record<string, ChatMessage[]> }>(`/api/bots/${name}/conversations`),
-  getBotTasks: (name: string) => fetchJSON<{ currentTask: string | null; completedTasks: string[]; failedTasks: string[] }>(`/api/bots/${name}/tasks`),
+  getBotTasks: (name: string) => fetchJSON<{
+    currentTask: string | null;
+    completedTasks: string[];
+    failedTasks: string[];
+    queuedTasks?: string[];
+    longTermGoal?: unknown;
+    retries?: Record<string, RetryAttempt[]>;
+  }>(`/api/bots/${name}/tasks`),
   getBotDecisions: (name: string, limit = 30) =>
     fetchJSON<{ decisions: Array<Record<string, unknown>> }>(`/api/bots/${name}/decisions?limit=${limit}`).catch(() => ({ decisions: [] })),
   getBotReputation: (name: string) =>
@@ -499,6 +575,28 @@ export const api = {
   getRelationships: () => fetchJSON<{ relationships: Record<string, Record<string, number>> }>('/api/relationships'),
   getSkills: () => fetchJSON<{ skills: { name: string; code: string | null }[]; count: number }>('/api/skills'),
   getSkill: (name: string) => fetchJSON<{ name: string; code: string }>(`/api/skills/${name}`),
+  updateSkill: (name: string, data: { code: string; description?: string; keywords?: string[] }) =>
+    fetchJSON<{ skill: { name: string; description: string | null; keywords: string[]; code: string } }>(
+      `/api/skills/${encodeURIComponent(name)}`,
+      { method: 'PUT', body: JSON.stringify(data) },
+    ),
+  deleteSkill: (name: string) =>
+    fetchJSON<{ success: boolean }>(`/api/skills/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+
+  // Schematic upload — multipart/form-data; bypasses fetchJSON's JSON header.
+  uploadSchematic: async (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/api/schematics/upload`, {
+      method: 'POST',
+      body: form,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({} as { error?: string }));
+      throw new Error(body.error || `Upload failed: ${res.status}`);
+    }
+    return res.json() as Promise<{ schematic: SchematicInfo }>;
+  },
   getWorld: () => fetchJSON<WorldState>('/api/world'),
   getActivity: (limit = 50, bot?: string, type?: string) => {
     const params = new URLSearchParams({ limit: String(limit) });
@@ -811,6 +909,12 @@ export const api = {
       body: JSON.stringify({ directive }),
     }),
 
+  // ─── LLM trace timeline (AgentOps-style waterfall) ───
+  getBotLLMTrace: (name: string, limit = 50) =>
+    fetchJSON<{ trace: LLMTraceEntry[] }>(`/api/bots/${name}/llm-trace?limit=${limit}`).catch(() => ({
+      trace: [] as LLMTraceEntry[],
+    })),
+
   // ─── Bot mission queue ───
   reorderBotMissionQueue: (botName: string, order: string[]) =>
     fetchJSON<{ success: boolean }>(`/api/bots/${botName}/mission-queue`, {
@@ -853,7 +957,42 @@ export const api = {
         body: JSON.stringify({ values }),
       },
     ),
+
+  // ─── Operational / admin ───
+  getAdminInfo: () =>
+    fetchJSON<AdminInfo>('/api/admin/info'),
+  triggerHeapSnapshot: () =>
+    fetchJSON<{ success: boolean; filePath?: string; error?: string }>(
+      '/api/admin/heap-snapshot',
+      { method: 'POST' },
+    ),
+  triggerRestart: () =>
+    fetchJSON<{ accepted: boolean; message: string }>(
+      '/api/admin/restart',
+      { method: 'POST' },
+    ),
+  /**
+   * URL for the streaming backup download — return as a string so the caller
+   * can hand it to an <a download> or window.location to trigger the browser
+   * download flow. We don't fetch this through fetchJSON because the response
+   * is a binary tar.gz stream, not JSON.
+   */
+  getBackupDownloadUrl: () => `${API_BASE}/api/admin/backup`,
 };
+
+export interface AdminInfo {
+  uptimeSec: number;
+  pid: number;
+  nodeVersion: string;
+  platform: string;
+  memory: {
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+    external: number;
+  };
+  logPath: string;
+}
 
 // Response shapes confirmed from src/server/api.ts (/api/skills/stats handler)
 // and src/voyager/DifficultyBalancer.ts (DifficultyState interface).

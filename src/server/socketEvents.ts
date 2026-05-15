@@ -73,20 +73,8 @@ export function setupSocketEvents(
     }
   }, 1000);
 
-  // World time broadcast every 30 seconds
-  setInterval(() => {
-    const workers = botManager.getAllWorkers();
-    for (const handle of workers) {
-      const detailed = handle.getCachedDetailedStatus();
-      if (detailed?.world) {
-        io.emit('world:time', {
-          timeOfDay: detailed.world.timeOfDay,
-          isRaining: detailed.world.isRaining,
-        });
-        return;
-      }
-    }
-  }, 30000);
+  // (Previously emitted `world:time` every 30s, but no frontend listener exists.
+  // Removed per the dead-event audit; re-add when something subscribes.)
 
   // Wire decision trace listeners on new workers — event-driven, no polling.
   // Also wire any bots that were spawned before this listener registered.

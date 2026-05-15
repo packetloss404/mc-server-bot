@@ -21,6 +21,22 @@ interface ModelRouterConfig {
   isEnabled?: () => boolean;
 }
 
+/** A snapshot of one LLM call, emitted for live timeline visualization. */
+export interface LLMCallEvent {
+  id: string;
+  taskType: string;
+  provider: string;
+  model: string;
+  botName: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  inputTokens: number;
+  outputTokens: number;
+  success: boolean;
+  error?: string;
+}
+
 /** Error type thrown when the AI kill switch is off. Callers should detect and skip. */
 export class AIDisabledError extends Error {
   code = 'AI_DISABLED';
@@ -58,6 +74,10 @@ export class ModelRouter implements LLMClient {
   private consecutiveFailures = 0;
   /** When > Date.now(), all LLM calls fast-fail with AIDisabledError. */
   private breakerOpenUntil = 0;
+  /** Monotonic counter to give each emitted call event a stable id. */
+  private callSeq = 0;
+  /** Optional listener (e.g. Socket.IO broadcaster) for live timeline. */
+  private onCall?: (event: LLMCallEvent) => void;
 
   constructor(clients: Map<string, LLMClient>, config: ModelRouterConfig, ledger: TokenLedger) {
     this.clients = clients;
@@ -76,6 +96,15 @@ export class ModelRouter implements LLMClient {
       { providers: [...clients.keys()], routes: [...this.routes.keys()], default: this.defaultProvider },
       'ModelRouter initialized',
     );
+  }
+
+  /** Register a listener that fires after every LLM call (success or failure). */
+  setCallListener(fn: (event: LLMCallEvent) => void): void {
+    this.onCall = fn;
+  }
+
+  private emitCall(event: LLMCallEvent): void {
+    try { this.onCall?.(event); } catch { /* swallow listener errors */ }
   }
 
   async chat(
@@ -135,20 +164,50 @@ export class ModelRouter implements LLMClient {
       const start = Date.now();
       try {
         const result = await client.embed(texts);
+        const end = Date.now();
+        const inputTokens = texts.join(' ').split(/\s+/).length; // rough estimate
         this.ledger.record({
           provider: name,
           model: route?.model ?? 'embedding',
           taskType: 'embed',
           botName: '',
-          inputTokens: texts.join(' ').split(/\s+/).length, // rough estimate
+          inputTokens,
           outputTokens: 0,
-          latencyMs: Date.now() - start,
+          latencyMs: end - start,
+          success: true,
+        });
+        this.emitCall({
+          id: `llm-${++this.callSeq}`,
+          taskType: 'embed',
+          provider: name,
+          model: route?.model ?? 'embedding',
+          botName: '',
+          startMs: start,
+          endMs: end,
+          durationMs: end - start,
+          inputTokens,
+          outputTokens: 0,
           success: true,
         });
         this.recordSuccess();
         return result;
       } catch (err: any) {
+        const end = Date.now();
         lastError = err;
+        this.emitCall({
+          id: `llm-${++this.callSeq}`,
+          taskType: 'embed',
+          provider: name,
+          model: route?.model ?? 'embedding',
+          botName: '',
+          startMs: start,
+          endMs: end,
+          durationMs: end - start,
+          inputTokens: 0,
+          outputTokens: 0,
+          success: false,
+          error: err?.message,
+        });
         logger.warn({ provider: name, err: err.message }, 'Embed failed, trying next provider');
       }
     }
@@ -191,7 +250,8 @@ export class ModelRouter implements LLMClient {
         const start = Date.now();
         try {
           const response = await callFn(client, effectiveMaxTokens);
-          const latencyMs = Date.now() - start;
+          const end = Date.now();
+          const latencyMs = end - start;
 
           this.ledger.record({
             provider: providerName,
@@ -204,10 +264,25 @@ export class ModelRouter implements LLMClient {
             success: true,
           });
 
+          this.emitCall({
+            id: `llm-${++this.callSeq}`,
+            taskType: String(taskType),
+            provider: providerName,
+            model: route?.model ?? this.defaultProvider,
+            botName,
+            startMs: start,
+            endMs: end,
+            durationMs: latencyMs,
+            inputTokens: response.inputTokens ?? 0,
+            outputTokens: response.outputTokens ?? 0,
+            success: true,
+          });
+
           this.recordSuccess();
           return response;
         } catch (err: any) {
-          const latencyMs = Date.now() - start;
+          const end = Date.now();
+          const latencyMs = end - start;
           lastError = err;
 
           this.ledger.record({
@@ -219,6 +294,21 @@ export class ModelRouter implements LLMClient {
             outputTokens: 0,
             latencyMs,
             success: false,
+          });
+
+          this.emitCall({
+            id: `llm-${++this.callSeq}`,
+            taskType: String(taskType),
+            provider: providerName,
+            model: route?.model ?? this.defaultProvider,
+            botName,
+            startMs: start,
+            endMs: end,
+            durationMs: latencyMs,
+            inputTokens: 0,
+            outputTokens: 0,
+            success: false,
+            error: err?.message,
           });
 
           if (!isRetryableError(err)) {

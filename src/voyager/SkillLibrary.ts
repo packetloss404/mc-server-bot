@@ -12,6 +12,23 @@ interface SkillEntry {
   successCount?: number;
   failureCount?: number;
   embedding?: number[];
+  /** ms epoch of last quality update (recordOutcome). Used for time-decay on access. */
+  lastQualityUpdate?: number;
+}
+
+const QUALITY_DECAY_RATE = 0.999;
+const QUALITY_DECAY_AGE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+/**
+ * Laplace-smoothed quality estimate.
+ * Treats successes/failures as Bernoulli trials with a uniform prior:
+ *   (s + 1) / (s + f + 2)
+ * Gives 0.5 with zero data and converges to the empirical rate as samples grow.
+ */
+function computeQuality(skill: { successCount?: number; failureCount?: number }): number {
+  const s = skill.successCount ?? 0;
+  const f = skill.failureCount ?? 0;
+  return (s + 1) / (s + f + 2);
 }
 
 export interface SkillMatch {
@@ -127,7 +144,7 @@ export class SkillLibrary {
       if (queryEmbedding && entry.embedding) {
         score += this.cosineSimilarityDense(queryEmbedding, entry.embedding) * 25;
       }
-      score += (entry.quality ?? 0.5) * 10;
+      score += this.getQuality(entry) * 10;
       score += (entry.successCount ?? 0) * 0.5;
       score -= (entry.failureCount ?? 0) * 1.5;
 
@@ -156,8 +173,8 @@ export class SkillLibrary {
     return code;
   }
 
-  /** Save a new skill to the library */
-  async save(name: string, description: string, keywords: string[], code: string, quality = 0.8): Promise<boolean> {
+  /** Save a new skill to the library. `quality` is ignored — computed via Laplace smoothing. */
+  async save(name: string, description: string, keywords: string[], code: string, _quality = 0.8): Promise<boolean> {
     if (this.index.length >= this.maxSkills) {
       logger.warn({ name }, 'Skill library full, cannot save');
       return false;
@@ -174,15 +191,18 @@ export class SkillLibrary {
     const embedding = this.embeddingClient?.embed
       ? (await this.embeddingClient.embed([`${name} ${description} ${keywords.join(' ')}`]).catch(() => [] as number[][]))[0]
       : existingEntry?.embedding;
+    const successCount = existingEntry?.successCount || 0;
+    const failureCount = existingEntry?.failureCount || 0;
     const entry: SkillEntry = {
       name,
       description,
       keywords,
       file: fileName,
-      quality,
-      successCount: existingEntry?.successCount || 0,
-      failureCount: existingEntry?.failureCount || 0,
+      quality: computeQuality({ successCount, failureCount }),
+      successCount,
+      failureCount,
       embedding,
+      lastQualityUpdate: Date.now(),
     };
 
     if (existing >= 0) {
@@ -204,19 +224,35 @@ export class SkillLibrary {
     if (!entry) return;
     if (success) {
       entry.successCount = (entry.successCount || 0) + 1;
-      entry.quality = Math.min(1, (entry.quality ?? 0.5) + 0.05);
     } else {
       entry.failureCount = (entry.failureCount || 0) + 1;
-      entry.quality = Math.max(0, (entry.quality ?? 0.5) - 0.08);
     }
+    entry.quality = computeQuality(entry);
+    entry.lastQualityUpdate = Date.now();
     this.saveIndex();
     this.rebuildIndexStats();
+  }
+
+  /**
+   * Return the decay-adjusted quality. Quality multiplies by 0.999 each access
+   * when the entry hasn't been updated in over 7 days, modelling stale skills
+   * gradually losing trust until something records a fresh outcome.
+   */
+  private getQuality(entry: SkillEntry): number {
+    const base = entry.quality ?? computeQuality(entry);
+    const lastUpdate = entry.lastQualityUpdate ?? 0;
+    if (lastUpdate > 0 && Date.now() - lastUpdate > QUALITY_DECAY_AGE_MS) {
+      const decayed = base * QUALITY_DECAY_RATE;
+      entry.quality = decayed;
+      return decayed;
+    }
+    return base;
   }
 
   isHighQuality(name: string): boolean {
     const entry = this.index.find((s) => s.name === name);
     if (!entry) return false;
-    return (entry.quality ?? 0.5) >= 0.6 && (entry.failureCount ?? 0) <= ((entry.successCount ?? 0) + 1);
+    return this.getQuality(entry) >= 0.6 && (entry.failureCount ?? 0) <= ((entry.successCount ?? 0) + 1);
   }
 
   /** Get ALL skill code concatenated (for VM injection so skills can call each other) */
@@ -298,12 +334,19 @@ export class SkillLibrary {
   private loadIndex(): void {
     if (fs.existsSync(this.indexPath)) {
       try {
-        this.index = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8')).map((entry: SkillEntry) => ({
-          quality: 0.7,
-          successCount: 0,
-          failureCount: 0,
-          ...entry,
-        }));
+        const raw = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8')) as SkillEntry[];
+        this.index = raw.map((entry) => {
+          const successCount = entry.successCount ?? 0;
+          const failureCount = entry.failureCount ?? 0;
+          return {
+            ...entry,
+            successCount,
+            failureCount,
+            // Recompute quality from counts so legacy 0.5/0.7 defaults get replaced
+            // by the Laplace-smoothed value on first load.
+            quality: computeQuality({ successCount, failureCount }),
+          };
+        });
       } catch {
         this.index = [];
       }

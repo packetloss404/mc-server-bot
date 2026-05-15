@@ -1625,6 +1625,7 @@ export class BotInstance {
         longTermGoal: this.voyagerLoop.getLongTermGoal(),
         completedTasks: this.voyagerLoop.getCompletedTasks(),
         failedTasks: this.voyagerLoop.getFailedTasks(),
+        retryHistory: this.voyagerLoop.getRetryHistory(),
       };
     }
 

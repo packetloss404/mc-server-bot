@@ -273,6 +273,8 @@ export function CommandPalette() {
   const titleId = 'palette-title';
 
   // Collect focusable elements inside the dialog and trap focus on Tab.
+  // Tab on last → first. Shift+Tab on first (or escaped focus) → last.
+  // Also re-enters the dialog if focus somehow ended up outside.
   const trapFocus = (e: React.KeyboardEvent) => {
     if (e.key !== 'Tab' || !dialogRef.current) return;
     const focusables = Array.from(
@@ -284,13 +286,14 @@ export function CommandPalette() {
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
     const active = document.activeElement as HTMLElement | null;
+    const outside = !active || !dialogRef.current.contains(active);
     if (e.shiftKey) {
-      if (active === first || !dialogRef.current.contains(active)) {
+      if (outside || active === first) {
         e.preventDefault();
         last.focus();
       }
     } else {
-      if (active === last) {
+      if (outside || active === last) {
         e.preventDefault();
         first.focus();
       }

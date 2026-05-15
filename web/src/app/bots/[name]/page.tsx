@@ -14,21 +14,27 @@ import { StatusBadge } from '@/components/ui/StatusBadge';
 import { StatCard as SharedStatCard } from '@/components/ui/StatCard';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { BotTabOverview } from '@/components/bot/BotTabOverview';
+import { BotTabViewer } from '@/components/bot/BotTabViewer';
 import { BotTabConsole } from '@/components/bot/BotTabConsole';
 import { BotTabTasks } from '@/components/bot/BotTabTasks';
 import { BotTabInventory } from '@/components/bot/BotTabInventory';
 import { BotTabRelationships } from '@/components/bot/BotTabRelationships';
 import { BotTabReputation } from '@/components/bot/BotTabReputation';
 import { DecisionTimeline } from '@/components/bot/DecisionTimeline';
+import { LLMTraceTimeline } from '@/components/bot/LLMTraceTimeline';
 import { MessagingPanel } from '@/components/bot/MessagingPanel';
 import { SocialMemoryPanel } from '@/components/bot/SocialMemoryPanel';
+import { BotPollingProvider } from '@/lib/useBotPolling';
 
 type TabId =
-  | 'overview' | 'console' | 'tasks' | 'inventory' | 'relationships' | 'reputation'
+  | 'overview' | 'view' | 'console' | 'tasks' | 'inventory' | 'relationships' | 'reputation'
   | 'decisions' | 'messages' | 'memory';
 
 const TABS: { id: TabId; label: string }[] = [
   { id: 'overview', label: 'Overview' },
+  // "View" sits between Overview and Console so the 3D POV is the first
+  // thing the user reaches after the summary card — Mindcraft-style.
+  { id: 'view', label: 'View' },
   { id: 'console', label: 'Console' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'inventory', label: 'Inventory' },
@@ -41,7 +47,7 @@ const TABS: { id: TabId; label: string }[] = [
 
 function isTabId(s: string | null): s is TabId {
   return (
-    s === 'overview' || s === 'console' || s === 'tasks' || s === 'inventory'
+    s === 'overview' || s === 'view' || s === 'console' || s === 'tasks' || s === 'inventory'
     || s === 'relationships' || s === 'reputation' || s === 'decisions'
     || s === 'messages' || s === 'memory'
   );
@@ -294,20 +300,32 @@ export default function BotProfilePage() {
         </div>
       </div>
 
-      {/* ═══ TAB CONTENT ═══ */}
-      <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="p-6 lg:p-8 space-y-5">
-        {activeTab === 'overview' && <BotTabOverview botName={bot.name} personality={bot.personality} />}
-        {activeTab === 'console' && <BotTabConsole botName={bot.name} personality={bot.personality} />}
-        {activeTab === 'tasks' && <BotTabTasks botName={bot.name} />}
-        {activeTab === 'inventory' && <BotTabInventory botName={bot.name} personality={bot.personality} />}
-        {activeTab === 'relationships' && (
-          <BotTabRelationships botName={bot.name} personality={bot.personality} />
-        )}
-        {activeTab === 'reputation' && <BotTabReputation botName={bot.name} />}
-        {activeTab === 'decisions' && <DecisionTimeline botName={bot.name} />}
-        {activeTab === 'messages' && <MessagingPanel botName={bot.name} />}
-        {activeTab === 'memory' && <SocialMemoryPanel botName={bot.name} />}
-      </div>
+      {/* ═══ TAB CONTENT ═══
+          Wrapped in BotPollingProvider so every tab shares one /api/bots/:name/detailed
+          poll (3s) instead of each tab running its own setInterval. The page's
+          own header-state polling above still runs because the header lives
+          outside this provider and renders before children mount. */}
+      <BotPollingProvider botName={bot.name}>
+        <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="p-6 lg:p-8 space-y-5">
+          {activeTab === 'overview' && (
+            <>
+              <BotTabOverview botName={bot.name} personality={bot.personality} />
+              <LLMTraceTimeline botName={bot.name} />
+            </>
+          )}
+          {activeTab === 'view' && <BotTabViewer botName={bot.name} />}
+          {activeTab === 'console' && <BotTabConsole botName={bot.name} personality={bot.personality} />}
+          {activeTab === 'tasks' && <BotTabTasks botName={bot.name} />}
+          {activeTab === 'inventory' && <BotTabInventory botName={bot.name} personality={bot.personality} />}
+          {activeTab === 'relationships' && (
+            <BotTabRelationships botName={bot.name} personality={bot.personality} />
+          )}
+          {activeTab === 'reputation' && <BotTabReputation botName={bot.name} />}
+          {activeTab === 'decisions' && <DecisionTimeline botName={bot.name} />}
+          {activeTab === 'messages' && <MessagingPanel botName={bot.name} />}
+          {activeTab === 'memory' && <SocialMemoryPanel botName={bot.name} />}
+        </div>
+      </BotPollingProvider>
     </div>
   );
 }

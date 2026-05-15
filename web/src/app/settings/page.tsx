@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { motion } from 'framer-motion';
 import { SettingsTabs, type SettingsTabDef } from '@/components/settings/SettingsTabs';
@@ -124,7 +124,7 @@ function SettingsPageInner() {
         />
 
         <div>
-          {activeTab === 'ai' && <AiProviderTab />}
+          {activeTab === 'ai' && <AiProviderTab onDirtyChange={makeDirtyHandler('ai')} />}
           {activeTab === 'behavior' && (
             <SettingsSection
               section="behavior"
@@ -163,9 +163,24 @@ function SettingsPageInner() {
   );
 }
 
-// ─── AI provider tab (existing logic, untouched) ─────────────────────────
+// ─── AI provider tab ────────────────────────────────────────────────────
 
-function AiProviderTab() {
+interface AiProviderTabProps {
+  onDirtyChange?: (dirty: boolean) => void;
+}
+
+/**
+ * Canonical-form serialization for dirty comparison.
+ * Object keys sorted recursively so reordering doesn't show as dirty.
+ */
+function stableStringify(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const keys = Object.keys(value as Record<string, unknown>).sort();
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${stableStringify((value as Record<string, unknown>)[k])}`).join(',')}}`;
+}
+
+function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [usage, setUsage] = useState<UsageMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -240,6 +255,14 @@ function AiProviderTab() {
   // Route editing
   const [editRoutes, setEditRoutes] = useState<Record<string, RouteConfig>>({});
 
+  // Baseline snapshots for dirty detection. We compare current form state to
+  // these values; anything different counts as unsaved edits.
+  const PRISTINE_NEW_PROVIDER = useMemo(
+    () => ({ name: 'gemini', apiKey: '', model: '', maxConcurrent: 3 }),
+    [],
+  );
+  const [routesBaseline, setRoutesBaseline] = useState<string>(stableStringify({}));
+
   const fetchSettings = useCallback(async () => {
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
@@ -251,6 +274,7 @@ function AiProviderTab() {
       setSettings(settingsRes);
       setUsage(usageRes.usage);
       setEditRoutes(settingsRes.routes || {});
+      setRoutesBaseline(stableStringify(settingsRes.routes || {}));
       setAiEnabled(enabledRes.enabled !== false);
     } catch {
       showFeedback('error', 'Failed to load settings');
@@ -286,6 +310,30 @@ function AiProviderTab() {
   };
 
   useEffect(() => { fetchSettings(); }, [fetchSettings]);
+
+  // Dirty tracking: form is dirty when either the add-provider form has any
+  // edits OR the routes table differs from the last-saved baseline.
+  const newProviderDirty = useMemo(
+    () => stableStringify(newProvider) !== stableStringify(PRISTINE_NEW_PROVIDER),
+    [newProvider, PRISTINE_NEW_PROVIDER],
+  );
+  const routesDirty = useMemo(
+    () => stableStringify(editRoutes) !== routesBaseline,
+    [editRoutes, routesBaseline],
+  );
+  const dirty = newProviderDirty || routesDirty;
+  const lastDirtyRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (lastDirtyRef.current === dirty) return;
+    lastDirtyRef.current = dirty;
+    onDirtyChange?.(dirty);
+  }, [dirty, onDirtyChange]);
+  // Clear dirty signal on unmount so the parent's set doesn't leak.
+  useEffect(() => {
+    return () => {
+      if (lastDirtyRef.current) onDirtyChange?.(false);
+    };
+  }, [onDirtyChange]);
 
   const showFeedback = (type: 'success' | 'error', message: string) => {
     setFeedback({ type, message });
@@ -377,6 +425,8 @@ function AiProviderTab() {
       const data = await res.json();
       if (data.success) {
         setSettings(data.settings);
+        // Reset baseline so dirty clears after a successful save.
+        setRoutesBaseline(stableStringify(data.settings?.routes ?? editRoutes));
         showFeedback('success', 'Routes saved');
       }
     } catch {

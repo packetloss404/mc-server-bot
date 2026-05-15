@@ -1,7 +1,12 @@
 'use client';
 
 import { useEffect, useRef, useState, useCallback } from 'react';
-import { useBotStore, useSchematicPlacementStore } from '@/lib/store';
+import {
+  useBotStore,
+  useSchematicPlacementStore,
+  useMovementTrailStore,
+  type TrailPoint,
+} from '@/lib/store';
 import { useMapOverlayStore } from '@/lib/mapStore';
 import { api, type SchematicInfo } from '@/lib/api';
 import { getPersonalityColor, PLAYER_COLOR, STATE_COLORS } from '@/lib/constants';
@@ -17,14 +22,24 @@ import {
   drawMissionOverlays,
   drawSquadOverlays,
 } from '@/lib/mapDrawing';
-import { MapToolbar, ZoneEditorDialog, RouteNameDialog, MapContextMenu } from '@/components/map';
+import {
+  MapToolbar,
+  ZoneEditorDialog,
+  RouteNameDialog,
+  MapContextMenu,
+  MapLayerToggle,
+  DEFAULT_LAYERS,
+  encodeLayers,
+  decodeLayers,
+  type LayerState,
+} from '@/components/map';
 
 const MIN_SCALE = 0.5;
 const MAX_SCALE = 10;
-const TRAIL_LENGTH = 80;
 const TERRAIN_RADIUS = 96;
 const TERRAIN_STEP = 2;
 const ZOOM_SENSITIVITY = 0.002; // Normalized zoom speed
+const MARKER_HIT_RADIUS = 10; // pixels — for right-click detection
 
 interface MapEntity {
   name: string;
@@ -34,6 +49,49 @@ interface MapEntity {
   type: 'bot' | 'player';
   state?: string;
   personality?: string;
+}
+
+// ─── URL hash helpers ────────────────────────────────────────────────────
+
+interface HashState {
+  x?: number;
+  z?: number;
+  zoom?: number;
+  layers?: LayerState;
+  follow?: string;
+}
+
+function parseHash(hash: string): HashState {
+  // Strip leading '#'
+  const raw = hash.startsWith('#') ? hash.slice(1) : hash;
+  if (!raw) return {};
+  const params = new URLSearchParams(raw);
+  const out: HashState = {};
+  const xs = params.get('x');
+  const zs = params.get('z');
+  const zoom = params.get('zoom');
+  const layers = params.get('layers');
+  const follow = params.get('follow');
+  if (xs && !Number.isNaN(Number(xs))) out.x = Number(xs);
+  if (zs && !Number.isNaN(Number(zs))) out.z = Number(zs);
+  if (zoom && !Number.isNaN(Number(zoom))) out.zoom = Number(zoom);
+  if (layers) {
+    const decoded = decodeLayers(layers);
+    if (decoded) out.layers = decoded;
+  }
+  if (follow) out.follow = follow;
+  return out;
+}
+
+function buildHash(state: HashState): string {
+  const params = new URLSearchParams();
+  if (state.x !== undefined) params.set('x', Math.round(state.x).toString());
+  if (state.z !== undefined) params.set('z', Math.round(state.z).toString());
+  if (state.zoom !== undefined) params.set('zoom', state.zoom.toFixed(2));
+  if (state.layers) params.set('layers', encodeLayers(state.layers));
+  if (state.follow) params.set('follow', state.follow);
+  const s = params.toString();
+  return s ? `#${s}` : '';
 }
 
 export default function MapPage() {
@@ -65,6 +123,14 @@ export default function MapPage() {
   const setMissions = useMapOverlayStore((s) => s.setMissions);
   const setSquads = useMapOverlayStore((s) => s.setSquads);
 
+  // Movement trails
+  const pushTrailPoint = useMovementTrailStore((s) => s.pushPoint);
+
+  // ─── Layer state (URL-hash-driven) ─────────────────────────────────
+  const [layers, setLayers] = useState<LayerState>(DEFAULT_LAYERS);
+  const layersRef = useRef(layers);
+  layersRef.current = layers;
+
   // Use refs for all values the draw loop needs — avoids effect restarts
   const offsetRef = useRef({ x: 0, y: 0 });
   const scaleRef = useRef(3);
@@ -72,14 +138,28 @@ export default function MapPage() {
   const dragStartRef = useRef({ x: 0, y: 0 });
   const hoveredRef = useRef<string | null>(null);
   const selectedRef = useRef<string | null>(null);
-  const showRef = useRef({ bots: true, players: true, trails: true, grid: true, coords: true, terrain: true, zones: true, routes: true, markers: true });
+  // Toolbar-side overlays (terrain, grid, coords) are separate from the layer panel.
+  const auxShowRef = useRef({ grid: true, coords: true, terrain: true });
   const botsRef = useRef(bots);
   const playersRef = useRef(players);
-  const trails = useRef<Map<string, { x: number; z: number }[]>>(new Map());
   const entityPositions = useRef<Map<string, { sx: number; sy: number; radius: number }>>(new Map());
   const terrainCanvas = useRef<OffscreenCanvas | null>(null);
   const terrainMeta = useRef<{ cx: number; cz: number; radius: number } | null>(null);
   const initializedRef = useRef(false);
+  const hashInitializedRef = useRef(false);
+
+  // Multi-select rectangle (Shift+drag) state — all refs for the draw loop.
+  const marqueeDraggingRef = useRef(false);
+  const marqueeStartRef = useRef<{ x: number; y: number } | null>(null);
+  const marqueeEndRef = useRef<{ x: number; y: number } | null>(null);
+  // Set of lowercase bot names currently marquee-selected.
+  const [marqueeSelection, setMarqueeSelection] = useState<Set<string>>(new Set());
+  const marqueeSelectionRef = useRef(marqueeSelection);
+  marqueeSelectionRef.current = marqueeSelection;
+
+  // Follow target — recenter on every position update of this bot. null = off.
+  const followRef = useRef<string | null>(null);
+  const [followName, setFollowName] = useState<string | null>(null);
 
   // Refs for overlay data (avoids draw loop restarts)
   const markersRef = useRef(markers);
@@ -94,7 +174,7 @@ export default function MapPage() {
 
   // State just for UI re-renders (toolbar, sidebar)
   const [, forceRender] = useState(0);
-  const kick = () => forceRender((n) => n + 1);
+  const kick = useCallback(() => forceRender((n) => n + 1), []);
 
   const [terrainStatus, setTerrainStatus] = useState<'idle' | 'loading' | 'loaded' | 'error'>('idle');
 
@@ -120,7 +200,7 @@ export default function MapPage() {
   selectedSchematicRef.current = selectedSchematic;
   schematicsRef.current = schematics;
 
-  // Load schematics when tool activates or on mount
+  // Load schematics on mount
   useEffect(() => {
     let cancelled = false;
     api.getSchematics().then((res) => {
@@ -164,10 +244,58 @@ export default function MapPage() {
       setSquads(squadsRes.squads);
     };
     load();
-    // Refresh overlay data periodically
     const interval = setInterval(load, 30000);
     return () => clearInterval(interval);
   }, [setMarkers, setZones, setRoutes, setMissions, setSquads]);
+
+  // ─── Hash → state (mount only) ────────────────────────────────────
+  useEffect(() => {
+    if (hashInitializedRef.current) return;
+    const parsed = parseHash(window.location.hash);
+    if (parsed.layers) setLayers(parsed.layers);
+    if (parsed.zoom !== undefined) {
+      scaleRef.current = Math.min(MAX_SCALE, Math.max(MIN_SCALE, parsed.zoom));
+    }
+    if (parsed.x !== undefined && parsed.z !== undefined) {
+      offsetRef.current = {
+        x: -parsed.x * scaleRef.current,
+        y: -parsed.z * scaleRef.current,
+      };
+      initializedRef.current = true;
+    }
+    if (parsed.follow) {
+      followRef.current = parsed.follow;
+      setFollowName(parsed.follow);
+    }
+    hashInitializedRef.current = true;
+    kick();
+  }, [kick]);
+
+  // ─── state → hash (debounced 250ms) ────────────────────────────────
+  const hashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const writeHashSoon = useCallback(() => {
+    if (!hashInitializedRef.current) return;
+    if (hashTimerRef.current) clearTimeout(hashTimerRef.current);
+    hashTimerRef.current = setTimeout(() => {
+      const wx = -offsetRef.current.x / scaleRef.current;
+      const wz = -offsetRef.current.y / scaleRef.current;
+      const next = buildHash({
+        x: wx,
+        z: wz,
+        zoom: scaleRef.current,
+        layers: layersRef.current,
+        follow: followRef.current ?? undefined,
+      });
+      // Use replaceState to avoid polluting history.
+      const url = `${window.location.pathname}${window.location.search}${next}`;
+      window.history.replaceState(null, '', url);
+    }, 250);
+  }, []);
+
+  // Write the hash whenever layers or follow change.
+  useEffect(() => {
+    writeHashSoon();
+  }, [layers, followName, writeHashSoon]);
 
   // Load terrain
   const loadTerrain = useCallback(async (centerX: number, centerZ: number) => {
@@ -202,32 +330,49 @@ export default function MapPage() {
     }
   }, []);
 
-  // Track position history
+  // Push every position update into the movement-trail ring buffer + handle follow.
   useEffect(() => {
-    for (const e of [...bots, ...players.filter((p) => p.isOnline)]) {
-      if (!e.position) continue;
-      const trail = trails.current.get(e.name) || [];
-      const last = trail[trail.length - 1];
-      if (!last || Math.abs(last.x - e.position.x) > 0.5 || Math.abs(last.z - e.position.z) > 0.5) {
-        trail.push({ x: e.position.x, z: e.position.z });
-        if (trail.length > TRAIL_LENGTH) trail.shift();
-        trails.current.set(e.name, trail);
+    for (const bot of bots) {
+      if (!bot.position) continue;
+      pushTrailPoint(bot.name, bot.position.x, bot.position.z);
+    }
+    for (const p of players) {
+      if (!p.isOnline || !p.position) continue;
+      // Players share the trail store too — keyed by name.
+      pushTrailPoint(p.name, p.position.x, p.position.z);
+    }
+    // Follow logic: recenter on every position tick of the followed bot.
+    const followTarget = followRef.current;
+    if (followTarget) {
+      const lower = followTarget.toLowerCase();
+      const target =
+        bots.find((b) => b.name.toLowerCase() === lower) ??
+        players.find((p) => p.name.toLowerCase() === lower);
+      if (target?.position) {
+        offsetRef.current = {
+          x: -target.position.x * scaleRef.current,
+          y: -target.position.z * scaleRef.current,
+        };
       }
     }
-  }, [bots, players]);
+  }, [bots, players, pushTrailPoint]);
 
-  // Center on first entity once
+  // Center on first entity once (only if hash didn't already position us)
   useEffect(() => {
     if (initializedRef.current) return;
+    if (!hashInitializedRef.current) return;
     const allEntities = [...bots, ...players.filter((p) => p.isOnline)];
     const first = allEntities.find((e) => e.position);
     if (first?.position) {
-      offsetRef.current = { x: -first.position.x * scaleRef.current, y: -first.position.z * scaleRef.current };
+      offsetRef.current = {
+        x: -first.position.x * scaleRef.current,
+        y: -first.position.z * scaleRef.current,
+      };
       initializedRef.current = true;
       loadTerrain(first.position.x, first.position.z);
       kick();
     }
-  }, [bots, players, loadTerrain]);
+  }, [bots, players, loadTerrain, kick]);
 
   // Single stable draw loop — never restarts
   useEffect(() => {
@@ -246,7 +391,6 @@ export default function MapPage() {
       const w = container.clientWidth;
       const h = container.clientHeight;
 
-      // Only resize canvas when container size changes
       if (w !== prevW || h !== prevH) {
         canvas.width = w * dpr;
         canvas.height = h * dpr;
@@ -260,11 +404,13 @@ export default function MapPage() {
 
       const offset = offsetRef.current;
       const scale = scaleRef.current;
-      const show = showRef.current;
+      const aux = auxShowRef.current;
+      const layerState = layersRef.current;
       const bots = botsRef.current;
       const players = playersRef.current;
       const hovered = hoveredRef.current;
       const selected = selectedRef.current;
+      const marquee = marqueeSelectionRef.current;
 
       const cx = w / 2;
       const cy = h / 2;
@@ -274,7 +420,7 @@ export default function MapPage() {
       ctx.fillRect(0, 0, w, h);
 
       // Terrain
-      if (show.terrain && terrainCanvas.current && terrainMeta.current) {
+      if (aux.terrain && terrainCanvas.current && terrainMeta.current) {
         const tm = terrainMeta.current;
         const tc = terrainCanvas.current;
         const { sx: screenX, sy: screenY } = worldToScreen(tm.cx - tm.radius, tm.cz - tm.radius, cx, cy, scale, offset);
@@ -285,10 +431,10 @@ export default function MapPage() {
       }
 
       // Grid
-      if (show.grid) {
+      if (aux.grid) {
         const gridSize = 16 * scale;
         if (gridSize > 4) {
-          const hasTerrain = show.terrain && terrainCanvas.current;
+          const hasTerrain = aux.terrain && terrainCanvas.current;
           ctx.strokeStyle = hasTerrain ? '#00000030' : '#ffffff12';
           ctx.lineWidth = 1;
           const startX = ((cx + offset.x) % gridSize + gridSize) % gridSize;
@@ -313,7 +459,7 @@ export default function MapPage() {
       }
 
       // Origin label
-      if (show.coords) {
+      if (aux.coords) {
         const { sx: ox, sy: oy } = worldToScreen(0, 0, cx, cy, scale, offset);
         if (ox >= 0 && ox <= w && oy >= 0 && oy <= h) {
           ctx.fillStyle = '#ffffff40';
@@ -324,31 +470,31 @@ export default function MapPage() {
       }
 
       // ── Draw saved zones ──
-      if (show.zones) {
+      if (layerState.zones) {
         drawZones(ctx, zonesRef.current, cx, cy, scale, offset);
       }
 
       // ── Draw saved routes ──
-      if (show.routes) {
+      if (layerState.routes) {
         drawRoutes(ctx, routesRef.current, cx, cy, scale, offset);
       }
 
       // ── Draw saved markers ──
-      if (show.markers) {
+      if (layerState.markers) {
         drawMarkers(ctx, markersRef.current, cx, cy, scale, offset);
       }
 
       // Collect entities
       const entities: MapEntity[] = [];
       const drawnNames = new Set<string>();
-      if (show.bots) {
+      if (layerState.bots) {
         for (const bot of bots) {
           if (!bot.position) continue;
           drawnNames.add(bot.name.toLowerCase());
           entities.push({ name: bot.name, x: bot.position.x, z: bot.position.z, color: getPersonalityColor(bot.personality), type: 'bot', state: bot.state, personality: bot.personality });
         }
       }
-      if (show.players) {
+      if (layerState.players) {
         for (const player of players) {
           if (!player.isOnline || !player.position || drawnNames.has(player.name.toLowerCase())) continue;
           entities.push({ name: player.name, x: player.position.x, z: player.position.z, color: PLAYER_COLOR, type: 'player' });
@@ -357,37 +503,37 @@ export default function MapPage() {
 
       entityPositions.current.clear();
 
-      // Trails
-      if (show.trails) {
+      // ── Movement trails (from useMovementTrailStore) ──
+      if (layerState.trails) {
+        const trails = useMovementTrailStore.getState().trailsByBot;
         for (const entity of entities) {
-          const trail = trails.current.get(entity.name) || [];
-          if (trail.length > 1) {
-            for (let i = 1; i < trail.length; i++) {
-              const alpha = Math.floor((i / trail.length) * 80).toString(16).padStart(2, '0');
-              ctx.beginPath();
-              ctx.strokeStyle = entity.color + alpha;
-              ctx.lineWidth = entity.type === 'player' ? 1.5 : 2;
-              const prev = worldToScreen(trail[i - 1].x, trail[i - 1].z, cx, cy, scale, offset);
-              const cur = worldToScreen(trail[i].x, trail[i].z, cx, cy, scale, offset);
-              ctx.moveTo(prev.sx, prev.sy);
-              ctx.lineTo(cur.sx, cur.sy);
-              ctx.stroke();
-            }
-          }
+          const trail = trails[entity.name.toLowerCase()];
+          if (!trail || trail.length < 2) continue;
+          drawTrail(ctx, trail, entity.color, entity.type === 'player' ? 1.5 : 2, cx, cy, scale, offset);
         }
       }
 
-      // Entity markers
+      // ── Entity markers ──
       for (const entity of entities) {
         const { sx, sy } = worldToScreen(entity.x, entity.z, cx, cy, scale, offset);
         if (sx < -30 || sx > w + 30 || sy < -30 || sy > h + 30) continue;
 
         const isHovered = hovered === entity.name;
         const isSelected = selected === entity.name;
+        const isMarquee = marquee.has(entity.name.toLowerCase());
         const baseR = entity.type === 'bot' ? 8 : 6;
-        const r = isHovered || isSelected ? baseR + 2 : baseR;
+        const r = isHovered || isSelected || isMarquee ? baseR + 2 : baseR;
 
         entityPositions.current.set(entity.name, { sx, sy, radius: r + 4 });
+
+        // Marquee selection ring (bright teal).
+        if (isMarquee) {
+          ctx.beginPath();
+          ctx.arc(sx, sy, r + 8, 0, Math.PI * 2);
+          ctx.strokeStyle = '#22D3EE';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+        }
 
         if (isSelected || isHovered) {
           ctx.beginPath(); ctx.arc(sx, sy, r + 6, 0, Math.PI * 2); ctx.fillStyle = entity.color + '20'; ctx.fill();
@@ -448,84 +594,105 @@ export default function MapPage() {
         drawRoutePreview(ctx, rwp, cx, cy, scale, offset);
       }
 
-      // ── Pending building placements (always rendered) ──
-      const pendings = pendingRef.current;
-      const schematicList = schematicsRef.current;
-      const schematicByFile = new Map(schematicList.map((s) => [s.filename, s] as const));
-      if (pendings.length > 0) {
-        for (let i = 0; i < pendings.length; i++) {
-          const p = pendings[i];
-          const sch = schematicByFile.get(p.schematicFile);
-          const sizeX = sch?.size.x ?? 1;
-          const sizeZ = sch?.size.z ?? 1;
-          const tl = worldToScreen(p.origin.x, p.origin.z, cx, cy, scale, offset);
-          const sw = sizeX * scale;
-          const sh = sizeZ * scale;
+      // ── Pending building placements (gated by Builds layer) ──
+      if (layerState.builds) {
+        const pendings = pendingRef.current;
+        const schematicList = schematicsRef.current;
+        const schematicByFile = new Map(schematicList.map((s) => [s.filename, s] as const));
+        if (pendings.length > 0) {
+          for (let i = 0; i < pendings.length; i++) {
+            const p = pendings[i];
+            const sch = schematicByFile.get(p.schematicFile);
+            const sizeX = sch?.size.x ?? 1;
+            const sizeZ = sch?.size.z ?? 1;
+            const tl = worldToScreen(p.origin.x, p.origin.z, cx, cy, scale, offset);
+            const sw = sizeX * scale;
+            const sh = sizeZ * scale;
 
-          ctx.save();
-          // Amber outlined footprint (distinct from zones/routes/markers).
-          ctx.fillStyle = '#F59E0B22';
-          ctx.fillRect(tl.sx, tl.sy, sw, sh);
-          ctx.strokeStyle = '#F59E0BC0';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([6, 4]);
-          ctx.strokeRect(tl.sx, tl.sy, sw, sh);
-          ctx.setLineDash([]);
+            ctx.save();
+            ctx.fillStyle = '#F59E0B22';
+            ctx.fillRect(tl.sx, tl.sy, sw, sh);
+            ctx.strokeStyle = '#F59E0BC0';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 4]);
+            ctx.strokeRect(tl.sx, tl.sy, sw, sh);
+            ctx.setLineDash([]);
 
-          // Count label
-          ctx.shadowColor = '#000000';
-          ctx.shadowBlur = 3;
-          ctx.fillStyle = '#F59E0B';
-          ctx.font = 'bold 11px system-ui, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.fillText(`#${i + 1}`, tl.sx + 4, tl.sy + 13);
+            ctx.shadowColor = '#000000';
+            ctx.shadowBlur = 3;
+            ctx.fillStyle = '#F59E0B';
+            ctx.font = 'bold 11px system-ui, sans-serif';
+            ctx.textAlign = 'left';
+            ctx.fillText(`#${i + 1}`, tl.sx + 4, tl.sy + 13);
 
-          const labelName = p.label || p.schematicFile;
-          ctx.fillStyle = '#ffffffCC';
-          ctx.font = '9px system-ui, sans-serif';
-          ctx.fillText(labelName, tl.sx + 4, tl.sy + sh - 4);
-          ctx.restore();
+            const labelName = p.label || p.schematicFile;
+            ctx.fillStyle = '#ffffffCC';
+            ctx.font = '9px system-ui, sans-serif';
+            ctx.fillText(labelName, tl.sx + 4, tl.sy + sh - 4);
+            ctx.restore();
+          }
+        }
+
+        // Place-building cursor preview also gated by Builds layer
+        if (activeToolRef.current === 'place-building' && cursorWorldRef.current) {
+          const selFile = selectedSchematicRef.current;
+          const sch = selFile ? schematicByFile.get(selFile) : undefined;
+          if (sch) {
+            const sizeX = sch.size.x;
+            const sizeZ = sch.size.z;
+            const ox = Math.floor(cursorWorldRef.current.x);
+            const oz = Math.floor(cursorWorldRef.current.z);
+            const tl = worldToScreen(ox, oz, cx, cy, scale, offset);
+            const sw = sizeX * scale;
+            const sh = sizeZ * scale;
+
+            ctx.save();
+            ctx.fillStyle = '#8B5CF622';
+            ctx.fillRect(tl.sx, tl.sy, sw, sh);
+            ctx.strokeStyle = '#8B5CF6E0';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([4, 4]);
+            ctx.strokeRect(tl.sx, tl.sy, sw, sh);
+            ctx.setLineDash([]);
+
+            ctx.shadowColor = '#000000';
+            ctx.shadowBlur = 3;
+            ctx.fillStyle = '#C4B5FD';
+            ctx.font = '10px monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(
+              `${sizeX}×${sizeZ}  @ ${ox}, ${oz}`,
+              tl.sx + sw / 2,
+              tl.sy + sh / 2 + 4,
+            );
+            ctx.restore();
+          }
         }
       }
 
-      // ── Place-building cursor preview ──
-      if (activeToolRef.current === 'place-building' && cursorWorldRef.current) {
-        const selFile = selectedSchematicRef.current;
-        const sch = selFile ? schematicByFile.get(selFile) : undefined;
-        if (sch) {
-          const sizeX = sch.size.x;
-          const sizeZ = sch.size.z;
-          const ox = Math.floor(cursorWorldRef.current.x);
-          const oz = Math.floor(cursorWorldRef.current.z);
-          const tl = worldToScreen(ox, oz, cx, cy, scale, offset);
-          const sw = sizeX * scale;
-          const sh = sizeZ * scale;
-
-          ctx.save();
-          ctx.fillStyle = '#8B5CF622';
-          ctx.fillRect(tl.sx, tl.sy, sw, sh);
-          ctx.strokeStyle = '#8B5CF6E0';
-          ctx.lineWidth = 2;
-          ctx.setLineDash([4, 4]);
-          ctx.strokeRect(tl.sx, tl.sy, sw, sh);
-          ctx.setLineDash([]);
-
-          ctx.shadowColor = '#000000';
-          ctx.shadowBlur = 3;
-          ctx.fillStyle = '#C4B5FD';
-          ctx.font = '10px monospace';
-          ctx.textAlign = 'center';
-          ctx.fillText(
-            `${sizeX}×${sizeZ}  @ ${ox}, ${oz}`,
-            tl.sx + sw / 2,
-            tl.sy + sh / 2 + 4,
-          );
-          ctx.restore();
-        }
+      // ── Marquee rectangle (Shift+drag) ──
+      if (marqueeDraggingRef.current && marqueeStartRef.current && marqueeEndRef.current) {
+        const sx1 = marqueeStartRef.current.x;
+        const sy1 = marqueeStartRef.current.y;
+        const sx2 = marqueeEndRef.current.x;
+        const sy2 = marqueeEndRef.current.y;
+        const rx = Math.min(sx1, sx2);
+        const ry = Math.min(sy1, sy2);
+        const rw = Math.abs(sx2 - sx1);
+        const rh = Math.abs(sy2 - sy1);
+        ctx.save();
+        ctx.fillStyle = '#22D3EE22';
+        ctx.fillRect(rx, ry, rw, rh);
+        ctx.strokeStyle = '#22D3EE';
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 4]);
+        ctx.strokeRect(rx, ry, rw, rh);
+        ctx.setLineDash([]);
+        ctx.restore();
       }
 
       // HUD overlays
-      if (show.coords) {
+      if (aux.coords) {
         ctx.fillStyle = '#00000080'; ctx.fillRect(8, h - 28, 130, 20);
         ctx.fillStyle = '#ffffff80'; ctx.font = '10px monospace'; ctx.textAlign = 'left';
         ctx.fillText(`Center: ${Math.round(-offset.x / scale)}, ${Math.round(-offset.y / scale)}`, 14, h - 14);
@@ -533,6 +700,18 @@ export default function MapPage() {
       ctx.fillStyle = '#00000080'; ctx.fillRect(w - 50, h - 28, 42, 20);
       ctx.fillStyle = '#ffffff60'; ctx.font = '10px monospace'; ctx.textAlign = 'right';
       ctx.fillText(`${scale.toFixed(1)}x`, w - 12, h - 14);
+
+      // Follow badge
+      if (followRef.current) {
+        const text = `Following ${followRef.current}`;
+        ctx.font = '10px system-ui, sans-serif';
+        const tw = ctx.measureText(text).width + 16;
+        ctx.fillStyle = '#22D3EECC';
+        ctx.fillRect(8, 8, tw, 18);
+        ctx.fillStyle = '#0a0a0c';
+        ctx.textAlign = 'left';
+        ctx.fillText(text, 16, 20);
+      }
 
       // Tool hint
       const tool = activeToolRef.current;
@@ -560,9 +739,32 @@ export default function MapPage() {
     return () => cancelAnimationFrame(animFrame);
   }, []); // Empty deps — loop runs forever, reads from refs
 
-  // Input handlers — all mutate refs directly, no state updates during drag/hover
+  // ─── Hit-testing helpers ───────────────────────────────────────────
+
+  const hitTestEntity = (mx: number, my: number): string | null => {
+    for (const [name, pos] of entityPositions.current) {
+      const dx = mx - pos.sx;
+      const dy = my - pos.sy;
+      if (dx * dx + dy * dy < pos.radius * pos.radius) return name;
+    }
+    return null;
+  };
+
+  const hitTestMarker = (mx: number, my: number, cx: number, cy: number): string | null => {
+    const scale = scaleRef.current;
+    const offset = offsetRef.current;
+    for (const m of markersRef.current) {
+      const { sx, sy } = worldToScreen(m.x, m.z, cx, cy, scale, offset);
+      const dx = mx - sx;
+      const dy = my - sy;
+      if (dx * dx + dy * dy < MARKER_HIT_RADIUS * MARKER_HIT_RADIUS) return m.id;
+    }
+    return null;
+  };
+
+  // ─── Input handlers ────────────────────────────────────────────────
+
   const handleMouseDown = (e: React.MouseEvent) => {
-    // Close context menu on any click
     closeContextMenu();
 
     const canvas = canvasRef.current;
@@ -575,6 +777,14 @@ export default function MapPage() {
     const cx = w / 2;
     const cy = h / 2;
     const tool = activeToolRef.current;
+
+    // Shift+drag → marquee selection (highest priority in select mode).
+    if (e.shiftKey && tool === 'select') {
+      marqueeDraggingRef.current = true;
+      marqueeStartRef.current = { x: mx, y: my };
+      marqueeEndRef.current = { x: mx, y: my };
+      return;
+    }
 
     // Zone drawing mode: start drag
     if (tool === 'draw-zone') {
@@ -601,14 +811,12 @@ export default function MapPage() {
       const oz = Math.floor(wz);
       const labelBase = selFile.replace(/\.(schem|schematic)$/i, '');
       const label = `${labelBase} #${pendingRef.current.length + 1}`;
-      // Provisional Y — overwritten when the terrain height request comes back.
       const provisionalY = 64;
       const id = addPending({
         schematicFile: selFile,
         origin: { x: ox, y: provisionalY, z: oz },
         label,
       });
-      // Fire-and-forget terrain height lookup; patch origin.y when it returns.
       api.getTerrainHeight(ox, oz).then((res) => {
         useSchematicPlacementStore.setState((state) => {
           if (!state.pending.some((p) => p.id === id)) return state;
@@ -625,14 +833,16 @@ export default function MapPage() {
     }
 
     // Select tool: check entity clicks
-    for (const [name, pos] of entityPositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) {
-        selectedRef.current = selectedRef.current === name ? null : name;
-        kick();
-        return;
-      }
+    const hitName = hitTestEntity(mx, my);
+    if (hitName) {
+      selectedRef.current = selectedRef.current === hitName ? null : hitName;
+      kick();
+      return;
+    }
+
+    // Click on empty map clears the marquee selection.
+    if (marqueeSelectionRef.current.size > 0) {
+      setMarqueeSelection(new Set());
     }
 
     draggingRef.current = true;
@@ -649,6 +859,12 @@ export default function MapPage() {
     const h = rect.height;
     const cx = w / 2;
     const cy = h / 2;
+
+    // Marquee drag — update end point.
+    if (marqueeDraggingRef.current) {
+      marqueeEndRef.current = { x: mx, y: my };
+      return;
+    }
 
     // Zone drawing: update preview
     if (activeToolRef.current === 'draw-zone' && zoneDrawStartRef.current) {
@@ -667,19 +883,50 @@ export default function MapPage() {
 
     if (draggingRef.current) {
       offsetRef.current = { x: e.clientX - dragStartRef.current.x, y: e.clientY - dragStartRef.current.y };
+      // Manual pan stops follow mode.
+      if (followRef.current) {
+        followRef.current = null;
+        setFollowName(null);
+      }
+      writeHashSoon();
       return;
     }
 
-    let found: string | null = null;
-    for (const [name, pos] of entityPositions.current) {
-      const dx = mx - pos.sx;
-      const dy = my - pos.sy;
-      if (dx * dx + dy * dy < pos.radius * pos.radius) { found = name; break; }
-    }
-    hoveredRef.current = found;
+    hoveredRef.current = hitTestEntity(mx, my);
   };
 
-  const handleMouseUp = () => {
+  const handleMouseUp = (e?: React.MouseEvent) => {
+    // Finish marquee selection.
+    if (marqueeDraggingRef.current) {
+      const start = marqueeStartRef.current;
+      const end = marqueeEndRef.current;
+      marqueeDraggingRef.current = false;
+      if (start && end) {
+        const rx1 = Math.min(start.x, end.x);
+        const ry1 = Math.min(start.y, end.y);
+        const rx2 = Math.max(start.x, end.x);
+        const ry2 = Math.max(start.y, end.y);
+        // If the rectangle is essentially a point, treat as a click — don't change selection.
+        if (Math.abs(rx2 - rx1) >= 4 && Math.abs(ry2 - ry1) >= 4) {
+          const selection = new Set<string>();
+          for (const [name, pos] of entityPositions.current) {
+            // Only consider bots — players aren't directly controllable.
+            const lower = name.toLowerCase();
+            const isBot = botsRef.current.some((b) => b.name.toLowerCase() === lower);
+            if (!isBot) continue;
+            if (pos.sx >= rx1 && pos.sx <= rx2 && pos.sy >= ry1 && pos.sy <= ry2) {
+              selection.add(lower);
+            }
+          }
+          setMarqueeSelection(selection);
+        }
+      }
+      marqueeStartRef.current = null;
+      marqueeEndRef.current = null;
+      kick();
+      return;
+    }
+
     // Zone drawing: finish and open dialog
     if (activeToolRef.current === 'draw-zone' && zoneDrawStartRef.current && zoneDrawEndRef.current) {
       const start = zoneDrawStartRef.current;
@@ -694,7 +941,6 @@ export default function MapPage() {
           z2: Math.round(Math.max(start.z, end.z)),
         });
       } else {
-        // Too small, cancel
         setZoneDrawStart(null);
         setZoneDrawEnd(null);
       }
@@ -703,18 +949,17 @@ export default function MapPage() {
 
     if (draggingRef.current) {
       draggingRef.current = false;
-      // Trigger terrain reload check after drag ends
-      if (showRef.current.terrain) {
+      if (auxShowRef.current.terrain) {
         const viewCenterX = -offsetRef.current.x / scaleRef.current;
         const viewCenterZ = -offsetRef.current.y / scaleRef.current;
         loadTerrain(viewCenterX, viewCenterZ);
       }
+      writeHashSoon();
       kick();
     }
   };
 
-  const handleDoubleClick = (e: React.MouseEvent) => {
-    // Route drawing: finish on double-click
+  const handleDoubleClick = () => {
     if (activeToolRef.current === 'draw-route' && routeWaypointsRef.current.length >= 2) {
       openRouteDialog();
       return;
@@ -748,11 +993,20 @@ export default function MapPage() {
       return;
     }
 
+    // Detect bot or marker hit (in that order).
+    const botHit = hitTestEntity(mx, my);
+    // If the hit name is actually a player, fall through to map menu.
+    const isBot =
+      botHit && botsRef.current.some((b) => b.name.toLowerCase() === botHit.toLowerCase());
+    const markerHit = isBot ? null : hitTestMarker(mx, my, cx, cy);
+
     openContextMenu({
       screenX: mx,
       screenY: my,
       worldX: wx,
       worldZ: wz,
+      botName: isBot ? botHit! : undefined,
+      markerId: markerHit ?? undefined,
     });
   };
 
@@ -767,7 +1021,6 @@ export default function MapPage() {
       const mouseX = e.clientX - rect.left;
       const mouseY = e.clientY - rect.top;
 
-      // Normalize delta across browsers/devices
       const rawDelta = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
       const zoomFactor = Math.exp(-rawDelta * ZOOM_SENSITIVITY);
 
@@ -775,7 +1028,6 @@ export default function MapPage() {
       const newScale = Math.min(MAX_SCALE, Math.max(MIN_SCALE, oldScale * zoomFactor));
       const ratio = newScale / oldScale;
 
-      // Adjust offset so the world point under the cursor stays fixed
       const cw = rect.width / 2;
       const ch = rect.height / 2;
       offsetRef.current = {
@@ -783,15 +1035,16 @@ export default function MapPage() {
         y: mouseY - ch - (mouseY - ch - offsetRef.current.y) * ratio,
       };
       scaleRef.current = newScale;
+      writeHashSoon();
       kick();
     };
     container.addEventListener('wheel', onWheel, { passive: false });
     return () => container.removeEventListener('wheel', onWheel);
-  }, []);
+  }, [kick, writeHashSoon]);
 
   // Reload terrain after zoom settles
   useEffect(() => {
-    if (!showRef.current.terrain || !initializedRef.current) return;
+    if (!auxShowRef.current.terrain || !initializedRef.current) return;
     const timer = setTimeout(() => {
       const viewCenterX = -offsetRef.current.x / scaleRef.current;
       const viewCenterZ = -offsetRef.current.y / scaleRef.current;
@@ -802,6 +1055,7 @@ export default function MapPage() {
 
   const centerOn = (x: number, z: number) => {
     offsetRef.current = { x: -x * scaleRef.current, y: -z * scaleRef.current };
+    writeHashSoon();
     kick();
   };
 
@@ -819,18 +1073,67 @@ export default function MapPage() {
     })),
   ];
 
-  const show = showRef.current;
-  const toggleShow = (key: keyof typeof show) => { showRef.current = { ...show, [key]: !show[key] }; kick(); };
+  const aux = auxShowRef.current;
+  const toggleAux = (key: keyof typeof aux) => {
+    auxShowRef.current = { ...aux, [key]: !aux[key] };
+    kick();
+  };
 
   // Cursor style based on tool
   const getCursorClass = () => {
     if (draggingRef.current) return 'cursor-grabbing';
+    if (marqueeDraggingRef.current) return 'cursor-crosshair';
     if (activeTool === 'draw-zone') return 'cursor-crosshair';
     if (activeTool === 'draw-route') return 'cursor-crosshair';
     if (activeTool === 'place-marker') return 'cursor-crosshair';
     if (activeTool === 'place-building') return 'cursor-crosshair';
     if (hoveredRef.current) return 'cursor-pointer';
     return 'cursor-grab';
+  };
+
+  // ─── Selection panel actions ──────────────────────────────────────
+
+  const selectionList = bots.filter((b) => marqueeSelection.has(b.name.toLowerCase()));
+
+  const handleSelectionSendHere = async () => {
+    if (selectionList.length === 0) return;
+    // Send to current view center as a fallback "rally point".
+    const tx = Math.round(-offsetRef.current.x / scaleRef.current);
+    const tz = Math.round(-offsetRef.current.y / scaleRef.current);
+    for (const b of selectionList) {
+      try {
+        await api.walkTo(b.name, tx, null, tz);
+      } catch {
+        // continue
+      }
+    }
+  };
+
+  const handleSelectionPauseAll = async () => {
+    for (const b of selectionList) {
+      try {
+        await api.pauseBot(b.name);
+      } catch {
+        // continue
+      }
+    }
+  };
+
+  const handleSelectionResumeAll = async () => {
+    for (const b of selectionList) {
+      try {
+        await api.resumeBot(b.name);
+      } catch {
+        // continue
+      }
+    }
+  };
+
+  const handleClearSelection = () => setMarqueeSelection(new Set());
+
+  const handleFollow = (name: string) => {
+    followRef.current = name;
+    setFollowName(name);
   };
 
   return (
@@ -840,17 +1143,9 @@ export default function MapPage() {
         <div className="flex items-center gap-4">
           <h1 className="text-sm font-bold text-white">World Map</h1>
           <div className="flex items-center gap-1.5 text-[11px]">
-            <ToggleBtn active={show.terrain} onClick={() => toggleShow('terrain')} label="Terrain" color="#5B8C33" />
-            <ToggleBtn active={show.grid} onClick={() => toggleShow('grid')} label="Grid" />
-            <ToggleBtn active={show.trails} onClick={() => toggleShow('trails')} label="Trails" />
-            <ToggleBtn active={show.coords} onClick={() => toggleShow('coords')} label="Coords" />
-            <span className="w-px h-4 bg-zinc-800 mx-1" />
-            <ToggleBtn active={show.bots} onClick={() => toggleShow('bots')} label="Bots" color="#10B981" />
-            <ToggleBtn active={show.players} onClick={() => toggleShow('players')} label="Players" color="#60A5FA" />
-            <span className="w-px h-4 bg-zinc-800 mx-1" />
-            <ToggleBtn active={show.zones} onClick={() => toggleShow('zones')} label="Zones" color="#8B5CF6" />
-            <ToggleBtn active={show.routes} onClick={() => toggleShow('routes')} label="Routes" color="#F59E0B" />
-            <ToggleBtn active={show.markers} onClick={() => toggleShow('markers')} label="Markers" color="#FFFFFF" />
+            <ToggleBtn active={aux.terrain} onClick={() => toggleAux('terrain')} label="Terrain" color="#5B8C33" />
+            <ToggleBtn active={aux.grid} onClick={() => toggleAux('grid')} label="Grid" />
+            <ToggleBtn active={aux.coords} onClick={() => toggleAux('coords')} label="Coords" />
           </div>
           {terrainStatus === 'loading' && (
             <span className="flex items-center gap-1.5 text-[10px] text-zinc-500">
@@ -879,12 +1174,12 @@ export default function MapPage() {
           </button>
           <span className="w-px h-4 bg-zinc-800" />
           <button
-            onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); kick(); }}
+            onClick={() => { scaleRef.current = Math.min(MAX_SCALE, scaleRef.current * 1.3); writeHashSoon(); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
           >+</button>
           <span className="text-[10px] text-zinc-500 font-mono w-8 text-center">{scaleRef.current.toFixed(1)}x</span>
           <button
-            onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); kick(); }}
+            onClick={() => { scaleRef.current = Math.max(MIN_SCALE, scaleRef.current / 1.3); writeHashSoon(); kick(); }}
             className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-400 text-sm transition-colors"
           >-</button>
         </div>
@@ -1133,8 +1428,38 @@ export default function MapPage() {
             className="w-full h-full"
           />
 
+          {/* Layer toggle panel (top-right) */}
+          <MapLayerToggle layers={layers} onChange={setLayers} />
+
           {/* Context menu */}
-          <MapContextMenu />
+          <MapContextMenu
+            selectedBotNames={Array.from(marqueeSelection)}
+            onFollow={handleFollow}
+            onSetBuildOrigin={(x, z) => {
+              // Default to whatever schematic is selected; if none, no-op.
+              const selFile = selectedSchematicRef.current;
+              if (!selFile) return;
+              const labelBase = selFile.replace(/\.(schem|schematic)$/i, '');
+              const label = `${labelBase} #${pendingRef.current.length + 1}`;
+              const id = addPending({
+                schematicFile: selFile,
+                origin: { x, y: 64, z },
+                label,
+              });
+              api.getTerrainHeight(x, z).then((res) => {
+                useSchematicPlacementStore.setState((state) => {
+                  if (!state.pending.some((p) => p.id === id)) return state;
+                  return {
+                    pending: state.pending.map((p) =>
+                      p.id === id ? { ...p, origin: { ...p.origin, y: res.y } } : p,
+                    ),
+                  };
+                });
+                kick();
+              }).catch(() => {});
+              kick();
+            }}
+          />
 
           {/* Zone editor dialog */}
           <ZoneEditorDialog />
@@ -1142,15 +1467,50 @@ export default function MapPage() {
           {/* Route name dialog */}
           <RouteNameDialog />
 
+          {/* Selection panel (bottom) */}
+          {marqueeSelection.size > 0 && (
+            <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-30 bg-zinc-900/95 border border-teal-500/40 rounded-lg shadow-xl backdrop-blur-sm px-3 py-2 flex items-center gap-2">
+              <span className="text-[11px] font-semibold text-teal-300">
+                [{marqueeSelection.size}] bot{marqueeSelection.size === 1 ? '' : 's'} selected
+              </span>
+              <span className="w-px h-4 bg-zinc-700" />
+              <button
+                onClick={handleSelectionSendHere}
+                className="px-2 py-0.5 text-[11px] rounded bg-teal-500/20 border border-teal-500/40 text-teal-200 hover:bg-teal-500/30 transition-colors"
+                title="Send all selected bots to the current view center"
+              >
+                Send all here
+              </button>
+              <button
+                onClick={handleSelectionPauseAll}
+                className="px-2 py-0.5 text-[11px] rounded bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                Pause all
+              </button>
+              <button
+                onClick={handleSelectionResumeAll}
+                className="px-2 py-0.5 text-[11px] rounded bg-zinc-800 border border-zinc-700 text-zinc-300 hover:bg-zinc-700 transition-colors"
+              >
+                Resume all
+              </button>
+              <button
+                onClick={handleClearSelection}
+                className="px-2 py-0.5 text-[11px] rounded bg-zinc-800 border border-zinc-700 text-zinc-400 hover:text-zinc-200 transition-colors"
+              >
+                Clear
+              </button>
+            </div>
+          )}
+
           <div className="absolute bottom-4 left-4 bg-zinc-900/90 backdrop-blur-sm border border-zinc-800/60 rounded-lg p-3 text-[10px]">
             <p className="text-zinc-500 font-semibold uppercase tracking-wider mb-2">Legend</p>
             <div className="space-y-1.5">
               <LegendItem shape="circle" color="#6B7280" label="Bot" />
               <LegendItem shape="square" color="#60A5FA" label="Player" />
-              {show.zones && <LegendItem shape="square" color="#8B5CF6" label="Zone" />}
-              {show.routes && <LegendItem shape="circle" color="#F59E0B" label="Route" />}
-              {show.markers && <LegendItem shape="diamond" color="#FFFFFF" label="Marker" />}
-              {show.terrain && terrainCanvas.current && (
+              {layers.zones && <LegendItem shape="square" color="#8B5CF6" label="Zone" />}
+              {layers.routes && <LegendItem shape="circle" color="#F59E0B" label="Route" />}
+              {layers.markers && <LegendItem shape="diamond" color="#FFFFFF" label="Marker" />}
+              {aux.terrain && terrainCanvas.current && (
                 <>
                   <LegendItem shape="square" color="#5B8C33" label="Grass" />
                   <LegendItem shape="square" color="#3366CC" label="Water" />
@@ -1186,4 +1546,34 @@ function LegendItem({ shape, color, label }: { shape: 'circle' | 'square' | 'dia
       <span className="text-zinc-400">{label}</span>
     </div>
   );
+}
+
+// Draw a fading polyline behind an entity.
+// Newest segment full opacity; oldest at 0.1.
+function drawTrail(
+  ctx: CanvasRenderingContext2D,
+  trail: TrailPoint[],
+  baseColor: string,
+  baseWidth: number,
+  cx: number,
+  cy: number,
+  scale: number,
+  offset: { x: number; y: number },
+) {
+  const n = trail.length;
+  if (n < 2) return;
+  for (let i = 1; i < n; i++) {
+    // Older segments → lower alpha. i=1 is the oldest, i=n-1 is the newest.
+    const t = i / (n - 1); // 0..1
+    const alpha = 0.1 + 0.9 * t; // 0.1 → 1.0
+    const a = Math.round(alpha * 255).toString(16).padStart(2, '0');
+    const prev = worldToScreen(trail[i - 1].x, trail[i - 1].z, cx, cy, scale, offset);
+    const cur = worldToScreen(trail[i].x, trail[i].z, cx, cy, scale, offset);
+    ctx.beginPath();
+    ctx.strokeStyle = baseColor + a;
+    ctx.lineWidth = baseWidth;
+    ctx.moveTo(prev.sx, prev.sy);
+    ctx.lineTo(cur.sx, cur.sy);
+    ctx.stroke();
+  }
 }

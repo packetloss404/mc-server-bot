@@ -16,6 +16,12 @@ export interface WorkerBotData {
   personality: string;
   mode: string;
   spawnLocation?: { x: number; y: number; z: number };
+  /**
+   * Stable small integer slot assigned by BotManager at spawn time.
+   * Used to derive a deterministic prismarine-viewer port (3100 + slot)
+   * so the same bot keeps the same iframe URL across restarts.
+   */
+  workerSlotIndex: number;
 }
 
 export class WorkerHandle {
@@ -23,6 +29,7 @@ export class WorkerHandle {
   readonly personality: string;
   readonly mode: string;
   readonly spawnLocation?: { x: number; y: number; z: number };
+  readonly workerSlotIndex: number;
 
   private worker: Worker | null = null;
   private ipc: IPCChannel | null = null;
@@ -67,6 +74,7 @@ export class WorkerHandle {
     this.personality = data.personality;
     this.mode = data.mode;
     this.spawnLocation = data.spawnLocation;
+    this.workerSlotIndex = data.workerSlotIndex;
     this.llmClient = llmClient;
     this.affinityManager = affinityManager;
     this.conversationManager = conversationManager;
@@ -94,6 +102,7 @@ export class WorkerHandle {
         personality: this.personality,
         mode: this.mode,
         spawnLocation: this.spawnLocation,
+        workerSlotIndex: this.workerSlotIndex,
       },
     });
 
@@ -372,6 +381,24 @@ export class WorkerHandle {
     if (!this.ipc) return null;
     try {
       return await this.sendRequest('getBotVersion', []);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Get the prismarine-viewer HTTP port for this bot. The worker lazy-mounts
+   * the viewer on first request — the WebGL/Express cost is only paid when
+   * someone actually opens the View tab.
+   *
+   * Returns null if the bot isn't connected yet, the viewer failed to start
+   * (e.g. native canvas/three dep issue), or the worker isn't running.
+   */
+  async getViewerPort(): Promise<number | null> {
+    if (!this.ipc) return null;
+    try {
+      const port = await this.sendRequest('getViewerPort', []);
+      return typeof port === 'number' ? port : null;
     } catch {
       return null;
     }

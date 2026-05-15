@@ -18,6 +18,9 @@ export function BotTabConsole({ botName, personality }: Props) {
 
   const accentColor = getPersonalityColor(personality);
 
+  // Conversations are NOT in /detailed, so we still fetch them here — but at a
+  // slower cadence (10s) since the BotPollingProvider already runs a 3s tick
+  // for everything in /detailed.
   useEffect(() => {
     const load = () => {
       api
@@ -26,7 +29,7 @@ export function BotTabConsole({ botName, personality }: Props) {
         .catch(() => {});
     };
     load();
-    const interval = setInterval(load, 5000);
+    const interval = setInterval(load, 10000);
     return () => clearInterval(interval);
   }, [botName]);
 

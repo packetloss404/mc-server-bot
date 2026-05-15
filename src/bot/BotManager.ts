@@ -31,6 +31,8 @@ interface SavedBot {
 
 export class BotManager {
   private workers: Map<string, WorkerHandle> = new Map();
+  /** Tracks which prismarine-viewer slot indices are in use. Slot index → bot key. */
+  private viewerSlots: Map<number, string> = new Map();
   private config: Config;
   private dataPath: string;
   private llmClient: LLMClient | null;
@@ -98,8 +100,10 @@ export class BotManager {
     this.nextStaggerAt = waitUntil + staggerMs;
     const delay = waitUntil - now;
 
+    const workerSlotIndex = this.allocateViewerSlot(key);
+
     const handle = new WorkerHandle(
-      { botName: name, personality, mode: effectiveMode, spawnLocation: location },
+      { botName: name, personality, mode: effectiveMode, spawnLocation: location, workerSlotIndex },
       this.llmClient,
       this.affinityManager,
       this.conversationManager,
@@ -143,10 +147,32 @@ export class BotManager {
 
     await handle.terminate();
     this.workers.delete(key);
+    // Free the prismarine-viewer slot so the port can be reused by another bot.
+    this.viewerSlots.delete(handle.workerSlotIndex);
     this.saveBots();
 
     logger.info({ bot: name }, 'Bot removed');
     return true;
+  }
+
+  /**
+   * Allocate a small, stable slot index for this bot's prismarine-viewer.
+   * The viewer's HTTP port is derived as `3100 + slot`. We reuse the lowest
+   * free slot so port assignments stay tight (and predictable) across the
+   * fleet, and we never collide with a live worker.
+   */
+  private allocateViewerSlot(key: string): number {
+    // Stable across respawn: if this bot already has a slot, keep it.
+    for (const [slot, ownerKey] of this.viewerSlots) {
+      if (ownerKey === key) return slot;
+    }
+    for (let slot = 0; slot < 1024; slot++) {
+      if (!this.viewerSlots.has(slot)) {
+        this.viewerSlots.set(slot, key);
+        return slot;
+      }
+    }
+    throw new Error('No free prismarine-viewer slots available');
   }
 
   async removeAllBots(): Promise<number> {

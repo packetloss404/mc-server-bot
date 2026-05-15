@@ -74,13 +74,21 @@ async function main() {
   await botManager.loadSavedBots();
 
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager, config);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager, config, tokenLedger);
 
   // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);
 
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
+
+  // Broadcast every LLM call so the dashboard's waterfall timeline can render
+  // live. Survives /api/llm/reload via LLMSettings re-applying the listener.
+  llmSettings.setCallListener((event) => {
+    try {
+      io.emit('llm:call', event);
+    } catch { /* swallow */ }
+  });
 
   // Decay hostility over time — every 60s, nudge affinities 1 point toward default
   setInterval(() => {

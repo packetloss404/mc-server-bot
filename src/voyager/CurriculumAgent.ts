@@ -17,6 +17,8 @@ export interface Task {
   keywords: string[];
   guidance?: string[];
   spec?: TaskSpec;
+  /** Player name who requested this task, if any. Used for bot voice acknowledgments. */
+  requestedBy?: string;
 }
 
 const CURRICULUM_SYSTEM_PROMPT = `You are a helpful assistant that tells me the next immediate task to do in Minecraft. My ultimate goal is to discover as many diverse things as possible, accomplish as many diverse tasks as possible and become the best Minecraft player in the world.

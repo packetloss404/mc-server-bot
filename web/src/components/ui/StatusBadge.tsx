@@ -8,6 +8,12 @@ export interface StatusBadgeProps {
   status: SemanticStatus | string;
   size?: 'xs' | 'sm' | 'md';
   showDot?: boolean;
+  /**
+   * Optional override label. When provided, this is rendered verbatim instead
+   * of deriving from `status`. Useful when the caller has a display-name map
+   * (e.g. STATE_LABELS["EXECUTING_TASK"] = "Working").
+   */
+  label?: string;
 }
 
 // Map semantic statuses to colors. For unrecognized statuses, fall back to
@@ -44,9 +50,9 @@ const DOT_SIZES: Record<'xs' | 'sm' | 'md', string> = {
   md: 'w-2 h-2',
 };
 
-export function StatusBadge({ status, size = 'sm', showDot = true }: StatusBadgeProps) {
+export function StatusBadge({ status, size = 'sm', showDot = true, label }: StatusBadgeProps) {
   const color = resolveColor(status);
-  const label = status.replace(/_/g, ' ');
+  const displayLabel = label ?? status.replace(/_/g, ' ');
   const shouldPulse = PULSE_STATUSES.has(status.toLowerCase());
 
   return (
@@ -60,7 +66,7 @@ export function StatusBadge({ status, size = 'sm', showDot = true }: StatusBadge
           style={{ backgroundColor: color }}
         />
       )}
-      {label}
+      {displayLabel}
     </span>
   );
 }

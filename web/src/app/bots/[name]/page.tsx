@@ -7,10 +7,13 @@ import Link from 'next/link';
 import { api, type BotDetailed } from '@/lib/api';
 import {
   getPersonalityColor,
-  STATE_COLORS,
   STATE_LABELS,
   PERSONALITY_ICONS,
 } from '@/lib/constants';
+import { StatusBadge } from '@/components/ui/StatusBadge';
+import { StatCard as SharedStatCard } from '@/components/ui/StatCard';
+import { ProgressBar } from '@/components/ui/ProgressBar';
+import { BotTabOverview } from '@/components/bot/BotTabOverview';
 import { BotTabConsole } from '@/components/bot/BotTabConsole';
 import { BotTabTasks } from '@/components/bot/BotTabTasks';
 import { BotTabInventory } from '@/components/bot/BotTabInventory';
@@ -21,10 +24,11 @@ import { MessagingPanel } from '@/components/bot/MessagingPanel';
 import { SocialMemoryPanel } from '@/components/bot/SocialMemoryPanel';
 
 type TabId =
-  | 'console' | 'tasks' | 'inventory' | 'relationships' | 'reputation'
+  | 'overview' | 'console' | 'tasks' | 'inventory' | 'relationships' | 'reputation'
   | 'decisions' | 'messages' | 'memory';
 
 const TABS: { id: TabId; label: string }[] = [
+  { id: 'overview', label: 'Overview' },
   { id: 'console', label: 'Console' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'inventory', label: 'Inventory' },
@@ -37,8 +41,9 @@ const TABS: { id: TabId; label: string }[] = [
 
 function isTabId(s: string | null): s is TabId {
   return (
-    s === 'console' || s === 'tasks' || s === 'inventory' || s === 'relationships'
-    || s === 'reputation' || s === 'decisions' || s === 'messages' || s === 'memory'
+    s === 'overview' || s === 'console' || s === 'tasks' || s === 'inventory'
+    || s === 'relationships' || s === 'reputation' || s === 'decisions'
+    || s === 'messages' || s === 'memory'
   );
 }
 
@@ -53,12 +58,12 @@ export default function BotProfilePage() {
   const [modeBusy, setModeBusy] = useState(false);
 
   const tabParam = searchParams.get('tab');
-  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'console';
+  const activeTab: TabId = isTabId(tabParam) ? tabParam : 'overview';
 
   const setActiveTab = useCallback(
     (tab: TabId) => {
       const params = new URLSearchParams(searchParams.toString());
-      if (tab === 'console') {
+      if (tab === 'overview') {
         params.delete('tab');
       } else {
         params.set('tab', tab);
@@ -142,9 +147,16 @@ export default function BotProfilePage() {
   }
 
   const accentColor = getPersonalityColor(bot.personality);
-  const stateColor = STATE_COLORS[bot.state] ?? '#6B7280';
   const emoji = PERSONALITY_ICONS[bot.personality?.toLowerCase()] ?? '';
   const isPaused = bot.voyager?.isPaused ?? false;
+  const stateLabel = STATE_LABELS[bot.state] ?? bot.state;
+  const positionValue = bot.position
+    ? `${Math.round(bot.position.x)}, ${Math.round(bot.position.y)}, ${Math.round(bot.position.z)}`
+    : 'Unknown';
+  const currentTaskValue = bot.voyager?.currentTask ?? 'Idle';
+  const queuedHint = bot.voyager?.queuedTaskCount
+    ? `+${bot.voyager.queuedTaskCount} queued`
+    : undefined;
 
   return (
     <div className="max-w-7xl">
@@ -177,73 +189,65 @@ export default function BotProfilePage() {
                 </p>
               </div>
             </div>
-            <span
-              className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1 rounded-md uppercase"
-              style={{ color: stateColor, backgroundColor: `${stateColor}12` }}
-            >
-              <span className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ backgroundColor: stateColor }} />
-              {STATE_LABELS[bot.state] ?? bot.state}
-            </span>
+            <StatusBadge status={bot.state} size="sm" showDot label={stateLabel} />
           </div>
 
           {/* Four stat cards */}
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            {/* Vitals */}
-            <StatCard label="Vitals">
-              <VitalBar label="HP" value={bot.health} max={20} color="#EF4444" />
-              <VitalBar label="FD" value={bot.food} max={20} color="#F59E0B" />
-            </StatCard>
+            {/* Vitals — keeps the local children-style container because the
+                shared StatCard takes a single string/number `value` and can't
+                host two bars. */}
+            <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-lg p-2.5">
+              <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 font-semibold">Vitals</p>
+              <div className="space-y-1">
+                <VitalBar label="HP" value={bot.health} max={20} intent="danger" />
+                <VitalBar label="FD" value={bot.food} max={20} intent="warning" />
+              </div>
+            </div>
 
             {/* Position */}
-            <StatCard label="Position">
-              {bot.position ? (
-                <div className="font-mono text-xs text-zinc-200 tabular-nums">
-                  {Math.round(bot.position.x)}, {Math.round(bot.position.y)}, {Math.round(bot.position.z)}
-                </div>
-              ) : (
-                <div className="text-xs text-zinc-600">Unknown</div>
-              )}
-              <div className="text-[10px] text-zinc-500 mt-0.5">overworld</div>
-            </StatCard>
+            <SharedStatCard label="Position" value={positionValue} hint="overworld" />
 
             {/* Current Task */}
-            <StatCard label="Current Task">
-              <div className="text-xs text-zinc-200 truncate" title={bot.voyager?.currentTask ?? undefined}>
-                {bot.voyager?.currentTask ? bot.voyager.currentTask : <span className="text-zinc-600">Idle</span>}
-              </div>
-              {bot.voyager?.queuedTaskCount ? (
-                <div className="text-[10px] text-zinc-500 mt-0.5">+{bot.voyager.queuedTaskCount} queued</div>
-              ) : null}
-            </StatCard>
+            <SharedStatCard
+              label="Current Task"
+              value={currentTaskValue}
+              hint={queuedHint}
+            />
 
-            {/* Mode + Pause/Resume */}
-            <StatCard label="Mode">
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={handleToggleMode}
-                  disabled={modeBusy}
-                  className="text-xs font-medium px-2 py-0.5 rounded transition-colors disabled:opacity-50"
-                  style={{
-                    color: bot.mode === 'codegen' ? '#10B981' : '#F59E0B',
-                    backgroundColor: bot.mode === 'codegen' ? '#10B98112' : '#F59E0B12',
-                  }}
-                  title="Toggle mode"
-                >
-                  {bot.mode}
-                </button>
-                <button
-                  onClick={handleTogglePause}
-                  disabled={modeBusy}
-                  className="text-[10px] font-medium px-1.5 py-0.5 rounded border border-zinc-700/60 hover:bg-zinc-800/60 text-zinc-400 transition-colors disabled:opacity-50"
-                  title={isPaused ? 'Resume' : 'Pause'}
-                >
-                  {isPaused ? 'Resume' : 'Pause'}
-                </button>
+            {/* Mode + Pause/Resume — interactive controls; the shared StatCard
+                expects a static `value`, so this card stays as a local
+                container. */}
+            <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-lg p-2.5">
+              <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 font-semibold">Mode</p>
+              <div className="space-y-1">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={handleToggleMode}
+                    disabled={modeBusy}
+                    className="text-xs font-medium px-2 py-0.5 rounded transition-colors disabled:opacity-50"
+                    style={{
+                      color: bot.mode === 'codegen' ? '#10B981' : '#F59E0B',
+                      backgroundColor: bot.mode === 'codegen' ? '#10B98112' : '#F59E0B12',
+                    }}
+                    title="Toggle mode"
+                  >
+                    {bot.mode}
+                  </button>
+                  <button
+                    onClick={handleTogglePause}
+                    disabled={modeBusy}
+                    className="text-[10px] font-medium px-1.5 py-0.5 rounded border border-zinc-700/60 hover:bg-zinc-800/60 text-zinc-400 transition-colors disabled:opacity-50"
+                    title={isPaused ? 'Resume' : 'Pause'}
+                  >
+                    {isPaused ? 'Resume' : 'Pause'}
+                  </button>
+                </div>
+                {bot.voyager?.isRunning && (
+                  <div className="text-[10px] text-emerald-500 mt-0.5">running</div>
+                )}
               </div>
-              {bot.voyager?.isRunning && (
-                <div className="text-[10px] text-emerald-500 mt-0.5">running</div>
-              )}
-            </StatCard>
+            </div>
           </div>
 
           {/* Tab nav */}
@@ -292,6 +296,7 @@ export default function BotProfilePage() {
 
       {/* ═══ TAB CONTENT ═══ */}
       <div role="tabpanel" id={`tabpanel-${activeTab}`} aria-labelledby={`tab-${activeTab}`} className="p-6 lg:p-8 space-y-5">
+        {activeTab === 'overview' && <BotTabOverview botName={bot.name} personality={bot.personality} />}
         {activeTab === 'console' && <BotTabConsole botName={bot.name} personality={bot.personality} />}
         {activeTab === 'tasks' && <BotTabTasks botName={bot.name} />}
         {activeTab === 'inventory' && <BotTabInventory botName={bot.name} personality={bot.personality} />}
@@ -309,28 +314,22 @@ export default function BotProfilePage() {
 
 // ─── Sticky-header sub-components ───
 
-function StatCard({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-lg p-2.5">
-      <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 font-semibold">{label}</p>
-      <div className="space-y-1">{children}</div>
-    </div>
-  );
-}
-
-function VitalBar({ label, value, max, color }: { label: string; value: number; max: number; color: string }) {
-  const pct = Math.max(0, Math.min(100, (value / max) * 100));
+function VitalBar({
+  label,
+  value,
+  max,
+  intent,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  intent: 'danger' | 'warning' | 'success' | 'default';
+}) {
   return (
     <div className="flex items-center gap-1.5">
       <span className="text-[9px] text-zinc-500 w-3.5 shrink-0 font-medium">{label}</span>
-      <div className="flex-1 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
-        <motion.div
-          className="h-full rounded-full"
-          style={{ backgroundColor: color }}
-          initial={{ width: 0 }}
-          animate={{ width: `${pct}%` }}
-          transition={{ duration: 0.4 }}
-        />
+      <div className="flex-1">
+        <ProgressBar value={value} max={max} height="xs" intent={intent} />
       </div>
       <span className="text-[10px] text-zinc-400 tabular-nums w-8 text-right">
         {value}/{max}

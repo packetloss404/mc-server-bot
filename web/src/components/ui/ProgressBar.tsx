@@ -12,6 +12,12 @@ export interface ProgressBarProps {
   showPercent?: boolean;
   intent?: ProgressBarIntent;
   height?: ProgressBarHeight;
+  /**
+   * Optional explicit fill color (hex). Overrides `intent` when set. Use this
+   * for callers that pick a color from a score-bucket helper rather than from
+   * the four semantic intents.
+   */
+  color?: string;
 }
 
 const INTENT_COLORS: Record<ProgressBarIntent, string> = {
@@ -34,11 +40,12 @@ export function ProgressBar({
   showPercent = false,
   intent = 'default',
   height = 'sm',
+  color: colorOverride,
 }: ProgressBarProps) {
   const safeMax = max > 0 ? max : 1;
   const ratio = Math.max(0, Math.min(1, value / safeMax));
   const pct = ratio * 100;
-  const color = INTENT_COLORS[intent];
+  const color = colorOverride ?? INTENT_COLORS[intent];
 
   return (
     <div className="w-full space-y-1">

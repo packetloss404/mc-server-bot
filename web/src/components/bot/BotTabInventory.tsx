@@ -6,6 +6,7 @@ import { api, type BotDetailed } from '@/lib/api';
 import { formatItemName, getItemCategoryColorByName } from '@/lib/items';
 import { EquipmentDisplay } from '@/components/EquipmentDisplay';
 import { getPersonalityColor } from '@/lib/constants';
+import { Slot } from '@/components/ui/Slot';
 
 interface Props {
   botName: string;
@@ -103,26 +104,17 @@ function InventorySlot({
   item: { name: string; count: number } | null;
   highlight?: boolean;
 }) {
-  const color = item ? getItemCategoryColorByName(item.name) : undefined;
+  // Use the shared Slot primitive in its accent-tinted mode so category color
+  // and the inventory's category-aware tooltip carry over unchanged.
+  const accentColor = item ? getItemCategoryColorByName(item.name) : '#6B7280';
+  const tooltip = item ? `${formatItemName(item.name)} x${item.count}` : 'Empty';
   return (
-    <div
-      className="aspect-square rounded flex items-center justify-center relative group cursor-default"
-      style={{
-        backgroundColor: item ? `${color}08` : highlight ? '#1a1a1e' : '#141416',
-        border: `1px solid ${item ? `${color}20` : highlight ? '#27272a' : '#1c1c1e'}`,
-      }}
-      title={item ? `${formatItemName(item.name)} x${item.count}` : 'Empty'}
-    >
-      {item && (
-        <>
-          <span className="text-[7px] text-zinc-400 text-center leading-tight truncate px-0.5">
-            {item.name.replace(/_/g, ' ').split(' ').slice(-1)[0]}
-          </span>
-          {item.count > 1 && (
-            <span className="absolute bottom-0 right-0.5 text-[7px] text-white font-bold">{item.count}</span>
-          )}
-        </>
-      )}
-    </div>
+    <Slot
+      itemName={item?.name ?? null}
+      count={item?.count}
+      tooltip={tooltip}
+      accentColor={accentColor}
+      highlight={highlight}
+    />
   );
 }

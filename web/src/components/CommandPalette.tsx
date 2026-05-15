@@ -54,6 +54,8 @@ export function CommandPalette() {
   const [skills, setSkills] = useState<{ name: string }[]>([]);
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLDivElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
 
   const bots = useBotStore((s) => s.botList);
   const players = useBotStore((s) => s.playerList);
@@ -84,9 +86,20 @@ export function CommandPalette() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
-  // Reset state on open and focus input
+  // Reset state on open, focus input, and remember previously focused element
+  // so we can restore focus on close.
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      // On close, restore focus to whatever was focused before the palette opened.
+      const prev = previouslyFocusedRef.current;
+      previouslyFocusedRef.current = null;
+      if (prev && typeof prev.focus === 'function') {
+        // Defer to next tick to avoid racing the unmount.
+        setTimeout(() => prev.focus(), 0);
+      }
+      return;
+    }
+    previouslyFocusedRef.current = (document.activeElement as HTMLElement | null) ?? null;
     setQuery('');
     setHighlight(0);
     const t = setTimeout(() => inputRef.current?.focus(), 10);
@@ -255,6 +268,34 @@ export function CommandPalette() {
 
   // Flat index mapping for keyboard nav
   const flat = filtered;
+  const activeId = flat.length > 0 ? `palette-option-${highlight}` : undefined;
+  const listboxId = 'palette-listbox';
+  const titleId = 'palette-title';
+
+  // Collect focusable elements inside the dialog and trap focus on Tab.
+  const trapFocus = (e: React.KeyboardEvent) => {
+    if (e.key !== 'Tab' || !dialogRef.current) return;
+    const focusables = Array.from(
+      dialogRef.current.querySelectorAll<HTMLElement>(
+        'input, button:not(:disabled), [role="option"], [tabindex]:not([tabindex="-1"])',
+      ),
+    ).filter((el) => !el.hasAttribute('disabled') && el.offsetParent !== null);
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement as HTMLElement | null;
+    if (e.shiftKey) {
+      if (active === first || !dialogRef.current.contains(active)) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (active === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') {
@@ -273,18 +314,57 @@ export function CommandPalette() {
     }
   };
 
+  const trimmedQuery = query.trim();
+
   return (
     <div
       className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh] bg-black/60 backdrop-blur-sm"
       onClick={close}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Command palette"
+      onKeyDown={trapFocus}
     >
       <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
         className="w-full max-w-2xl mx-4 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
+        <h2
+          id={titleId}
+          style={{
+            position: 'absolute',
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: 'hidden',
+            clip: 'rect(0,0,0,0)',
+            whiteSpace: 'nowrap',
+            border: 0,
+          }}
+        >
+          Command palette
+        </h2>
+        <span
+          aria-live="polite"
+          aria-atomic="true"
+          style={{
+            position: 'absolute',
+            width: 1,
+            height: 1,
+            padding: 0,
+            margin: -1,
+            overflow: 'hidden',
+            clip: 'rect(0,0,0,0)',
+            whiteSpace: 'nowrap',
+            border: 0,
+          }}
+        >
+          {flat.length === 0
+            ? `No matches for "${trimmedQuery}"`
+            : `${flat.length} result${flat.length === 1 ? '' : 's'}`}
+        </span>
         <div className="border-b border-zinc-800 px-4 py-3 flex items-center gap-3">
           <svg
             width="16"
@@ -312,18 +392,31 @@ export function CommandPalette() {
             className="flex-1 bg-transparent text-sm text-white placeholder-zinc-500 focus:outline-none"
             spellCheck={false}
             autoComplete="off"
+            role="combobox"
+            aria-expanded={true}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={activeId}
           />
           <kbd className="text-[10px] font-mono text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded border border-zinc-700">
             ESC
           </kbd>
         </div>
 
-        <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-2">
+        <div
+          ref={listRef}
+          id={listboxId}
+          role="listbox"
+          aria-label="Command results"
+          className="max-h-[60vh] overflow-y-auto py-2"
+        >
           {flat.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-zinc-500">No results.</div>
+            <div className="px-4 py-8 text-center text-sm text-zinc-500">
+              {trimmedQuery ? `No matches for "${trimmedQuery}"` : 'No results.'}
+            </div>
           ) : (
             groups.map((group) => (
-              <div key={group.name} className="mb-2 last:mb-0">
+              <div key={group.name} className="mb-2 last:mb-0" role="group" aria-label={group.name}>
                 <div className="px-4 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
                   {group.name}
                 </div>
@@ -334,6 +427,9 @@ export function CommandPalette() {
                     <button
                       key={item.id}
                       type="button"
+                      id={`palette-option-${index}`}
+                      role="option"
+                      aria-selected={active}
                       data-cmd-index={index}
                       onMouseEnter={() => setHighlight(index)}
                       onClick={() => void item.action()}

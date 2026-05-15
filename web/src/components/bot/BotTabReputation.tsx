@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { api } from '@/lib/api';
+import { ProgressBar } from '@/components/ui/ProgressBar';
 
 interface Props {
   botName: string;
@@ -71,7 +72,9 @@ export function BotTabReputation({ botName }: Props) {
           <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Overall</span>
           <span className="text-2xl font-bold text-white tabular-nums">{Math.round(reputation.overall)}</span>
         </div>
-        <ProgressBar value={reputation.overall} color={scoreColor(reputation.overall)} />
+        <div className="mt-1">
+          <ProgressBar value={reputation.overall} max={100} height="md" color={scoreColor(reputation.overall)} />
+        </div>
       </div>
 
       <div className="space-y-3">
@@ -97,22 +100,7 @@ function ReputationBar({ label, value }: { label: string; value: number }) {
         <span className="text-[11px] text-zinc-400 font-medium">{label}</span>
         <span className="text-[11px] text-zinc-300 tabular-nums font-medium">{Math.round(value)}</span>
       </div>
-      <ProgressBar value={value} color={scoreColor(value)} />
-    </div>
-  );
-}
-
-function ProgressBar({ value, color }: { value: number; color: string }) {
-  const pct = Math.max(0, Math.min(100, value));
-  return (
-    <div className="h-2 bg-zinc-800 rounded-full overflow-hidden mt-1">
-      <motion.div
-        className="h-full rounded-full"
-        style={{ backgroundColor: color }}
-        initial={{ width: 0 }}
-        animate={{ width: `${pct}%` }}
-        transition={{ duration: 0.6 }}
-      />
+      <ProgressBar value={value} max={100} height="md" color={scoreColor(value)} />
     </div>
   );
 }

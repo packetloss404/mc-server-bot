@@ -211,7 +211,9 @@ export class GoalGenerator {
     // 3. Obligation goals — player-assigned tasks and blackboard
     this.addObligationGoals(state, goals);
 
-    // 4. Social goals (placeholder — real social triggers come from message bus)
+    // 4. Social goals — intentionally a no-op here. Inter-bot messages flow
+    // through VoyagerLoop.processBotMessage, which converts help_requests into
+    // playerTaskQueue entries (picked up by the obligation tier above).
     this.addSocialGoals(state, goals);
 
     // 5. Role goals — personality-specific
@@ -406,10 +408,11 @@ export class GoalGenerator {
   // -----------------------------------------------------------------------
 
   private addSocialGoals(_state: GoalGeneratorState, _goals: Goal[]): void {
-    // Social goals are typically injected externally (trade requests, help
-    // requests from other bots). This is a stub for future integration.
-    // When the social message bus fires events, callers should inject them
-    // into the state or append goals after generation.
+    // Reserved tier. Help/trade requests from other bots arrive via the
+    // BotComms queue and are processed by VoyagerLoop.processBotMessage,
+    // which pushes them onto playerTaskQueue. They then surface as obligation
+    // goals (tier 3) on the next cycle, not social goals, since obligation
+    // outranks social and the bot should prioritize them accordingly.
   }
 
   // -----------------------------------------------------------------------

@@ -33,6 +33,38 @@ import { SharedWorldModel } from './SharedWorldModel';
 
 const AIR_BLOCKS: ReadonlySet<string> = new Set(['air', 'cave_air', 'void_air']);
 
+/** Minimal surface VoyagerLoop needs from DifficultyBalancer (real or proxied). */
+export interface DifficultyBalancerLike {
+  getBotBehaviorModifiers(): {
+    taskCooldownMultiplier: number;
+    preferredTaskTypes: string[];
+    chatProbability: number;
+    helpRadius: number;
+  } | Promise<{
+    taskCooldownMultiplier: number;
+    preferredTaskTypes: string[];
+    chatProbability: number;
+    helpRadius: number;
+  }>;
+}
+
+/** Minimal surface VoyagerLoop needs from PlayerIntentModel (real or proxied). */
+export interface PlayerIntentModelLike {
+  predictIntent(playerName: string): {
+    intent: string;
+    confidence: number;
+    evidence: string[];
+    suggestedBotResponse: string;
+    suggestedTask?: string;
+  } | Promise<{
+    intent: string;
+    confidence: number;
+    evidence: string[];
+    suggestedBotResponse: string;
+    suggestedTask?: string;
+  }>;
+}
+
 export class VoyagerLoop {
   private static MAX_RETRY_EVENT_LOG_CHARS = 1200;
   private static MAX_FAILURE_OUTPUT_CHARS = 1200;
@@ -79,6 +111,12 @@ export class VoyagerLoop {
   private dependencyResolver: DependencyResolver | null = null;
   private sharedWorldModel: SharedWorldModel | null = null;
   private lastSharedWorldUpdateAt = 0;
+  private difficultyBalancer: DifficultyBalancerLike | null = null;
+  private playerIntentModel: PlayerIntentModelLike | null = null;
+  /** Multiplier applied to taskCooldownMs by DifficultyBalancer. 1.0 = neutral. */
+  private taskCooldownMultiplier = 1.0;
+  /** Probability gate for proactive chat announcements. 1.0 = always (default). */
+  private chatProbability = 1.0;
 
   // Exposed state for chat context
   private currentTask: string | null = null;
@@ -180,6 +218,8 @@ export class VoyagerLoop {
   setPlanLibrary(p: PlanLibrary): void { this.planLibrary = p; }
   setSkillAttribution(s: SkillAttribution): void { this.skillAttribution = s; }
   setTradeNegotiator(t: TradeNegotiator): void { this.tradeNegotiator = t; }
+  setDifficultyBalancer(d: DifficultyBalancerLike): void { this.difficultyBalancer = d; }
+  setPlayerIntentModel(p: PlayerIntentModelLike): void { this.playerIntentModel = p; }
   /** Set a callback for recording reputation events to the main thread. */
   setReputationNotifier(fn: (event: any) => void): void { this.reputationNotify = fn; }
 
@@ -392,11 +432,26 @@ export class VoyagerLoop {
       }
 
       this.scheduleNext();
-    }, this.config.voyager.taskCooldownMs);
+    }, Math.max(50, Math.round(this.config.voyager.taskCooldownMs * this.taskCooldownMultiplier)));
   }
 
   private async runOneCycle(): Promise<void> {
     if (this.paused) return;
+
+    // Pull current difficulty modifiers up front so they shape this cycle's cadence
+    // (cooldown for the *next* schedule) and gate proactive chat below. Failures here
+    // are non-fatal — bots without a balancer keep their previous (neutral) defaults.
+    if (this.difficultyBalancer) {
+      try {
+        const mods = await this.difficultyBalancer.getBotBehaviorModifiers();
+        if (mods && typeof mods.taskCooldownMultiplier === 'number' && mods.taskCooldownMultiplier > 0) {
+          this.taskCooldownMultiplier = mods.taskCooldownMultiplier;
+        }
+        if (mods && typeof mods.chatProbability === 'number') {
+          this.chatProbability = Math.max(0, Math.min(1, mods.chatProbability));
+        }
+      } catch { /* ignore — additive signal */ }
+    }
 
     // Check for inter-bot messages (help requests become queued tasks)
     // Process inter-bot messages (rate-limited to 3 per cycle)
@@ -475,7 +530,9 @@ export class VoyagerLoop {
           currentTask: this.currentTask ?? undefined,
         });
         for (const ann of announcements) {
-          if (ann.priority >= 7 && this.bot.chat) {
+          // Gate by both priority and DifficultyBalancer chat probability so bots stay
+          // quieter on peaceful/easy and chatter more on challenge tiers.
+          if (ann.priority >= 7 && this.bot.chat && Math.random() < this.chatProbability) {
             this.bot.chat(this.proactiveCommunicator.formatForChat(ann));
           }
         }
@@ -516,6 +573,63 @@ export class VoyagerLoop {
             top.description, { priority: top.priority, urgency: top.urgency });
         }
       } catch { /* ignore goal generation errors */ }
+    }
+
+    // PlayerIntent: if a nearby player is doing something we have a confident
+    // suggestion for (e.g. building, mining, struggling) AND no higher-priority
+    // override is already pinned, adopt the suggested task. This biases bots
+    // toward helping players without overriding survival/safety or queued work.
+    if (
+      this.playerIntentModel
+      && !goalOverrideTask
+      && this.playerTaskQueue.length === 0
+    ) {
+      try {
+        const botPosForIntent = this.bot.entity?.position;
+        const nearbyPlayers: string[] = [];
+        if (botPosForIntent && this.bot.players) {
+          for (const p of Object.values(this.bot.players) as any[]) {
+            if (!p?.username || p.username === this.bot.username) continue;
+            const ent = p.entity;
+            if (!ent?.position) continue;
+            if (ent.position.distanceTo(botPosForIntent) <= 32) {
+              nearbyPlayers.push(p.username);
+            }
+          }
+        }
+        let bestIntent: { player: string; intent: string; confidence: number; suggestedTask: string } | null = null;
+        for (const playerName of nearbyPlayers) {
+          const pred = await this.playerIntentModel.predictIntent(playerName);
+          if (
+            pred
+            && pred.confidence >= 0.7
+            && pred.suggestedTask
+            && (!bestIntent || pred.confidence > bestIntent.confidence)
+          ) {
+            bestIntent = {
+              player: playerName,
+              intent: pred.intent,
+              confidence: pred.confidence,
+              suggestedTask: pred.suggestedTask,
+            };
+          }
+        }
+        if (bestIntent) {
+          const keywords = bestIntent.suggestedTask
+            .toLowerCase()
+            .replace(/[^a-z0-9\s]/g, '')
+            .split(/\s+/)
+            .filter((w) => w.length > 2);
+          goalOverrideTask = { description: bestIntent.suggestedTask, keywords };
+          this.decisionTrace.record(
+            'task_selection',
+            bestIntent.suggestedTask,
+            `PlayerIntent: ${bestIntent.intent} (confidence ${bestIntent.confidence.toFixed(2)}) for ${bestIntent.player}`,
+            bestIntent.suggestedTask,
+            { intent: bestIntent.intent, confidence: bestIntent.confidence, player: bestIntent.player },
+          );
+        }
+      } catch { /* ignore intent errors — additive signal */ }
     }
 
     // 1. Get task from player queue or curriculum

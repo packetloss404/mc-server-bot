@@ -9,6 +9,8 @@ import { BlackboardProxy } from './proxies/BlackboardProxy';
 import { AffinityProxy } from './proxies/AffinityProxy';
 import { ConversationProxy } from './proxies/ConversationProxy';
 import { SharedWorldProxy } from './proxies/SharedWorldProxy';
+import { DifficultyBalancerProxy } from './proxies/DifficultyBalancerProxy';
+import { PlayerIntentModelProxy } from './proxies/PlayerIntentModelProxy';
 import { logger } from '../util/logger';
 
 interface WorkerData {
@@ -34,6 +36,8 @@ const blackboardProxy = new BlackboardProxy(ipc);
 const affinityProxy = new AffinityProxy(ipc);
 const conversationProxy = new ConversationProxy(ipc);
 const sharedWorldProxy = new SharedWorldProxy(ipc);
+const difficultyBalancerProxy = new DifficultyBalancerProxy(ipc);
+const playerIntentModelProxy = new PlayerIntentModelProxy(ipc);
 
 const botMode = data.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
@@ -48,6 +52,8 @@ const instance = new BotInstance({
   conversationManager: conversationProxy as any,
   blackboardManager: blackboardProxy as any,
   sharedWorldModel: sharedWorldProxy as any,
+  difficultyBalancer: difficultyBalancerProxy as any,
+  playerIntentModel: playerIntentModelProxy as any,
   onSwarmDirective: (description, requestedBy) => {
     ipc.notify('swarm.directive', { description, requestedBy });
   },

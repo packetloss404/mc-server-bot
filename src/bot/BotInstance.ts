@@ -42,6 +42,8 @@ export interface BotOptions {
   conversationManager: ConversationManager;
   blackboardManager: BlackboardManager;
   sharedWorldModel?: SharedWorldModel;
+  difficultyBalancer?: any;
+  playerIntentModel?: any;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
   onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
@@ -70,6 +72,8 @@ export class BotInstance {
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
   private sharedWorldModel: SharedWorldModel | null;
+  private difficultyBalancer: any | null;
+  private playerIntentModel: any | null;
   private onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   private onReputationEvent?: (event: any) => void;
   private onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
@@ -115,6 +119,8 @@ export class BotInstance {
     this.conversationManager = options.conversationManager;
     this.blackboardManager = options.blackboardManager;
     this.sharedWorldModel = options.sharedWorldModel ?? null;
+    this.difficultyBalancer = options.difficultyBalancer ?? null;
+    this.playerIntentModel = options.playerIntentModel ?? null;
     this.onSwarmDirective = options.onSwarmDirective;
     this.onReputationEvent = options.onReputationEvent;
     this.onVoyagerLoopCreated = options.onVoyagerLoopCreated;
@@ -911,6 +917,12 @@ export class BotInstance {
     }
     this.voyagerLoop.setSocialMemory(this.socialMemory);
     this.voyagerLoop.setBotComms(this.botComms);
+    if (this.difficultyBalancer) {
+      this.voyagerLoop.setDifficultyBalancer(this.difficultyBalancer);
+    }
+    if (this.playerIntentModel) {
+      this.voyagerLoop.setPlayerIntentModel(this.playerIntentModel);
+    }
 
     // Wire per-bot intelligence systems
     this.voyagerLoop.setGoalGenerator(new GoalGenerator(this.personality));
@@ -1482,13 +1494,20 @@ export class BotInstance {
     if (this.cachedWorld && Date.now() - this.cachedWorld.at < WORLD_TTL_MS) {
       world = this.cachedWorld.world;
       // Keep the volatile fields fresh (cheap to read).
-      world = { ...world, isRaining: this.bot.isRaining };
+      world = {
+        ...world,
+        isRaining: this.bot.isRaining,
+        timeOfDayTicks: this.bot.time?.timeOfDay ?? null,
+        day: this.bot.time?.day ?? null,
+      };
     } else {
       try {
         const obs = renderObservation(this.bot);
         world = {
           biome: obs.biome,
           timeOfDay: obs.timeOfDay,
+          timeOfDayTicks: this.bot.time?.timeOfDay ?? null,
+          day: this.bot.time?.day ?? null,
           isRaining: this.bot.isRaining,
           nearbyBlocks: obs.nearbyBlocks,
           nearbyEntities: obs.nearbyEntities,

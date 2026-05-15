@@ -19,6 +19,7 @@ import { DungeonMaster } from '../voyager/DungeonMaster';
 import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
 import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { BotReputation } from '../voyager/BotReputation';
+import { PlayerPresenceTracker } from './PlayerPresenceTracker';
 
 interface SavedBot {
   name: string;
@@ -43,6 +44,7 @@ export class BotManager {
   private difficultyBalancer: DifficultyBalancer;
   private playerIntentModel: PlayerIntentModel;
   private botReputation: BotReputation;
+  private playerPresenceTracker: PlayerPresenceTracker;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -63,6 +65,7 @@ export class BotManager {
     this.difficultyBalancer = new DifficultyBalancer();
     this.playerIntentModel = new PlayerIntentModel();
     this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
+    this.playerPresenceTracker = new PlayerPresenceTracker(this.difficultyBalancer);
   }
 
   async spawnBot(
@@ -100,6 +103,8 @@ export class BotManager {
       this.blackboardManager,
       this.sharedWorldModel,
       (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
+      this.difficultyBalancer,
+      this.playerIntentModel,
     );
 
     // Wire reputation listener immediately so it's ready before the worker sends events
@@ -220,6 +225,7 @@ export class BotManager {
   getDifficultyBalancer(): DifficultyBalancer { return this.difficultyBalancer; }
   getPlayerIntentModel(): PlayerIntentModel { return this.playerIntentModel; }
   getBotReputation(): BotReputation { return this.botReputation; }
+  getPlayerPresenceTracker(): PlayerPresenceTracker { return this.playerPresenceTracker; }
 
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
     // Broadcast swarm directive to all workers — this clears local queues and interrupts current tasks

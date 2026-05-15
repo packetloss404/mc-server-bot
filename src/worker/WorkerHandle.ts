@@ -6,6 +6,8 @@ import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
 import { SharedWorldModel } from '../voyager/SharedWorldModel';
+import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
+import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
 import { logger } from '../util/logger';
 
@@ -46,6 +48,8 @@ export class WorkerHandle {
   private conversationManager: ConversationManager;
   private blackboardManager: BlackboardManager;
   private sharedWorldModel: SharedWorldModel;
+  private difficultyBalancer: DifficultyBalancer | null;
+  private playerIntentModel: PlayerIntentModel | null;
   private onSwarmDirective: (description: string, requestedBy: string) => void;
 
   constructor(
@@ -56,6 +60,8 @@ export class WorkerHandle {
     blackboardManager: BlackboardManager,
     sharedWorldModel: SharedWorldModel,
     onSwarmDirective: (description: string, requestedBy: string) => void,
+    difficultyBalancer: DifficultyBalancer | null = null,
+    playerIntentModel: PlayerIntentModel | null = null,
   ) {
     this.botName = data.botName;
     this.personality = data.personality;
@@ -66,6 +72,8 @@ export class WorkerHandle {
     this.conversationManager = conversationManager;
     this.blackboardManager = blackboardManager;
     this.sharedWorldModel = sharedWorldModel;
+    this.difficultyBalancer = difficultyBalancer;
+    this.playerIntentModel = playerIntentModel;
     this.onSwarmDirective = onSwarmDirective;
 
     // Provide a basic cached status while worker boots
@@ -151,6 +159,23 @@ export class WorkerHandle {
     if (type === 'conversation.getHistory') return this.conversationManager.getHistory(args[0], args[1]);
     if (type === 'conversation.buildContentsArray') return this.conversationManager.buildContentsArray(args[0], args[1], args[2]);
     if (type === 'conversation.getAllConversations') return this.conversationManager.getAllConversations(args[0]);
+
+    // DifficultyBalancer
+    if (type === 'difficulty.getBotBehaviorModifiers') {
+      if (!this.difficultyBalancer) {
+        // Sensible neutral defaults if no balancer is wired in this deployment.
+        return { taskCooldownMultiplier: 1.0, preferredTaskTypes: [], chatProbability: 0.4, helpRadius: 32 };
+      }
+      return this.difficultyBalancer.getBotBehaviorModifiers();
+    }
+
+    // PlayerIntentModel
+    if (type === 'playerIntent.predictIntent') {
+      if (!this.playerIntentModel) {
+        return { intent: 'unknown', confidence: 0, evidence: [], suggestedBotResponse: '' };
+      }
+      return this.playerIntentModel.predictIntent(args[0]);
+    }
 
     throw new Error(`Unknown IPC request type: ${type}`);
   }

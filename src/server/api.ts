@@ -208,6 +208,22 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     const { playerName, message, nearestBot } = req.body;
     const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
 
+    // Feed chat into the player intent model regardless of nearest-bot routing —
+    // intent inference is global, not per-bot.
+    if (typeof playerName === 'string' && typeof message === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'chat',
+        detail: message,
+        timestamp: Date.now(),
+      });
+
+      // If the chat looks like a help-seeking ask directed at a specific bot,
+      // record an affinity event so the relationship summary reflects it.
+      if (handle && /\b(help|can you|please|could you|need)\b/i.test(message)) {
+        botManager.getAffinityManager().onHelpRequest(handle.botName, playerName, message.slice(0, 120));
+      }
+    }
+
     if (!handle) {
       res.json({ handled: false });
       return;
@@ -219,13 +235,96 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
 
   app.post('/api/events/player-join', (req: Request, res: Response) => {
     const { playerName } = req.body;
-    logger.info({ player: playerName }, 'Player joined');
+    if (typeof playerName === 'string') {
+      botManager.getPlayerPresenceTracker().recordJoin(playerName);
+    }
     res.json({ handled: true });
   });
 
   app.post('/api/events/player-leave', (req: Request, res: Response) => {
     const { playerName } = req.body;
-    logger.info({ player: playerName }, 'Player left');
+    if (typeof playerName === 'string') {
+      botManager.getPlayerPresenceTracker().recordLeave(playerName);
+      botManager.getPlayerIntentModel().clearPlayer(playerName);
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/player-death', (req: Request, res: Response) => {
+    const { playerName, position } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerPresenceTracker().recordDeath(playerName);
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'death',
+        detail: '',
+        position: position ?? undefined,
+        timestamp: Date.now(),
+      });
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/block-placed', (req: Request, res: Response) => {
+    const { playerName, blockName, position } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'block_placed',
+        detail: typeof blockName === 'string' ? blockName : '',
+        position: position ?? undefined,
+        timestamp: Date.now(),
+      });
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/block-broken', (req: Request, res: Response) => {
+    const { playerName, blockName, position } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'block_broken',
+        detail: typeof blockName === 'string' ? blockName : '',
+        position: position ?? undefined,
+        timestamp: Date.now(),
+      });
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/item-crafted', (req: Request, res: Response) => {
+    const { playerName, itemName } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'item_crafted',
+        detail: typeof itemName === 'string' ? itemName : '',
+        timestamp: Date.now(),
+      });
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/entity-killed', (req: Request, res: Response) => {
+    const { playerName, entityName, position } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'entity_killed',
+        detail: typeof entityName === 'string' ? entityName : '',
+        position: position ?? undefined,
+        timestamp: Date.now(),
+      });
+    }
+    res.json({ handled: true });
+  });
+
+  app.post('/api/events/player-move', (req: Request, res: Response) => {
+    const { playerName, position } = req.body;
+    if (typeof playerName === 'string') {
+      botManager.getPlayerIntentModel().recordAction(playerName, {
+        type: 'movement',
+        detail: '',
+        position: position ?? undefined,
+        timestamp: Date.now(),
+      });
+    }
     res.json({ handled: true });
   });
 
@@ -553,18 +652,25 @@ export function createAPIServer(botManager: BotManager): APIServerResult {
     for (const w of workers) {
       const detailed = w.getCachedDetailedStatus();
       if (detailed?.world) {
-        const timeOfDay = detailed.world.timeOfDay;
         res.json({
-          timeOfDay,
-          timeOfDayTicks: null,
-          day: null,
+          timeOfDay: detailed.world.timeOfDay,
+          timeOfDayTicks: detailed.world.timeOfDayTicks ?? null,
+          day: detailed.world.day ?? null,
           isRaining: detailed.world.isRaining,
           onlineBots: workers.filter((h) => h.isAlive()).length,
+          onlinePlayers: botManager.getPlayerPresenceTracker().getPlayerCount(),
         });
         return;
       }
     }
-    res.json({ timeOfDay: null, day: null, isRaining: null, onlineBots: 0 });
+    res.json({
+      timeOfDay: null,
+      timeOfDayTicks: null,
+      day: null,
+      isRaining: null,
+      onlineBots: 0,
+      onlinePlayers: botManager.getPlayerPresenceTracker().getPlayerCount(),
+    });
   });
 
   // Shared blackboard state — direct from main thread

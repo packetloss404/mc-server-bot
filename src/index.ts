@@ -95,7 +95,7 @@ async function main() {
       const statuses = workers.map((w) => w.getCachedDetailedStatus()).filter(Boolean);
       const snapshot = {
         botCount: workers.length,
-        playerCount: 0, // TODO: track via player-join/leave events
+        playerCount: botManager.getPlayerPresenceTracker().getPlayerCount(),
         serverTimeOfDay: statuses[0]?.world?.timeOfDay ?? 0,
         weather: statuses[0]?.world?.isRaining ? 'rain' : 'clear',
         totalResources: {},

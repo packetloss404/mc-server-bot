@@ -2,15 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion } from 'framer-motion';
-import { api } from '@/lib/api';
+import { api, type TownDTO } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
 import { StatCard } from '@/components/ui/StatCard';
-import { StatusBadge } from '@/components/ui/StatusBadge';
 import { useToast } from '@/components/Toast';
 import { useTownStore, type Town, type TownEvent } from '@/lib/townStore';
 import { TownPicker } from '@/components/town/TownPicker';
 import { TownStatusCard } from '@/components/town/TownStatusCard';
 import { FoundTownModal } from '@/components/town/FoundTownModal';
+
+/**
+ * The API may return `paused` as optional (older builds) or omit it entirely
+ * before the Phase 2 backend ships. Force a boolean so the store invariant
+ * (Town.paused: boolean) holds in every code path.
+ */
+function dtoToTown(dto: TownDTO): Town {
+  return { ...dto, paused: dto.paused === true } as Town;
+}
 
 const EVENT_POLL_MS = 5000;
 const TOWN_LIST_POLL_MS = 15000;
@@ -61,7 +69,7 @@ export default function TownPage() {
   const refreshTowns = useCallback(async () => {
     try {
       const { towns: list } = await api.listTowns();
-      setTowns(list as Town[]);
+      setTowns(list.map(dtoToTown));
     } catch {
       // Backend not ready yet — leave the empty state up rather than toasting
       // every 15s while the parallel agent ships the API.
@@ -257,7 +265,7 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
       {/* Two-column: events + quick actions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <RecentEventsPanel events={events} />
-        <QuickActionsPanel />
+        <QuickActionsPanel town={town} />
       </div>
     </div>
   );
@@ -322,18 +330,65 @@ function EventRow({ event }: { event: TownEvent }) {
 
 // ─── Quick actions ────────────────────────────────────────────────────────
 
-function QuickActionsPanel() {
+function QuickActionsPanel({ town }: { town: Town }) {
+  const { toast } = useToast();
+  const setTownPaused = useTownStore((s) => s.setTownPaused);
+  const [busy, setBusy] = useState(false);
+
+  const handleTogglePause = async () => {
+    if (busy) return;
+    setBusy(true);
+    const nextPaused = !town.paused;
+    try {
+      if (nextPaused) {
+        await api.pauseTown(town.id);
+      } else {
+        await api.resumeTown(town.id);
+      }
+      setTownPaused(town.id, nextPaused);
+      toast(nextPaused ? `Paused ${town.name}` : `Resumed ${town.name}`, 'success');
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Action failed';
+      toast(msg, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const pauseLabel = town.paused ? 'Resume Town' : 'Pause Town';
+  const pauseTooltip = town.paused
+    ? 'Resumes the Town Brain. Bots return to proactive autonomy.'
+    : 'Freezes the Town Brain. Bots stay alive but stop proactively acting.';
+
   return (
     <section className="bg-zinc-900/60 border border-zinc-800/60 rounded-xl overflow-hidden">
       <header className="px-4 py-3 border-b border-zinc-800/60">
         <h3 className="text-sm font-bold text-white">Quick Actions</h3>
-        <p className="text-[10px] text-zinc-500 mt-0.5">Phase 2 wires these — disabled for now.</p>
+        <p className="text-[10px] text-zinc-500 mt-0.5">
+          Pause toggles autonomy. The other two wire in later phases.
+        </p>
       </header>
       <div className="p-4 space-y-2">
-        <DisabledAction
-          label="Pause autonomy"
-          tooltip="Freezes the Town Brain. Bots stay alive but stop proactively acting. (Phase 2)"
-        />
+        <button
+          type="button"
+          onClick={handleTogglePause}
+          disabled={busy}
+          title={pauseTooltip}
+          className={`w-full text-left px-3 py-2.5 rounded-lg border text-xs flex items-center justify-between gap-2 transition-colors disabled:opacity-60 disabled:cursor-wait ${
+            town.paused
+              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200 hover:bg-emerald-500/20'
+              : 'border-amber-500/40 bg-amber-500/10 text-amber-200 hover:bg-amber-500/20'
+          }`}
+        >
+          <span className="font-semibold">{busy ? 'Working…' : pauseLabel}</span>
+          <span
+            className={`text-[9px] uppercase tracking-wider ${
+              town.paused ? 'text-emerald-400/80' : 'text-amber-400/80'
+            }`}
+          >
+            {town.paused ? 'Paused' : 'Active'}
+          </span>
+        </button>
         <DisabledAction
           label="Memorial Park"
           tooltip="Jumps the map to the Memorial Park footprint. (Phase 5)"

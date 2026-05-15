@@ -1035,6 +1035,19 @@ export const api = {
       `/api/towns/${encodeURIComponent(id)}/residents`,
       { method: 'POST', body: JSON.stringify(data) },
     ),
+  // The pause/resume backend ships in parallel with this client wiring (Phase
+  // 2 — other agent). Errors propagate to the caller so the toast layer can
+  // surface "Backend not ready yet."
+  pauseTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/pause`,
+      { method: 'POST' },
+    ),
+  resumeTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/resume`,
+      { method: 'POST' },
+    ),
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1053,6 +1066,8 @@ export interface TownDTO {
   parentTownId?: string | null;
   styleSeed: 'medieval-communal' | 'mid-century-civic';
   mayorTitle?: string;
+  /** Town Brain frozen — Phase 2. Defaults to false on older payloads. */
+  paused?: boolean;
 }
 
 export interface TownDistrictDTO {

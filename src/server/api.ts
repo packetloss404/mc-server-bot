@@ -191,6 +191,21 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     };
   }
 
+  // ── Phase 2 Town Brain wiring ──
+  // Inject the deps a TownBrain needs and boot a brain per active town. The
+  // brain ticks the 4 sub-loops (demand / build / role / threat) every 60s.
+  // Safe to call here: createTown auto-starts a brain for any town founded
+  // later, so this only catches towns persisted from a previous run.
+  try {
+    botManager.getTownManager().wireBrains({
+      botManager,
+      buildCoordinator,
+      blackboard: botManager.getBlackboardManager(),
+    });
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'TownManager.wireBrains failed');
+  }
+
   // Wire build dependencies into CommanderService now that they exist.
   commanderService.setBuildCoordinator(buildCoordinator);
   commanderService.setCampaignManager(campaignManager);
@@ -2383,7 +2398,9 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   // ═══════════════════════════════════════════════════════════════
   app.get('/api/towns', (_req: Request, res: Response) => {
     const tm = botManager.getTownManager();
-    const towns = tm.listTowns().map((t) => townToDTO(t, tm.listResidents(t.id)));
+    const towns = tm
+      .listTowns()
+      .map((t) => townToDTO(t, tm.listResidents(t.id), tm.isTownPaused(t.id)));
     res.json({ towns });
   });
 
@@ -2394,7 +2411,9 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       res.status(404).json({ error: 'Town not found' });
       return;
     }
-    res.json({ town: townToDTO(town, tm.listResidents(town.id)) });
+    res.json({
+      town: townToDTO(town, tm.listResidents(town.id), tm.isTownPaused(town.id)),
+    });
   });
 
   app.post('/api/towns', (req: Request, res: Response) => {
@@ -2433,7 +2452,9 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
         highlightScore: 100,
         payload: { name: town.name, stylePreset },
       });
-      res.status(201).json({ town: townToDTO(town, tm.listResidents(town.id)) });
+      res.status(201).json({
+        town: townToDTO(town, tm.listResidents(town.id), tm.isTownPaused(town.id)),
+      });
     } catch (err: any) {
       logger.error({ err: err?.message }, 'createTown failed');
       res.status(500).json({ error: 'Failed to create town' });
@@ -2447,7 +2468,36 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       res.status(404).json({ error: 'Town not found' });
       return;
     }
-    res.json({ town: townToDTO(updated, tm.listResidents(updated.id)) });
+    // Surface the brain's paused state so the dashboard can render the
+    // pause/resume toggle without an extra round-trip.
+    res.json({
+      town: townToDTO(updated, tm.listResidents(updated.id), tm.isTownPaused(updated.id)),
+    });
+  });
+
+  // Phase 2: pause / resume the Town Brain. Existing builds + tasks continue;
+  // these only freeze the brain's decision-making (demand/build/role/threat
+  // loops no-op while paused).
+  app.post('/api/towns/:id/pause', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    if (!tm.getTown(id)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    tm.pauseTown(id);
+    res.json({ paused: true });
+  });
+
+  app.post('/api/towns/:id/resume', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    if (!tm.getTown(id)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    tm.resumeTown(id);
+    res.json({ paused: false });
   });
 
   app.delete('/api/towns/:id', (req: Request, res: Response) => {

@@ -41,6 +41,14 @@ export function TownStatusCard({ town }: Props) {
       <span className="w-px h-8 bg-zinc-800" aria-hidden />
       <StatusBadge status={town.tier} size="sm" />
       <StatusBadge status={town.status} size="sm" />
+      {town.paused && (
+        <span
+          className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/15 text-amber-300 border border-amber-500/30"
+          title="Town Brain is paused — bots stay alive but won't proactively act."
+        >
+          Paused
+        </span>
+      )}
       <span className="w-px h-8 bg-zinc-800" aria-hidden />
       <div className="flex flex-col">
         <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">

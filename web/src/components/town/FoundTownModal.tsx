@@ -140,9 +140,10 @@ export function FoundTownModal({ open, onClose, onCreated, defaultMayorUsername 
       });
       // Optimistically update the store so the page re-renders immediately;
       // the page's poll will reconcile from the canonical list afterwards.
-      upsertTown(town as Town);
-      selectTown(town.id);
-      onCreated?.(town as Town);
+      const normalized: Town = { ...town, paused: town.paused === true } as Town;
+      upsertTown(normalized);
+      selectTown(normalized.id);
+      onCreated?.(normalized);
       toast(`Founded ${town.name}`, 'success');
       onClose();
     } catch (err: unknown) {

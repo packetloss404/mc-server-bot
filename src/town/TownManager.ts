@@ -31,7 +31,13 @@ import {
   FallbackKind,
   readAllFallback,
 } from './fallback';
+import { buildSeedStyle } from './seedStyle';
+import { writeStyle, type StyleSeed } from './StyleDoc';
 import { logger } from '../util/logger';
+import { TownBrain, TownBrainStatus } from './TownBrain';
+import type { BotManager } from '../bot/BotManager';
+import type { BuildCoordinator } from '../build/BuildCoordinator';
+import type { BlackboardManager } from '../voyager/BlackboardManager';
 
 type TownRow = typeof schema.towns.$inferSelect;
 type DistrictRow = typeof schema.districts.$inferSelect;
@@ -94,9 +100,15 @@ export interface TownDTO {
   styleSeed: 'medieval-communal' | 'mid-century-civic' | null;
   mayorTitle: string | null;
   mayorPlayerName: string | null;
+  /** Town Brain paused flag — sourced from the in-memory brain, not the DB. */
+  paused: boolean;
 }
 
-export function townToDTO(town: Town, residents: Resident[]): TownDTO {
+export function townToDTO(
+  town: Town,
+  residents: Resident[],
+  paused: boolean = false,
+): TownDTO {
   const alivePop = residents.filter(
     (r) => r.status === 'alive' || r.status == null,
   ).length;
@@ -118,6 +130,7 @@ export function townToDTO(town: Town, residents: Resident[]): TownDTO {
     styleSeed: town.styleSeed as TownDTO['styleSeed'],
     mayorTitle: (town.config?.mayor?.title as string | undefined) ?? null,
     mayorPlayerName: (town.config?.mayor?.playerName as string | undefined) ?? null,
+    paused,
   };
 }
 
@@ -198,6 +211,18 @@ export class TownManager {
   private readonly dataDir: string;
   private readonly handle: TownDbHandle;
   private readonly db: TownDb;
+  /**
+   * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
+   * BotManager / BuildCoordinator / BlackboardManager dependencies are
+   * available (TownManager is constructed inside BotManager, but the build
+   * coordinator only exists in the API layer — so wiring happens after both).
+   */
+  private readonly townBrains: Map<string, TownBrain> = new Map();
+  private brainDeps: {
+    botManager: BotManager;
+    buildCoordinator: BuildCoordinator;
+    blackboard: BlackboardManager;
+  } | null = null;
 
   constructor(opts: TownManagerOptions = {}) {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
@@ -213,11 +238,108 @@ export class TownManager {
   // ──────────────────────────────────────────────────────────────────────
 
   shutdown(): void {
+    // Stop every brain before closing the DB so no late tick tries to
+    // touch a closed connection.
+    for (const brain of this.townBrains.values()) {
+      try { brain.stop(); } catch { /* swallow */ }
+    }
+    this.townBrains.clear();
     try {
       this.handle.sqlite.close();
     } catch (err: any) {
       logger.warn({ err: err?.message }, 'TownManager shutdown: close failed');
     }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Town Brain (Phase 2) — periodic tick + 4 sub-loops per active town
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Inject the dependencies the Town Brain needs and boot a brain for every
+   * currently-active town. Idempotent — calling it twice replaces existing
+   * dep refs but leaves running brains alone (subsequent tick calls pick up
+   * the latest refs because the brain holds them by reference).
+   *
+   * Called from the API layer at startup after the BuildCoordinator exists.
+   */
+  wireBrains(deps: {
+    botManager: BotManager;
+    buildCoordinator: BuildCoordinator;
+    blackboard: BlackboardManager;
+  }): void {
+    this.brainDeps = deps;
+    let booted = 0;
+    for (const town of this.listTowns()) {
+      if (town.status !== 'active') continue;
+      if (this.townBrains.has(town.id)) continue;
+      try {
+        this.startBrain(town.id);
+        booted++;
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId: town.id },
+          'wireBrains: failed to start brain for town',
+        );
+      }
+    }
+    logger.info({ booted, totalTowns: this.listTowns().length }, 'TownManager wired brains');
+  }
+
+  /**
+   * Internal — instantiate and start a brain for the given town. Caller must
+   * ensure `brainDeps` is set and the town exists in the DB.
+   */
+  private startBrain(townId: string): TownBrain | null {
+    if (!this.brainDeps) {
+      // Phase 2 may be running in test contexts where the brain isn't wired;
+      // silently no-op so legacy callers keep working.
+      return null;
+    }
+    if (this.townBrains.has(townId)) return this.townBrains.get(townId) ?? null;
+    const brain = new TownBrain(
+      townId,
+      this,
+      this.brainDeps.botManager,
+      this.brainDeps.buildCoordinator,
+      this.brainDeps.blackboard,
+    );
+    this.townBrains.set(townId, brain);
+    brain.start();
+    return brain;
+  }
+
+  /** Pause the brain for a town. Returns false when the town is unknown. */
+  pauseTown(townId: string): boolean {
+    if (!this.getTown(townId)) return false;
+    const brain = this.townBrains.get(townId);
+    if (!brain) return false;
+    brain.pause();
+    return true;
+  }
+
+  /** Resume a paused brain. Returns false when the town is unknown. */
+  resumeTown(townId: string): boolean {
+    if (!this.getTown(townId)) return false;
+    const brain = this.townBrains.get(townId);
+    if (!brain) return false;
+    brain.resume();
+    return true;
+  }
+
+  /**
+   * Snapshot of a town's brain status — null when the brain hasn't been
+   * wired/started yet (e.g. brainDeps unset, or town is abandoned).
+   */
+  getBrainStatus(townId: string): TownBrainStatus | null {
+    const brain = this.townBrains.get(townId);
+    if (!brain) return null;
+    return brain.getStatus();
+  }
+
+  /** True iff the brain for the town exists AND is paused. */
+  isTownPaused(townId: string): boolean {
+    return this.townBrains.get(townId)?.isPaused() ?? false;
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -271,6 +393,19 @@ export class TownManager {
 
     const district = this.createDefaultDistrict(id, input.capital, input.stylePreset, now);
 
+    // Drop the founding style.json seed (medieval or mid-century) at
+    // data/towns/<id>/style.json. Wrapped here AND inside writeStyle —
+    // a failed style write must never abort town creation.
+    try {
+      const seed = buildSeedStyle(input.stylePreset as StyleSeed, id, now);
+      writeStyle(this.dataDir, seed);
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: id, stylePreset: input.stylePreset },
+        'createTown: style seed write failed (non-fatal)',
+      );
+    }
+
     // Seed the founding event. If it fails to persist, the JSONL fallback
     // catches it.
     this.recordEvent({
@@ -304,6 +439,14 @@ export class TownManager {
     } as TownRow);
 
     logger.info({ townId: id, name: input.name, stylePreset: input.stylePreset }, 'Town founded');
+
+    // Auto-boot a brain when deps have been wired. When TownManager is
+    // constructed before the API layer wires brains (the normal startup
+    // path), wireBrains() picks the new town up on its own.
+    try { this.startBrain(id); } catch (err: any) {
+      logger.warn({ err: err?.message, townId: id }, 'createTown: startBrain failed (non-fatal)');
+    }
+
     return { town, district };
   }
 
@@ -364,6 +507,14 @@ export class TownManager {
       .set({ status: 'abandoned' })
       .where(eq(schema.towns.id, id))
       .run();
+    // Stop the brain immediately so no further ticks fire for the
+    // abandoned town. The brain entry itself is removed so a later
+    // `wireBrains()` pass doesn't re-boot it (status filter excludes it).
+    const brain = this.townBrains.get(id);
+    if (brain) {
+      try { brain.stop(); } catch { /* swallow */ }
+      this.townBrains.delete(id);
+    }
     this.recordEvent({
       townId: id,
       kind: 'town_abandoned',
@@ -487,6 +638,68 @@ export class TownManager {
       .where(eq(schema.buildings.townId, townId))
       .all();
     return rows.map(rowToBuilding);
+  }
+
+  /**
+   * Insert a `planned` building row. Used by the Town Brain so the build loop
+   * is idempotent across ticks — listBuildings will see the planned row and
+   * skip the kind on the next tick. `name` is the brain's `kind:<n>` tag so
+   * countBuildingsByKind groups duplicates by kind.
+   */
+  createPlannedBuilding(input: {
+    townId: string;
+    name: string;
+    schematicSource?: string | null;
+    schematicRef?: string | null;
+    districtId?: string | null;
+  }): Building {
+    const id = genId('bld');
+    const row = {
+      id,
+      townId: input.townId,
+      districtId: input.districtId ?? null,
+      name: input.name,
+      schematicSource: input.schematicSource ?? null,
+      schematicRef: input.schematicRef ?? null,
+      originX: null,
+      originY: null,
+      originZ: null,
+      width: null,
+      height: null,
+      depth: null,
+      builtAt: null,
+      destroyedAt: null,
+      status: 'planned',
+    };
+    try {
+      this.db.insert(schema.buildings).values(row).run();
+    } catch (err: any) {
+      // No JSONL fallback for buildings — the brain retries next tick.
+      logger.warn(
+        { err: err?.message, townId: input.townId, name: input.name },
+        'createPlannedBuilding: insert failed; brain will retry next tick',
+      );
+    }
+    return rowToBuilding(row as unknown as BuildingRow);
+  }
+
+  /** Flip a planned/building row's status. Used when a build job resolves. */
+  updateBuildingStatus(
+    buildingId: string,
+    status: 'planned' | 'building' | 'complete' | 'damaged' | 'destroyed',
+  ): void {
+    try {
+      this.db
+        .update(schema.buildings)
+        .set({ status, builtAt: status === 'complete' ? Date.now() : undefined })
+        .where(eq(schema.buildings.id, buildingId))
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, buildingId, status },
+        'updateBuildingStatus: failed',
+      );
+    }
   }
 
   // ──────────────────────────────────────────────────────────────────────

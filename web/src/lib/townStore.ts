@@ -22,6 +22,12 @@ export interface Town {
   parentTownId?: string | null;
   styleSeed: StylePreset;
   mayorTitle?: string;
+  /**
+   * When the Town Brain is paused, bots stay alive but stop proactively
+   * acting. Default false. Synced from the API response (status === 'paused'
+   * or an explicit `paused: true` on the town payload).
+   */
+  paused: boolean;
 }
 
 export interface District {
@@ -71,6 +77,8 @@ interface TownStore {
   upsertTown: (town: Town) => void;
   removeTown: (id: string) => void;
   selectTown: (id: string | null) => void;
+  /** Flip the `paused` flag on a single town without a full refetch. */
+  setTownPaused: (id: string, paused: boolean) => void;
 }
 
 export const useTownStore = create<TownStore>((set) => ({
@@ -109,4 +117,9 @@ export const useTownStore = create<TownStore>((set) => ({
     })),
 
   selectTown: (id) => set({ activeTownId: id }),
+
+  setTownPaused: (id, paused) =>
+    set((state) => ({
+      towns: state.towns.map((t) => (t.id === id ? { ...t, paused } : t)),
+    })),
 }));

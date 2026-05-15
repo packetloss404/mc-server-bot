@@ -1048,6 +1048,25 @@ export const api = {
       `/api/towns/${encodeURIComponent(id)}/resume`,
       { method: 'POST' },
     ),
+
+  // ─── Town roles & schedules (Phase 3 — parallel backend agent) ───
+  //
+  // GET endpoints swallow errors so the UI can fall back to a "no role data
+  // yet" empty state if the backend hasn't shipped yet. The POST surfaces
+  // errors so the caller can revert optimistic state + toast.
+  listTownRoles: (id: string) =>
+    fetchJSON<TownRolesResponse>(
+      `/api/towns/${encodeURIComponent(id)}/roles`,
+    ).catch(() => null as TownRolesResponse | null),
+  setResidentRole: (id: string, botName: string, role: string) =>
+    fetchJSON<{ ok: true; botName: string; role: string }>(
+      `/api/towns/${encodeURIComponent(id)}/roles/${encodeURIComponent(botName)}`,
+      { method: 'POST', body: JSON.stringify({ role }) },
+    ),
+  getTownSchedules: (id: string) =>
+    fetchJSON<TownSchedulesResponse>(
+      `/api/towns/${encodeURIComponent(id)}/schedules`,
+    ).catch(() => null as TownSchedulesResponse | null),
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1104,6 +1123,32 @@ export interface TownEventDTO {
   payload: unknown;
   occurredAt: number;
   highlightScore: number;
+}
+
+// ─── Town roles (Phase 3) ─────────────────────────────────────────────────
+//
+// Mirrors the contract P3-A is exposing under /api/towns/:id/roles and
+// /api/towns/:id/schedules. Kept loose (`Record<string, number>`) on the
+// breakdown so unknown future roles still render without a code change.
+
+export type TownRoleKey =
+  | 'lumberjack'
+  | 'miner'
+  | 'farmer'
+  | 'blacksmith'
+  | 'builder'
+  | 'guard'
+  | 'gatherer'
+  | 'idle';
+
+export interface TownRolesResponse {
+  breakdown: Record<string, number>;
+  residents: Array<{ botName: string; role: string }>;
+}
+
+export interface TownSchedulesResponse {
+  phase: 'day' | 'night';
+  roleSchedules: Record<string, { day: string[]; night: string[] }>;
 }
 
 export interface AdminInfo {

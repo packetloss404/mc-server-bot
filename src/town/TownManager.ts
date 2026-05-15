@@ -337,6 +337,16 @@ export class TownManager {
     return brain.getStatus();
   }
 
+  /**
+   * Direct accessor for the town's Phase 3 role/schedule helpers. Returns
+   * null when the brain isn't wired (e.g. tests). The API layer uses this
+   * to surface manual overrides + schedule previews without poking the
+   * brain's tick loop.
+   */
+  getTownBrain(townId: string): TownBrain | null {
+    return this.townBrains.get(townId) ?? null;
+  }
+
   /** True iff the brain for the town exists AND is paused. */
   isTownPaused(townId: string): boolean {
     return this.townBrains.get(townId)?.isPaused() ?? false;
@@ -625,6 +635,52 @@ export class TownManager {
       .where(eq(schema.residents.townId, townId))
       .all();
     return rows.map(rowToResident);
+  }
+
+  /**
+   * Cheap helper for Phase 3 — used by ScheduleManager + the roles API to
+   * filter without re-traversing the residents table for every role. Stays
+   * a thin wrapper around listResidents to avoid duplicating row-mapping.
+   */
+  getResidentsByRole(townId: string, role: string): Resident[] {
+    return this.listResidents(townId).filter((r) => r.currentRole === role);
+  }
+
+  /**
+   * Persist a role change. Returns false when the resident doesn't exist for
+   * the given town. Failures (DB write) are logged and surfaced as false so
+   * the caller can decide whether to retry. RoleManager is the primary
+   * consumer; the API layer also calls this for manual overrides.
+   *
+   * No-ops (role already equals the requested value) return true without a
+   * DB write. We deliberately do NOT record a `role:assigned` event here —
+   * the caller (TownBrain or the API handler) owns event emission so we
+   * don't double-fire when RoleManager applies bulk changes.
+   */
+  setResidentRole(townId: string, botName: string, role: string): boolean {
+    const lookup = this.db
+      .select()
+      .from(schema.residents)
+      .where(
+        and(eq(schema.residents.townId, townId), eq(schema.residents.botName, botName)),
+      )
+      .get();
+    if (!lookup) return false;
+    if (lookup.currentRole === role) return true;
+    try {
+      this.db
+        .update(schema.residents)
+        .set({ currentRole: role })
+        .where(eq(schema.residents.id, lookup.id))
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, botName, role },
+        'setResidentRole: update failed',
+      );
+      return false;
+    }
+    return true;
   }
 
   // ──────────────────────────────────────────────────────────────────────

@@ -10,6 +10,9 @@ import { useTownStore, type Town, type TownEvent } from '@/lib/townStore';
 import { TownPicker } from '@/components/town/TownPicker';
 import { TownStatusCard } from '@/components/town/TownStatusCard';
 import { FoundTownModal } from '@/components/town/FoundTownModal';
+import { RoleBreakdownCard } from '@/components/town/RoleBreakdownCard';
+import { ScheduleStripCard } from '@/components/town/ScheduleStripCard';
+import { RoleResidentList } from '@/components/town/RoleResidentList';
 
 /**
  * The API may return `paused` as optional (older builds) or omit it entirely
@@ -261,6 +264,13 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
           hint="Founding preset"
         />
       </div>
+
+      {/* Roles + schedule (Phase 3) */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <RoleBreakdownCard townId={town.id} />
+        <ScheduleStripCard townId={town.id} />
+      </div>
+      <RoleResidentList townId={town.id} />
 
       {/* Two-column: events + quick actions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

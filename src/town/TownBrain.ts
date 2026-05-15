@@ -1,23 +1,22 @@
 /**
- * TownBrain — Phase 2 of the Autonomous Town Builder.
+ * TownBrain — Phase 2 + Phase 3 of the Autonomous Town Builder.
  *
- * One brain per active town. Wakes up every 60s and runs four sub-loops
- * sequentially (demand → build → role → threat). The brain's job is to seed
- * the blackboard and build queue with town-shaped intent; the existing
- * Voyager loop on each bot then picks up tasks like any other.
+ * One brain per active town. Wakes up every 60s and runs five sub-loops
+ * sequentially (demand → build → role → schedule → threat). The brain's job
+ * is to seed the blackboard and build queue with town-shaped intent; the
+ * existing Voyager loop on each bot then picks up tasks like any other.
  *
  * Failure isolation: every loop is wrapped in try/catch so one broken loop
  * never crashes the tick. Paused towns no-op on every loop.
  *
  * What this brain DOES NOT do (yet):
- *  - Phase 3 wires roles (currently just emits 'role:imbalance' as a hint).
- *  - Phase 5 wires threat aggregation (currently emits a 'threat:scan' stub).
+ *  - Phase 5 wires threat aggregation (currently a stub).
  *  - Phase 4 routes building requests through an LLM design pipeline; for
  *    now we hand the schematicQuery straight to BuildCoordinator with the
  *    default schematic file.
  *
  * Spec: TOWN_BUILDER_SPEC.md §4 (architecture, Layer 2) + the implementation
- * brief in the Phase 2 ticket.
+ * briefs in the Phase 2 and Phase 3 tickets.
  */
 import type { TownManager } from './TownManager';
 import type { BotManager } from '../bot/BotManager';
@@ -27,6 +26,8 @@ import type { Building, Town } from './Town';
 import type { PlanItem, TownTier } from './PlanItem';
 import { getRequiredBuildings as getMedievalPlan } from './seed/medieval';
 import { getRequiredBuildings as getMidCenturyPlan } from './seed/midcentury';
+import { RoleManager } from './RoleManager';
+import { ScheduleManager } from './ScheduleManager';
 import { logger } from '../util/logger';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -71,6 +72,8 @@ export class TownBrain {
   private readonly botManager: BotManager;
   private readonly buildCoordinator: BuildCoordinator;
   private readonly blackboard: BlackboardManager;
+  private readonly roleManager: RoleManager;
+  private readonly scheduleManager: ScheduleManager;
   /** Tick cadence (defaults to 60s; override for tests). */
   private readonly intervalMs: number;
   private timer: NodeJS.Timeout | null = null;
@@ -79,6 +82,11 @@ export class TownBrain {
   private tickCount = 0;
   /** Prevent overlapping ticks if a tick runs longer than the interval. */
   private tickInFlight = false;
+  /**
+   * Snapshot of the most recent resource shortages from the demand loop,
+   * handed to the role loop on the same tick. Cleared each tick.
+   */
+  private currentTickShortages: string[] = [];
 
   constructor(
     townId: string,
@@ -86,7 +94,7 @@ export class TownBrain {
     botManager: BotManager,
     buildCoordinator: BuildCoordinator,
     blackboard: BlackboardManager,
-    opts: { intervalMs?: number } = {},
+    opts: { intervalMs?: number; roleManager?: RoleManager; scheduleManager?: ScheduleManager } = {},
   ) {
     this.townId = townId;
     this.townManager = townManager;
@@ -94,6 +102,18 @@ export class TownBrain {
     this.buildCoordinator = buildCoordinator;
     this.blackboard = blackboard;
     this.intervalMs = opts.intervalMs ?? TICK_INTERVAL_MS;
+    this.roleManager = opts.roleManager ?? new RoleManager(townManager, botManager);
+    this.scheduleManager = opts.scheduleManager ?? new ScheduleManager(townManager, blackboard);
+  }
+
+  /** Exposed so TownManager (and the API) can call assignment outside the tick. */
+  getRoleManager(): RoleManager {
+    return this.roleManager;
+  }
+
+  /** Exposed so the API can read the schedule table for the dashboard. */
+  getScheduleManager(): ScheduleManager {
+    return this.scheduleManager;
   }
 
   /** Begin periodic ticking. Idempotent — a second call is a no-op. */
@@ -176,9 +196,11 @@ export class TownBrain {
     logger.debug({ townId: this.townId, tier: town.tier }, 'TownBrain tick');
 
     // Each loop is independent — one failing must not crash the tick.
+    this.currentTickShortages = [];
     await this.runLoopSafe('demand', () => this.demandLoop(town));
     await this.runLoopSafe('build', () => this.buildLoop(town));
     await this.runLoopSafe('role', () => this.roleLoop(town));
+    await this.runLoopSafe('schedule', () => this.scheduleLoop(town));
     await this.runLoopSafe('threat', () => this.threatLoop(town));
   }
 
@@ -213,6 +235,9 @@ export class TownBrain {
       if (have >= threshold) continue;
       const need = threshold - have;
       const role = RESOURCE_ROLE[resource] ?? 'gatherer';
+      // Hand the shortage off to the role loop on this tick — it pulls from
+      // the idle pool to staff up before the next demand loop runs.
+      this.currentTickShortages.push(resource);
       const description = `town:${this.townId} needs ${need} more ${resource} (requesting role: ${role})`;
       // BlackboardManager.addTask requires a Task — we hand it a minimal one;
       // the Voyager loop synthesizes spec/guidance downstream.
@@ -397,32 +422,82 @@ export class TownBrain {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  //  Loop 3: role — population vs target; Phase 2 just emits the signal
+  //  Loop 3: role — RoleManager re-balances residents.current_role each tick
   // ──────────────────────────────────────────────────────────────────────
 
   private roleLoop(town: Town): void {
     const residents = this.townManager
       .listResidents(this.townId)
       .filter((r) => r.status === 'alive' || r.status == null);
+
+    // Population shortfall — keep emitting role:imbalance so observers know a
+    // founding settlement still wants more bots. RoleManager won't conjure
+    // residents, it only re-shuffles the ones that exist.
     const target = town.populationTarget ?? this.defaultPopulationTarget(town);
-    if (residents.length >= target) return;
-    const shortfall = target - residents.length;
-    this.townManager.recordEvent({
-      townId: this.townId,
-      kind: 'role:imbalance',
-      severity: 'minor',
-      payload: {
-        currentPopulation: residents.length,
-        target,
-        shortfall,
-        wantsMoreBots: true,
-      },
-      highlightScore: 20,
-    });
-    logger.debug(
-      { townId: this.townId, residents: residents.length, target },
-      'TownBrain role: population under target',
-    );
+    if (residents.length < target) {
+      const shortfall = target - residents.length;
+      this.townManager.recordEvent({
+        townId: this.townId,
+        kind: 'role:imbalance',
+        severity: 'minor',
+        payload: {
+          currentPopulation: residents.length,
+          target,
+          shortfall,
+          wantsMoreBots: true,
+        },
+        highlightScore: 20,
+      });
+      logger.debug(
+        { townId: this.townId, residents: residents.length, target },
+        'TownBrain role: population under target',
+      );
+    }
+
+    // Re-balance roles using shortages flagged on this tick by the demand
+    // loop. The RoleManager mutates residents.current_role via TownManager
+    // and returns the list of changes so we can emit role:assigned events.
+    const changes = this.roleManager.assignRoles(this.townId, this.currentTickShortages);
+    for (const change of changes) {
+      this.townManager.recordEvent({
+        townId: this.townId,
+        kind: 'role:assigned',
+        severity: 'info',
+        payload: change,
+        highlightScore: 15,
+      });
+    }
+    if (changes.length > 0) {
+      logger.info(
+        { townId: this.townId, changes: changes.length },
+        'TownBrain role: re-balanced',
+      );
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 4: schedule — push day/night role tasks onto the swarm board
+  // ──────────────────────────────────────────────────────────────────────
+
+  private scheduleLoop(_town: Town): void {
+    const worldTicks = this.readWorldTimeTicks();
+    this.scheduleManager.tick(this.townId, worldTicks);
+  }
+
+  /**
+   * Cheapest path to Minecraft world time: ask the first worker's cached
+   * detailed status. BotManager already polls this; we read whatever's in
+   * the cache (no new IPC). Null when no bots are online — ScheduleManager
+   * falls back to a system-clock guess so the cycle keeps moving.
+   */
+  private readWorldTimeTicks(): number | null {
+    const workers = this.botManager.getAllWorkers();
+    for (const worker of workers) {
+      const detailed = worker.getCachedDetailedStatus?.();
+      const ticks = detailed?.world?.timeOfDayTicks;
+      if (typeof ticks === 'number') return ticks;
+    }
+    return null;
   }
 
   private defaultPopulationTarget(town: Town): number {
@@ -440,7 +515,7 @@ export class TownBrain {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  //  Loop 4: threat — Phase 5 stub. No-op until threat aggregation lands;
+  //  Loop 5: threat — Phase 5 stub. No-op until threat aggregation lands;
   //  emitting a tick event every 60s would flood the events table.
   // ──────────────────────────────────────────────────────────────────────
 

@@ -21,6 +21,8 @@ import { CommandCenter } from '../control/CommandCenter';
 import { MissionManager } from '../control/MissionManager';
 import { MarkerStore } from '../control/MarkerStore';
 import { townToDTO } from '../town/TownManager';
+import { ScheduleManager } from '../town/ScheduleManager';
+import { TOWN_ROLES, type TownRole } from '../town/RoleManager';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -2569,6 +2571,108 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       logger.warn({ err: err?.message }, 'addResident failed');
       res.status(409).json({ error: err?.message ?? 'Failed to add resident' });
     }
+  });
+
+  // ─── Phase 3 roles + schedules ───────────────────────────────────────
+  // GET /api/towns/:id/roles — role breakdown + per-resident role.
+  app.get('/api/towns/:id/roles', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    const residents = tm
+      .listResidents(townId)
+      .filter((r) => r.status === 'alive' || r.status == null)
+      .map((r) => ({ botName: r.botName, role: r.currentRole ?? 'idle' }));
+    // Compute the breakdown either from the brain (preferred — includes
+    // unknown-role residents mapped to 'idle') or by tallying here when
+    // the brain isn't wired (tests, abandoned towns).
+    let breakdown: Record<string, number>;
+    if (brain) {
+      breakdown = brain.getRoleManager().getRoleBreakdown(townId);
+    } else {
+      breakdown = {};
+      for (const r of residents) breakdown[r.role] = (breakdown[r.role] ?? 0) + 1;
+    }
+    res.json({ breakdown, residents });
+  });
+
+  // POST /api/towns/:id/roles/:botName — manual role override.
+  app.post('/api/towns/:id/roles/:botName', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    const botName = String(req.params.botName);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const { role } = req.body ?? {};
+    if (typeof role !== 'string' || role.length === 0) {
+      res.status(400).json({ error: 'role is required' });
+      return;
+    }
+    // Validate role at the API edge so the no-brain fallback path cannot
+    // persist an unknown role string.
+    if (!(TOWN_ROLES as readonly string[]).includes(role)) {
+      res.status(400).json({
+        error: `role must be one of: ${TOWN_ROLES.join(', ')}`,
+      });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    const ok = brain
+      ? brain.getRoleManager().setResidentRole(townId, botName, role as TownRole)
+      : tm.setResidentRole(townId, botName, role);
+    if (!ok) {
+      res.status(400).json({ error: 'Unknown bot or invalid role' });
+      return;
+    }
+    // Manual overrides get a `role:assigned` event so the events feed shows
+    // the change next to its reason.
+    tm.recordEvent({
+      townId,
+      kind: 'role:assigned',
+      severity: 'info',
+      payload: { botName, toRole: role, reason: 'manual' },
+      highlightScore: 20,
+    });
+    res.json({ ok: true, botName, role });
+  });
+
+  // GET /api/towns/:id/schedules — day/night task table + current phase.
+  app.get('/api/towns/:id/schedules', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    // Schedule table is static — the brain isn't strictly required. Use the
+    // brain's manager when wired so future per-town overrides are honored,
+    // otherwise stand up a transient one with the same data.
+    const scheduleManager = brain
+      ? brain.getScheduleManager()
+      : new ScheduleManager(tm, botManager.getBlackboardManager());
+    // Best-effort: read time-of-day off any worker's cached detailed status.
+    let phase: 'day' | 'night' = 'day';
+    let ticks: number | null = null;
+    for (const worker of botManager.getAllWorkers()) {
+      const detailed = worker.getCachedDetailedStatus?.();
+      if (typeof detailed?.world?.timeOfDayTicks === 'number') {
+        ticks = detailed.world.timeOfDayTicks;
+        break;
+      }
+    }
+    phase = scheduleManager.phaseFor(ticks);
+    res.json({
+      phase,
+      worldTimeTicks: ticks,
+      roleSchedules: scheduleManager.getScheduleTable(),
+    });
   });
 
   return {

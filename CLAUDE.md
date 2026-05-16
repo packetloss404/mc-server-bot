@@ -175,6 +175,13 @@ curl -s http://127.0.0.1:3001/api/bots
 - `GET /` - redirects to `/dashboard/`
 - `GET /dashboard/*` - static dashboard files
 
+## Auth migration notes
+
+- `?legacyAuth=true` — when this query parameter is set on a Town Builder mayor-only API call, `requireMayor` falls back to reading the caller's identity from the body field `mayorPlayerName` instead of the signed `pid` session cookie. The fallback exists purely as a migration knob for external scripts written before the cookie-based session flow landed.
+- Sunset date: **2026-08-15** (see `LEGACY_AUTH_SUNSET_DATE` in `src/server/auth.ts`). After this date the legacy body-field path will be removed; callers must use the session cookie.
+- Migration path: callers should adopt the cookie-based session flow — `POST /api/auth/login` with `{ playerName, secret }` to mint a signed `pid` cookie, then drop the `?legacyAuth=true` query param and the `mayorPlayerName` body field from subsequent requests.
+- Every legacy-path invocation emits a `warn` log line so the frequency can be tracked in production logs ahead of the sunset cutover.
+
 ## Data
 
 - `data/bots.json` - bot spawn configurations

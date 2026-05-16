@@ -82,6 +82,16 @@ export class DesignCache {
   private readonly rootDir: string;
 
   /**
+   * Followup #65: tracks cache-key hashes for which we've already logged the
+   * "re-encoding legacy JSON entry" info line this process. Prevents log spam
+   * when the same legacy entry is hit repeatedly and the .schem encode keeps
+   * failing — we still attempt the re-encode silently, but only emit the
+   * attempt log once per hash per process. A successful encode emits a
+   * separate "migrated" info line.
+   */
+  private readonly legacyReencodeAttempted: Set<string> = new Set();
+
+  /**
    * @param rootDir Absolute path to the `schematics/` directory. Town
    *   sub-folders are created on demand.
    */
@@ -134,6 +144,17 @@ export class DesignCache {
         // companion now so the build coordinator has a buildable file. Async
         // void: callers shouldn't have to await a cache hit, and the next
         // tick will catch up if encoding takes a beat. Best-effort.
+        //
+        // Followup #65: only log the "re-encoding" attempt the first time we
+        // see a given hash this process. If the encode keeps failing for the
+        // same legacy entry, subsequent cache hits stay silent (no log spam)
+        // but still attempt the re-encode in case the underlying failure was
+        // transient. A successful encode always logs a "migrated" line.
+        const firstAttempt = !this.legacyReencodeAttempted.has(hash);
+        if (firstAttempt) {
+          this.legacyReencodeAttempted.add(hash);
+          logger.info({ hash }, 'DesignCache: re-encoding legacy JSON entry');
+        }
         encodeAndSave(plan, {
           rootDir: this.rootDir,
           townId: input.townId,
@@ -141,16 +162,18 @@ export class DesignCache {
         }).then(
           (res) => {
             logger.info(
-              { townId: input.townId, kind: input.kind, schem: res.filename, bytes: res.byteSize },
-              'DesignCache: lazily encoded .schem companion for legacy JSON entry',
+              { hash, filename: res.filename },
+              'DesignCache: legacy entry migrated to .schem',
             );
           },
           (err) => {
-            const reasons = err instanceof SchematicEncodeError ? err.reasons : [err?.message ?? String(err)];
-            logger.warn(
-              { townId: input.townId, kind: input.kind, reasons },
-              'DesignCache: lazy .schem re-encode failed; keeping JSON-only entry',
-            );
+            if (firstAttempt) {
+              const reasons = err instanceof SchematicEncodeError ? err.reasons : [err?.message ?? String(err)];
+              logger.warn(
+                { townId: input.townId, kind: input.kind, hash, reasons },
+                'DesignCache: lazy .schem re-encode failed; keeping JSON-only entry',
+              );
+            }
           },
         );
       }

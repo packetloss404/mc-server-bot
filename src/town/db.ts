@@ -151,8 +151,16 @@ const CREATE_STATEMENTS = [
     UNIQUE (town_id_a, town_id_b)
   )`,
   // Indexes (spec section 10)
+  // Followup #67 — `idx_events_town_kind_time` accelerates the
+  // `/api/towns/:id/decrees` feed (and any other per-kind event scan) by
+  // letting SQLite jump straight to the (town_id, kind='mayor:decree') slice
+  // of the events table in occurred_at DESC order rather than scanning the
+  // entire per-town partition and filtering kind in-process. The additive
+  // CREATE INDEX IF NOT EXISTS pattern is idempotent so no separate
+  // MIGRATIONS entry is required for existing DBs.
   `CREATE INDEX IF NOT EXISTS idx_events_town_time ON events(town_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_town_highlight ON events(town_id, highlight_score DESC, occurred_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_events_town_kind_time ON events(town_id, kind, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_buildings_town_status ON buildings(town_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_chronicle_town_day ON chronicle_entries(town_id, day_number DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_disasters_dedupe ON disasters(town_id, dedupe_key)`,

@@ -129,3 +129,33 @@ export const styleObservations = sqliteTable('style_observations', {
   recordedAt: integer('recorded_at'),
   included: integer('included', { mode: 'boolean' }).default(true),
 });
+
+/**
+ * Phase 6-B — approvals queue.
+ *
+ * Anything that emits a `*:pending_approval` event creates a row here. The
+ * brain's approvalLoop tallies open rows on every tick and resolves them
+ * (approved/denied/expired). Two approval paths are supported:
+ *   - Mayor-direct: mayor decides via API.
+ *   - Resident vote: open for `expiresAt - createdAt` (default 90s); the
+ *     brain tallies majority once the window closes.
+ *
+ * `payloadJson` is the original proposal blob (e.g. an ExpansionManager
+ * `ChildProposal`) — replayed verbatim by the resolver hook on approval.
+ */
+export const approvals = sqliteTable('approvals', {
+  id: text('id').primaryKey(),
+  townId: text('town_id').references(() => towns.id),
+  // 'expansion' | 'construction' | 'decree' | 'milestone' | <future>
+  kind: text('kind').notNull(),
+  // Original proposal blob — the resolveOnce handler decodes this.
+  payloadJson: text('payload_json'),
+  // 'open' | 'approved' | 'denied' | 'expired'
+  status: text('status').notNull(),
+  createdAt: integer('created_at').notNull(),
+  expiresAt: integer('expires_at').notNull(),
+  // 'approved' | 'denied' | null (null until mayor decides or vote tallies)
+  mayorDecision: text('mayor_decision'),
+  // { yes: string[], no: string[] } — bot-name lists keyed by choice
+  votesJson: text('votes_json'),
+});

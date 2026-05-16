@@ -12,7 +12,13 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
 
-export type FallbackKind = 'events' | 'chronicle' | 'journals' | 'disasters' | 'style_observations';
+export type FallbackKind =
+  | 'events'
+  | 'chronicle'
+  | 'journals'
+  | 'disasters'
+  | 'style_observations'
+  | 'approvals';
 
 export interface FallbackEntry {
   kind: FallbackKind;

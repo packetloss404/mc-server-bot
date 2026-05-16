@@ -2450,6 +2450,36 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   // ═══════════════════════════════════════════════════════════════
   //  Town Builder (Phase 1) — founding flow, CRUD, residents, events
   // ═══════════════════════════════════════════════════════════════
+
+  /**
+   * Phase 6-A mayor-only auth helper. There is no real session auth on the
+   * existing town endpoints — we rely on the honor-system body param
+   * `mayorPlayerName` and compare it case-insensitively to the town's
+   * config.mayor.playerName (set at founding via FoundTownModal).
+   *
+   * Returns true when the caller is the mayor; otherwise sends a 403 with
+   * a descriptive error and returns false. Routes should bail immediately
+   * on a false return — the response has already been written.
+   */
+  function requireMayor(req: Request, res: Response, townId: string): boolean {
+    const tm = botManager.getTownManager();
+    const mayor = tm.getMayorService().getMayor(townId);
+    if (!mayor) {
+      res.status(403).json({ error: 'No mayor set for this town' });
+      return false;
+    }
+    const claimed = ((req.body ?? {}) as { mayorPlayerName?: unknown }).mayorPlayerName;
+    if (typeof claimed !== 'string' || claimed.length === 0) {
+      res.status(403).json({ error: 'mayorPlayerName is required' });
+      return false;
+    }
+    if (claimed.toLowerCase() !== mayor.playerName.toLowerCase()) {
+      res.status(403).json({ error: 'Only the mayor can perform this action' });
+      return false;
+    }
+    return true;
+  }
+
   app.get('/api/towns', (_req: Request, res: Response) => {
     const tm = botManager.getTownManager();
     const towns = tm
@@ -2948,6 +2978,9 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   // current parent town and (when auto-approved) immediately founds the
   // child town. Returns the proposal + execution result so the dashboard
   // can surface "Founded <name> 256 blocks <direction>."
+  //
+  // Phase 6-A — gated behind requireMayor: body must include
+  // `mayorPlayerName` matching the town's config.mayor.playerName.
   app.post('/api/towns/:id/expand', (req: Request, res: Response) => {
     const tm = botManager.getTownManager();
     const parent = tm.getTown(String(req.params.id));
@@ -2955,6 +2988,7 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       res.status(404).json({ error: 'Town not found' });
       return;
     }
+    if (!requireMayor(req, res, parent.id)) return;
     const brain = tm.getTownBrain(parent.id);
     if (!brain) {
       res.status(409).json({ error: 'Town brain not wired — try again once the town is active' });
@@ -3001,6 +3035,186 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
         tm.isTownPaused(result.childTown.id),
       ),
     });
+  });
+
+  // ───────────────────────────────────────────────────────────────────
+  //  Phase 6-B — approvals queue (mayor-direct + resident vote)
+  //
+  //  - GET    /api/towns/:id/approvals?status=open|all  — list rows.
+  //  - POST   /api/towns/:id/approvals/:approvalId/vote — cast a single
+  //           bot's vote (body: { voterBotName, choice: 'yes'|'no' }).
+  //  - POST   /api/towns/:id/approvals/:approvalId/decide — mayor-direct
+  //           decide (body: { mayorPlayerName, choice: 'approved'|'denied' }).
+  //
+  //  All three reach the brain's ApprovalManager via TownBrain.getApprovalManager().
+  // ───────────────────────────────────────────────────────────────────
+
+  app.get('/api/towns/:id/approvals', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const statusFilter = String(req.query.status ?? 'open');
+    const status =
+      statusFilter === 'all' || statusFilter === 'open' || statusFilter === 'approved' ||
+      statusFilter === 'denied' || statusFilter === 'expired'
+        ? statusFilter
+        : 'open';
+    const approvals = tm.listApprovals(id, { status: status as 'all' | 'open' | 'approved' | 'denied' | 'expired' });
+    const cfg = (town.config ?? {}) as { approvalMode?: 'mayor' | 'vote' };
+    res.json({
+      approvals,
+      mode: cfg.approvalMode === 'vote' ? 'vote' : 'mayor',
+    });
+  });
+
+  app.post('/api/towns/:id/approvals/:approvalId/vote', async (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const approvalId = String(req.params.approvalId);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(id);
+    if (!brain) {
+      res.status(409).json({ error: 'Town brain not wired yet' });
+      return;
+    }
+    const { voterBotName, choice } = (req.body ?? {}) as {
+      voterBotName?: string;
+      choice?: string;
+    };
+    if (!voterBotName || typeof voterBotName !== 'string') {
+      res.status(400).json({ error: 'voterBotName is required' });
+      return;
+    }
+    if (choice !== 'yes' && choice !== 'no') {
+      res.status(400).json({ error: 'choice must be "yes" or "no"' });
+      return;
+    }
+    const approvalManager = brain.getApprovalManager();
+    const approval = approvalManager.getApproval(approvalId);
+    if (!approval || approval.townId !== id) {
+      res.status(404).json({ error: 'Approval not found for this town' });
+      return;
+    }
+    const ok = approvalManager.castVote(approvalId, voterBotName, choice);
+    if (!ok) {
+      res.status(409).json({ error: 'Approval is not open or vote could not be recorded' });
+      return;
+    }
+    res.json({ approval: approvalManager.getApproval(approvalId) });
+  });
+
+  app.post('/api/towns/:id/approvals/:approvalId/decide', async (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const approvalId = String(req.params.approvalId);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(id);
+    if (!brain) {
+      res.status(409).json({ error: 'Town brain not wired yet' });
+      return;
+    }
+    const { mayorPlayerName, choice } = (req.body ?? {}) as {
+      mayorPlayerName?: string;
+      choice?: string;
+    };
+    if (choice !== 'approved' && choice !== 'denied') {
+      res.status(400).json({ error: 'choice must be "approved" or "denied"' });
+      return;
+    }
+    const approvalManager = brain.getApprovalManager();
+    const approval = approvalManager.getApproval(approvalId);
+    if (!approval || approval.townId !== id) {
+      res.status(404).json({ error: 'Approval not found for this town' });
+      return;
+    }
+    try {
+      const updated = await approvalManager.mayorDecide(approvalId, choice);
+      io.emit('town:event', {
+        townId: id,
+        kind: choice === 'approved' ? 'approval:approved' : 'approval:denied',
+        severity: 'major',
+        ts: Date.now(),
+        highlightScore: choice === 'approved' ? 70 : 50,
+        payload: { approvalId, kind: approval.kind, mayorPlayerName: mayorPlayerName ?? null },
+      });
+      res.json({ approval: updated });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, approvalId, townId: id },
+        'POST /approvals/:id/decide failed',
+      );
+      res.status(500).json({ error: err?.message ?? 'mayorDecide failed' });
+    }
+  });
+
+  // ─── Phase 6-A Mayor decree ───────────────────────────────────────────
+  //
+  // POST /api/towns/:id/mayor/decree — the mayor types a free-form directive
+  // and it gets dropped on the blackboard as a high-priority swarm task with
+  // source 'mayor_directive'. Body: { mayorPlayerName: string, text: string }.
+  // Returns the queued BlackboardTask so the dashboard can surface it.
+  app.post('/api/towns/:id/mayor/decree', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    const town = tm.getTown(townId);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    if (!requireMayor(req, res, town.id)) return;
+    const body = (req.body ?? {}) as { text?: unknown };
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text) {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+    // Hard cap so the blackboard description field stays readable; reject
+    // pathologically large free-form input rather than silently truncating.
+    if (text.length > 1000) {
+      res.status(400).json({ error: 'text must be 1000 characters or fewer' });
+      return;
+    }
+    try {
+      const blackboard = botManager.getBlackboardManager();
+      const description = `Mayor decree (town:${town.id}): ${text}`;
+      const task = blackboard.addTask(
+        { description, keywords: ['mayor', 'decree', 'town'] },
+        'swarm',
+        undefined,
+        'high',
+      );
+      tm.recordEvent({
+        townId: town.id,
+        kind: 'mayor:decree',
+        severity: 'major',
+        payload: { taskId: task.id, text, source: 'mayor_directive' },
+        highlightScore: 60,
+      });
+      io.emit('town:event', {
+        townId: town.id,
+        kind: 'mayor:decree',
+        severity: 'major',
+        ts: Date.now(),
+        highlightScore: 60,
+        payload: { taskId: task.id, text },
+      });
+      res.status(201).json({ task });
+    } catch (err: any) {
+      logger.warn({ err: err?.message, townId: town.id }, 'mayor/decree failed');
+      res.status(500).json({ error: err?.message ?? 'Failed to queue decree' });
+    }
   });
 
   return {

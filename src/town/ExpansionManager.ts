@@ -28,6 +28,7 @@
 import type { TownManager } from './TownManager';
 import type { Town, Vec3 } from './Town';
 import type { StyleSeed } from './StyleDoc';
+import type { ApprovalManager } from './ApprovalManager';
 import { logger } from '../util/logger';
 
 /** Distance from parent capital to child capital, in blocks. */
@@ -73,6 +74,13 @@ export interface ExpansionManagerOptions {
   rng?: () => number;
   /** Override the offset distance — used by tests to shrink coords. */
   offsetBlocks?: number;
+  /**
+   * Phase 6-B — optional ApprovalManager. When present, second+ child
+   * proposals open an approval row and register a resolveOnce handler that
+   * calls executeProposal once approved. Without it the legacy Phase 5
+   * behaviour is preserved (just emit pending_approval and bail).
+   */
+  approvalManager?: ApprovalManager;
 }
 
 export class ExpansionManager {
@@ -80,6 +88,8 @@ export class ExpansionManager {
   private readonly dailyProposalCap: number;
   private readonly rng: () => number;
   private readonly offsetBlocks: number;
+  /** Phase 6-B — set by the brain after construction (avoids ctor cycles). */
+  private approvalManager: ApprovalManager | null;
 
   /** UTC yyyy-mm-dd → proposals issued that day. In-memory only for Phase 5. */
   private readonly dailyProposalCount: Map<string, number> = new Map();
@@ -90,12 +100,28 @@ export class ExpansionManager {
    * table. Cleared per-day with the proposal counter.
    */
   private readonly pendingApprovalLogged: Set<string> = new Set();
+  /**
+   * Tracks which parent towns already have an open approval row pending so
+   * repeated ticks don't keep stuffing duplicate rows into the queue while
+   * the operator hasn't decided yet. Cleared per-day with the proposal counter.
+   */
+  private readonly pendingApprovalIds: Map<string, string> = new Map();
 
   constructor(townManager: TownManager, opts: ExpansionManagerOptions = {}) {
     this.townManager = townManager;
     this.dailyProposalCap = opts.dailyProposalCap ?? DEFAULT_DAILY_PROPOSAL_CAP;
     this.rng = opts.rng ?? Math.random;
     this.offsetBlocks = opts.offsetBlocks ?? CHILD_OFFSET_BLOCKS;
+    this.approvalManager = opts.approvalManager ?? null;
+  }
+
+  /**
+   * Phase 6-B — late-binding setter so the brain can wire the approval
+   * manager after constructing both. ApprovalManager is owned by the brain;
+   * passing it here preserves the existing constructor signature.
+   */
+  setApprovalManager(approvalManager: ApprovalManager | null): void {
+    this.approvalManager = approvalManager;
   }
 
   /**
@@ -132,6 +158,15 @@ export class ExpansionManager {
 
     if (existingChildren.length > 0) {
       // Already has at least one child — second proposal needs approval.
+      const pendingProposal: ChildProposal = {
+        parentTownId: parent.id,
+        parentTownName: parent.name,
+        childName,
+        childCapital,
+        styleSeed,
+        direction,
+        autoApprove: false,
+      };
       if (!this.pendingApprovalLogged.has(parent.id)) {
         this.pendingApprovalLogged.add(parent.id);
         this.townManager.recordEvent({
@@ -142,10 +177,39 @@ export class ExpansionManager {
             proposedChildName: childName,
             direction,
             childCapital,
-            reason: 'awaiting Phase 6 approval flow',
+            reason: 'awaiting approval (Phase 6 queue)',
           },
           highlightScore: 40,
         });
+      }
+      // Phase 6-B — open an approval row + register the resolve hook so an
+      // 'approved' decision actually founds the child. Skipped when no
+      // approval manager has been wired (legacy Phase 5 tests).
+      if (this.approvalManager && !this.pendingApprovalIds.has(parent.id)) {
+        const approval = this.approvalManager.createApproval({
+          townId: parent.id,
+          kind: 'expansion',
+          payload: pendingProposal,
+        });
+        if (approval) {
+          this.pendingApprovalIds.set(parent.id, approval.id);
+          // Force-promote autoApprove to true at execution time so
+          // executeProposal doesn't reject the resolved payload as still
+          // requiring approval — it has already been approved by the queue.
+          const executable: ChildProposal = { ...pendingProposal, autoApprove: true };
+          void this.approvalManager.resolveOnce(approval.id, async () => {
+            // Always re-execute via the manager's own method so the
+            // event/chronicle/founded-events pipeline fires identically to
+            // the auto-approval path.
+            this.executeProposal(executable);
+          });
+          // Clear pendingApprovalIds on ANY terminal status so a
+          // denied/expired row doesn't strand the parent until UTC
+          // midnight. resolveOnce above only fires on 'approved'.
+          void this.approvalManager.onSettled(approval.id, async () => {
+            this.pendingApprovalIds.delete(parent.id);
+          });
+        }
       }
       return null;
     }
@@ -277,6 +341,7 @@ export class ExpansionManager {
   resetDailyCap(): void {
     this.dailyProposalCount.clear();
     this.pendingApprovalLogged.clear();
+    this.pendingApprovalIds.clear();
   }
 
   /** Snapshot for the dashboard / API debug surface. */

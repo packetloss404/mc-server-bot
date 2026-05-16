@@ -43,6 +43,9 @@ import { StyleObserver } from './StyleObserver';
 import { DistrictManager } from './DistrictManager';
 import { ExpansionManager } from './ExpansionManager';
 import { PhoenixManager } from './PhoenixManager';
+import { ApprovalManager } from './ApprovalManager';
+import { GreetingDispatcher } from './GreetingDispatcher';
+import type { MayorService } from './MayorService';
 import { logger } from '../util/logger';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -130,6 +133,20 @@ export class TownBrain {
    */
   private readonly phoenixManager: PhoenixManager;
   /**
+   * Phase 6-A — mayor service + per-tick greeting dispatcher. The dispatcher
+   * piggybacks on this brain's tick instead of running its own 30s timer so
+   * the paused gate + townManager teardown are honored automatically.
+   */
+  private readonly mayorService: MayorService;
+  private readonly greetingDispatcher: GreetingDispatcher;
+  /**
+   * Phase 6-B — approvals queue manager. Owned per-brain so the resolveOnce
+   * registry is isolated per town (matches the per-town tick cadence).
+   * Wired into the ExpansionManager so 2nd+ child proposals open an approval
+   * row + replay-on-approve handler.
+   */
+  private readonly approvalManager: ApprovalManager;
+  /**
    * Phase 5-B — tier snapshot from the previous tick. Lets the district loop
    * detect village→town transitions without an explicit hook. Initialised
    * lazily on the first tick so a freshly-constructed brain doesn't fire a
@@ -182,6 +199,15 @@ export class TownBrain {
       buildCoordinator,
       blackboard,
     );
+    // Phase 6-A — share the TownManager-owned MayorService singleton so the
+    // cooldown ledger is consistent across the brain and the API layer.
+    this.mayorService = townManager.getMayorService();
+    this.greetingDispatcher = new GreetingDispatcher(townManager, botManager, this.mayorService);
+    // Phase 6-B — approvals queue. Wired into the expansion manager so the
+    // 2nd+ child proposal pathway opens an approval row + registers the
+    // replay-on-approve hook.
+    this.approvalManager = new ApprovalManager(townManager);
+    this.expansionManager.setApprovalManager(this.approvalManager);
   }
 
   /** Exposed so TownManager (and the API) can call assignment outside the tick. */
@@ -207,6 +233,11 @@ export class TownBrain {
   /** Phase 5-A — exposed so the API/TownManager can wire post-hoc deps + read state. */
   getPhoenixManager(): PhoenixManager {
     return this.phoenixManager;
+  }
+
+  /** Phase 6-B — exposed so the API can list / decide / cast votes on approvals. */
+  getApprovalManager(): ApprovalManager {
+    return this.approvalManager;
   }
 
   /** Begin periodic ticking. Idempotent — a second call is a no-op. */
@@ -301,6 +332,14 @@ export class TownBrain {
     await this.runLoopSafe('phoenix', () => this.phoenixLoop(town));
     await this.runLoopSafe('district', () => this.districtLoop(town));
     await this.runLoopSafe('expansion', () => this.expansionLoop(town));
+    // Phase 6-B — approvalLoop sits AFTER expansion so any new approval rows
+    // opened by this tick's expansionLoop participate immediately (heuristic
+    // votes get cast on the same tick instead of waiting 60s).
+    await this.runLoopSafe('approval', () => this.approvalLoop(town));
+    // Phase 6-A — greetingLoop sits last in the chain so any state the
+    // earlier loops mutate (e.g. residents) is already settled when the
+    // dispatcher walks the resident list.
+    await this.runLoopSafe('greeting', () => this.greetingLoop(town));
   }
 
   private async runLoopSafe(name: string, fn: () => void | Promise<void>): Promise<void> {
@@ -921,5 +960,73 @@ export class TownBrain {
     if (!proposal) return;
     if (!proposal.autoApprove) return; // pending_approval already emitted
     this.expansionManager.executeProposal(proposal);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 9 (Phase 6-B): approval — drive the approvals queue forward
+  //
+  //  Two responsibilities per tick:
+  //    1. When the town is in 'vote' mode, run the heuristic vote (see
+  //       VoteHeuristic.ts) for every alive resident on every open approval.
+  //       Idempotent — castVote only fires for residents who haven't already
+  //       voted on each approval.
+  //    2. Tally every open approval. tally() resolves the row when the
+  //       deadline passes (mode='mayor' → expired, mode='vote' → majority).
+  //       Approved rows fire the resolveOnce handler the proposer registered
+  //       at create time (e.g. ExpansionManager.executeProposal).
+  // ──────────────────────────────────────────────────────────────────────
+
+  private async approvalLoop(town: Town): Promise<void> {
+    const open = this.approvalManager.listOpen(town.id);
+    if (open.length === 0) return;
+
+    // 1) Heuristic votes when configured. We only build the resident vector
+    //    when needed since it requires walking BotManager workers.
+    const cfg = (town.config ?? {}) as { approvalMode?: 'mayor' | 'vote' };
+    if (cfg.approvalMode === 'vote') {
+      const residents = this.townManager.listResidents(this.townId);
+      // Look up each resident's personality from their worker handle. Bots
+      // who aren't currently online (worker missing) still vote — the worker
+      // lookup is just for the personality string. Fall back to '' when a
+      // worker doesn't exist.
+      const workersByName = new Map<string, string>();
+      for (const w of this.botManager.getAllWorkers()) {
+        workersByName.set(w.botName.toLowerCase(), w.personality);
+      }
+      const voters = residents.map((r) => ({
+        botName: r.botName,
+        personality: workersByName.get(r.botName.toLowerCase()) ?? null,
+        alive: r.status === 'alive' || r.status == null,
+      }));
+      this.approvalManager.castHeuristicVotes(this.townId, voters);
+    }
+
+    // 2) Tally every open approval. tally() is a no-op for rows whose
+    //    expiresAt is still in the future, and returns the same row when
+    //    nothing changed. Failures are isolated per-approval so one bad
+    //    row doesn't block the rest.
+    for (const approval of open) {
+      try {
+        await this.approvalManager.tally(approval.id);
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, approvalId: approval.id, townId: this.townId },
+          'TownBrain approval: tally threw',
+        );
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 10 (Phase 6-A): greeting — say hi to the mayor when in range
+  //
+  //  The dispatcher reads each resident's WorkerHandle, asks it for the
+  //  live player list, and queues a chat IPC when a player is within 16
+  //  blocks AND the (bot, player) cooldown is clear. Mayor lookup +
+  //  cooldown state both live on the shared MayorService.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private async greetingLoop(town: Town): Promise<void> {
+    await this.greetingDispatcher.tick(town.id);
   }
 }

@@ -74,6 +74,22 @@ export function TownStatusCard({ town }: Props) {
         </span>
         <span className="text-sm text-zinc-300 leading-tight">{formatDate(town.foundedAt)}</span>
       </div>
+      {(town.mayorTitle || town.mayorPlayerName) && (
+        <>
+          <span className="w-px h-8 bg-zinc-800" aria-hidden />
+          <div
+            className="flex flex-col min-w-0"
+            title={`The town's mayor — sets the honorific bots use when greeting.`}
+          >
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
+              Mayor
+            </span>
+            <span className="text-sm text-amber-300 leading-tight truncate max-w-[260px]">
+              {[town.mayorTitle, town.mayorPlayerName].filter(Boolean).join(' ')}
+            </span>
+          </div>
+        </>
+      )}
     </div>
   );
 }

@@ -17,6 +17,8 @@ import { ChronicleFeedCard } from '@/components/town/ChronicleFeedCard';
 import { MemorialPanelCard } from '@/components/town/MemorialPanelCard';
 import { DistrictsCard } from '@/components/town/DistrictsCard';
 import { ChildTownsCard } from '@/components/town/ChildTownsCard';
+import { MayorPanelCard } from '@/components/town/MayorPanelCard';
+import { ApprovalQueueCard } from '@/components/town/ApprovalQueueCard';
 
 /**
  * The API may return `paused` as optional (older builds) or omit it entirely
@@ -268,6 +270,12 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
           hint="Founding preset"
         />
       </div>
+
+      {/* Mayor (Phase 6-A) — current mayor + decree form. */}
+      <MayorPanelCard town={town} />
+
+      {/* Approvals (Phase 6-B) — pending gated actions (mayor decide / vote). */}
+      <ApprovalQueueCard town={town} />
 
       {/* Roles + schedule (Phase 3) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

@@ -121,12 +121,25 @@ const CREATE_STATEMENTS = [
     recorded_at INTEGER,
     included INTEGER DEFAULT 1
   )`,
+  // Phase 6-B — approvals queue (mayor-direct or resident-vote).
+  `CREATE TABLE IF NOT EXISTS approvals (
+    id TEXT PRIMARY KEY,
+    town_id TEXT REFERENCES towns(id),
+    kind TEXT NOT NULL,
+    payload_json TEXT,
+    status TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    mayor_decision TEXT,
+    votes_json TEXT
+  )`,
   // Indexes (spec section 10)
   `CREATE INDEX IF NOT EXISTS idx_events_town_time ON events(town_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_town_highlight ON events(town_id, highlight_score DESC, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_buildings_town_status ON buildings(town_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_chronicle_town_day ON chronicle_entries(town_id, day_number DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_disasters_dedupe ON disasters(town_id, dedupe_key)`,
+  `CREATE INDEX IF NOT EXISTS idx_approvals_town_status ON approvals(town_id, status)`,
 ];
 
 /**

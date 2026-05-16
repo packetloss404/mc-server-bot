@@ -21,7 +21,9 @@ export interface Town {
   alliance: Alliance;
   parentTownId?: string | null;
   styleSeed: StylePreset;
-  mayorTitle?: string;
+  mayorTitle?: string | null;
+  /** Phase 6-A — the player who founded the town; used by the Mayor panel. */
+  mayorPlayerName?: string | null;
   /**
    * When the Town Brain is paused, bots stay alive but stop proactively
    * acting. Default false. Synced from the API response (status === 'paused'

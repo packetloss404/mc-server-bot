@@ -23,6 +23,7 @@ import {
   Vec3,
   defaultDistrictBounds,
 } from './Town';
+import type { Approval, ApprovalKind, ApprovalStatus, ApprovalVotes } from './Approval';
 import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
 import {
@@ -36,6 +37,7 @@ import { buildSeedStyle } from './seedStyle';
 import { writeStyle, type StyleSeed } from './StyleDoc';
 import { logger } from '../util/logger';
 import { TownBrain, TownBrainStatus } from './TownBrain';
+import { MayorService } from './MayorService';
 import type { BotManager } from '../bot/BotManager';
 import type { BuildCoordinator } from '../build/BuildCoordinator';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
@@ -48,6 +50,7 @@ type BuildingRow = typeof schema.buildings.$inferSelect;
 type EventRow = typeof schema.events.$inferSelect;
 type ChronicleRow = typeof schema.chronicleEntries.$inferSelect;
 type JournalRow = typeof schema.botJournals.$inferSelect;
+type ApprovalRow = typeof schema.approvals.$inferSelect;
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -269,6 +272,29 @@ function rowToJournal(row: JournalRow): BotJournalEntry {
   };
 }
 
+function rowToApproval(row: ApprovalRow): Approval {
+  const votes = safeJsonParse<ApprovalVotes>(row.votesJson ?? null, { yes: [], no: [] });
+  // Defensive: an empty/legacy row may serialise as {} — normalise to arrays.
+  const safeVotes: ApprovalVotes = {
+    yes: Array.isArray(votes?.yes) ? votes.yes : [],
+    no: Array.isArray(votes?.no) ? votes.no : [],
+  };
+  return {
+    id: row.id,
+    townId: row.townId ?? '',
+    kind: row.kind,
+    payload: safeJsonParse<unknown>(row.payloadJson ?? null, null),
+    status: (row.status as ApprovalStatus) ?? 'open',
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    mayorDecision:
+      row.mayorDecision === 'approved' || row.mayorDecision === 'denied'
+        ? row.mayorDecision
+        : null,
+    votes: safeVotes,
+  };
+}
+
 export interface TownManagerOptions {
   /** Override the data directory (defaults to `<cwd>/data`). Useful for tests. */
   dataDir?: string;
@@ -303,6 +329,13 @@ export class TownManager {
     chronicleGenerator: import('./ChronicleGenerator').ChronicleGenerator | null;
     markerStore: import('../control/MarkerStore').MarkerStore | null;
   } | null = null;
+  /**
+   * Phase 6-A — singleton MayorService. Lazily constructed (after the
+   * TownManager itself, so the ctor can pass `this`). Exposed via
+   * `getMayorService()` so the API layer and the TownBrain can share one
+   * instance — cooldown state lives on this service, not on each brain.
+   */
+  private mayorService: MayorService | null = null;
 
   constructor(opts: TownManagerOptions = {}) {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
@@ -488,6 +521,38 @@ export class TownManager {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  //  Mayor (Phase 6-A) — shared service for player greetings + decree auth
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Lazy singleton accessor for the per-process MayorService. Shared by the
+   * TownBrain's greeting loop and the API layer's mayor-auth helpers so
+   * cooldown state lives in exactly one place.
+   */
+  getMayorService(): MayorService {
+    if (!this.mayorService) this.mayorService = new MayorService(this);
+    return this.mayorService;
+  }
+
+  /**
+   * Update the mayor on a town's config in-place. Used by MayorService.setMayor
+   * (which Phase 6-B's voting flow ultimately calls). Returns false when the
+   * town is unknown or the write fails. Existing config.mayor.* fields
+   * (stealth, voteWeight) are preserved.
+   */
+  setMayor(townId: string, playerName: string, title: string): boolean {
+    const town = this.getTown(townId);
+    if (!town) return false;
+    const mayor = {
+      ...(town.config?.mayor ?? {}),
+      playerName,
+      title,
+    };
+    const updated = this.updateTown(townId, { config: { ...town.config, mayor } });
+    return updated != null;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   //  Towns
   // ──────────────────────────────────────────────────────────────────────
 
@@ -660,6 +725,9 @@ export class TownManager {
       try { brain.stop(); } catch { /* swallow */ }
       this.townBrains.delete(id);
     }
+    // Phase 6-A — drop greeting cooldowns so a future re-founding doesn't
+    // inherit stale (bot, player) entries.
+    try { this.mayorService?.clearTown(id); } catch { /* swallow */ }
     this.recordEvent({
       townId: id,
       kind: 'town_abandoned',
@@ -1411,6 +1479,168 @@ export class TownManager {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  //  Approvals (Phase 6-B — voting + mayor-direct gating layer)
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Insert a new approval row. JSONL fallback on DB failure so a wedged DB
+   * never drops a pending decision. Returns the canonical Approval — the
+   * caller (ApprovalManager) registers a `resolveOnce` handler keyed by id.
+   */
+  insertApproval(input: {
+    townId: string;
+    kind: ApprovalKind | string;
+    payload: unknown;
+    createdAt: number;
+    expiresAt: number;
+    status?: ApprovalStatus;
+  }): Approval | null {
+    const id = genId('apv');
+    const status: ApprovalStatus = input.status ?? 'open';
+    const votes: ApprovalVotes = { yes: [], no: [] };
+    const approval: Approval = {
+      id,
+      townId: input.townId,
+      kind: input.kind,
+      payload: input.payload,
+      status,
+      createdAt: input.createdAt,
+      expiresAt: input.expiresAt,
+      mayorDecision: null,
+      votes,
+    };
+    try {
+      this.db
+        .insert(schema.approvals)
+        .values({
+          id,
+          townId: input.townId,
+          kind: input.kind,
+          payloadJson: input.payload == null ? null : JSON.stringify(input.payload),
+          status,
+          createdAt: input.createdAt,
+          expiresAt: input.expiresAt,
+          mayorDecision: null,
+          votesJson: JSON.stringify(votes),
+        })
+        .run();
+    } catch (err: any) {
+      this.appendFallbackRow('approvals', input.townId, {
+        id,
+        townId: input.townId,
+        kind: input.kind,
+        payload: input.payload,
+        status,
+        createdAt: input.createdAt,
+        expiresAt: input.expiresAt,
+        mayorDecision: null,
+        votes,
+      });
+      logger.warn(
+        { err: err?.message, townId: input.townId, kind: input.kind },
+        'insertApproval: DB write failed; routed to fallback',
+      );
+    }
+    return approval;
+  }
+
+  /**
+   * Patch an approval row. Only fields explicitly present in `patch` are
+   * touched. Returns true on a successful update, false when the row is
+   * missing or the DB write throws.
+   */
+  updateApproval(
+    approvalId: string,
+    patch: {
+      status?: ApprovalStatus;
+      mayorDecision?: 'approved' | 'denied' | null;
+      votes?: ApprovalVotes;
+      expiresAt?: number;
+    },
+  ): boolean {
+    try {
+      const current = this.db
+        .select()
+        .from(schema.approvals)
+        .where(eq(schema.approvals.id, approvalId))
+        .get();
+      if (!current) return false;
+      const fields: Partial<ApprovalRow> = {};
+      if (patch.status !== undefined) fields.status = patch.status;
+      if (patch.mayorDecision !== undefined) fields.mayorDecision = patch.mayorDecision;
+      if (patch.expiresAt !== undefined) fields.expiresAt = patch.expiresAt;
+      if (patch.votes !== undefined) {
+        fields.votesJson = JSON.stringify({
+          yes: Array.isArray(patch.votes.yes) ? patch.votes.yes : [],
+          no: Array.isArray(patch.votes.no) ? patch.votes.no : [],
+        });
+      }
+      if (Object.keys(fields).length === 0) return true;
+      this.db
+        .update(schema.approvals)
+        .set(fields)
+        .where(eq(schema.approvals.id, approvalId))
+        .run();
+      return true;
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, approvalId },
+        'updateApproval: DB write failed',
+      );
+      return false;
+    }
+  }
+
+  /**
+   * List approvals for a town. Filtered by status when provided; newest first
+   * by createdAt. Capped at 200 rows so a runaway queue can't blow up the
+   * response.
+   */
+  listApprovals(
+    townId: string,
+    opts: { status?: ApprovalStatus | 'all'; limit?: number } = {},
+  ): Approval[] {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
+    try {
+      const whereExpr =
+        opts.status && opts.status !== 'all'
+          ? and(eq(schema.approvals.townId, townId), eq(schema.approvals.status, opts.status))
+          : eq(schema.approvals.townId, townId);
+      const rows = this.db
+        .select()
+        .from(schema.approvals)
+        .where(whereExpr)
+        .orderBy(desc(schema.approvals.createdAt))
+        .limit(limit)
+        .all();
+      return rows.map(rowToApproval);
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, status: opts.status },
+        'listApprovals: read failed; returning empty list',
+      );
+      return [];
+    }
+  }
+
+  getApproval(approvalId: string): Approval | null {
+    try {
+      const row = this.db
+        .select()
+        .from(schema.approvals)
+        .where(eq(schema.approvals.id, approvalId))
+        .get();
+      return row ? rowToApproval(row) : null;
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, approvalId },
+        'getApproval: read failed',
+      );
+      return null;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   //  Style observations (Phase 4 — feedback path)
   // ──────────────────────────────────────────────────────────────────────
 
@@ -1609,6 +1839,22 @@ export class TownManager {
             paletteJson: row.palette == null ? null : JSON.stringify(row.palette),
             recordedAt: row.recordedAt ?? null,
             included: row.included !== false,
+          })
+          .run();
+        return;
+      case 'approvals':
+        this.db
+          .insert(schema.approvals)
+          .values({
+            id: row.id,
+            townId: row.townId ?? entry.townId,
+            kind: row.kind,
+            payloadJson: row.payload == null ? null : JSON.stringify(row.payload),
+            status: row.status ?? 'open',
+            createdAt: row.createdAt,
+            expiresAt: row.expiresAt,
+            mayorDecision: row.mayorDecision ?? null,
+            votesJson: row.votes == null ? null : JSON.stringify(row.votes),
           })
           .run();
         return;

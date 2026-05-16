@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { api, type ChildTownDTO } from '@/lib/api';
 import { useToast } from '@/components/Toast';
+import { useTownStore } from '@/lib/townStore';
 
 interface Props {
   townId: string;
@@ -23,6 +24,11 @@ export function ChildTownsCard({ townId }: Props) {
   const [children, setChildren] = useState<ChildTownDTO[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [expanding, setExpanding] = useState(false);
+  // Phase 6-A — /expand is mayor-gated; pull the mayor name from the store so
+  // we can pass it in the request body.
+  const mayorPlayerName = useTownStore(
+    (s) => s.towns.find((t) => t.id === townId)?.mayorPlayerName ?? null,
+  );
 
   const refresh = async () => {
     const { children: list } = await api.listChildTowns(townId);
@@ -48,9 +54,13 @@ export function ChildTownsCard({ townId }: Props) {
 
   const handleExpand = async () => {
     if (expanding) return;
+    if (!mayorPlayerName) {
+      toast('Only the mayor can expand the town — no mayor is set.', 'error');
+      return;
+    }
     setExpanding(true);
     try {
-      const res = await api.requestExpansion(townId);
+      const res = await api.requestExpansion(townId, mayorPlayerName);
       if (res.executed && res.childTown) {
         toast(
           `Founded ${res.childTown.name} ${res.proposal.direction.toLowerCase()} of capital`,

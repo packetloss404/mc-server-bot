@@ -1135,10 +1135,67 @@ export const api = {
     fetchJSON<{ children: ChildTownDTO[] }>(
       `/api/towns/${encodeURIComponent(id)}/children`,
     ).catch(() => ({ children: [] as ChildTownDTO[] })),
-  requestExpansion: (id: string) =>
+  requestExpansion: (id: string, mayorPlayerName: string) =>
     fetchJSON<ExpansionResponse>(
       `/api/towns/${encodeURIComponent(id)}/expand`,
-      { method: 'POST' },
+      { method: 'POST', body: JSON.stringify({ mayorPlayerName }) },
+    ),
+
+  // ─── Phase 6-A Mayor decree ───────────────────────────────────────────
+  //
+  // Drops a free-form directive onto the blackboard as a high-priority
+  // swarm task. Requires the caller to assert they are the mayor via
+  // `mayorPlayerName` — the backend compares against town.config.mayor.
+  // Surfaces 4xx errors (403 not mayor, 400 missing text) so the toast
+  // layer can show the reason.
+  issueMayorDecree: (id: string, mayorPlayerName: string, text: string) =>
+    fetchJSON<{ task: MayorDecreeTaskDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/mayor/decree`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ mayorPlayerName, text }),
+      },
+    ),
+
+  // ─── Phase 6-B: approvals queue ────────────────────────────────────────
+  //
+  // Anything emitting `*:pending_approval` lands here. The queue card polls
+  // /approvals every 10s; voting + decide endpoints write back. GET swallows
+  // errors so the card renders an empty state until the backend boots; the
+  // POSTs surface so the toast layer can show "Backend not ready yet."
+  listTownApprovals: (
+    id: string,
+    opts?: { status?: 'open' | 'all' | 'approved' | 'denied' | 'expired' },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set('status', opts.status);
+    const qs = q.toString();
+    return fetchJSON<{ approvals: TownApprovalDTO[]; mode: 'mayor' | 'vote' }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({
+      approvals: [] as TownApprovalDTO[],
+      mode: 'mayor' as 'mayor' | 'vote',
+    }));
+  },
+  castApprovalVote: (
+    id: string,
+    approvalId: string,
+    voterBotName: string,
+    choice: 'yes' | 'no',
+  ) =>
+    fetchJSON<{ approval: TownApprovalDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/vote`,
+      { method: 'POST', body: JSON.stringify({ voterBotName, choice }) },
+    ),
+  decideApproval: (
+    id: string,
+    approvalId: string,
+    choice: 'approved' | 'denied',
+    mayorPlayerName?: string,
+  ) =>
+    fetchJSON<{ approval: TownApprovalDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/decide`,
+      { method: 'POST', body: JSON.stringify({ choice, mayorPlayerName }) },
     ),
 };
 
@@ -1157,9 +1214,22 @@ export interface TownDTO {
   alliance: 'allied' | 'rival' | 'neutral' | null;
   parentTownId?: string | null;
   styleSeed: 'medieval-communal' | 'mid-century-civic';
-  mayorTitle?: string;
+  mayorTitle?: string | null;
+  /** Phase 6-A — surfaced from the backend DTO; required for the mayor panel. */
+  mayorPlayerName?: string | null;
   /** Town Brain frozen — Phase 2. Defaults to false on older payloads. */
   paused?: boolean;
+}
+
+// Phase 6-A — minimal mirror of the BlackboardTask shape the decree endpoint
+// returns. The dashboard only needs id/description/createdAt to render the
+// "last decree" preview row; everything else is intentionally optional.
+export interface MayorDecreeTaskDTO {
+  id: string;
+  description: string;
+  priority?: 'low' | 'normal' | 'high' | 'critical';
+  createdAt?: number;
+  status?: 'pending' | 'claimed' | 'completed' | 'blocked';
 }
 
 export interface TownDistrictDTO {
@@ -1279,6 +1349,28 @@ export interface ExpansionResponse {
   childTown?: TownDTO;
   /** Populated when executed === false (pending approval, etc.). */
   reason?: string;
+}
+
+// ─── Phase 6-B: approvals queue ────────────────────────────────────────────
+//
+// Mirrors `Approval` in src/town/Approval.ts. `kind` is open-ended so future
+// proposers (construction approvals, decree ratifications, etc.) can wedge
+// without a client schema bump. `payload` is the original proposal blob and
+// is rendered as a JSON-summary in the queue card.
+
+export type TownApprovalStatus = 'open' | 'approved' | 'denied' | 'expired';
+
+export interface TownApprovalDTO {
+  id: string;
+  townId: string;
+  /** 'expansion' | 'construction' | 'milestone' | 'decree' | <future> */
+  kind: string;
+  payload: unknown;
+  status: TownApprovalStatus;
+  createdAt: number;
+  expiresAt: number;
+  mayorDecision: 'approved' | 'denied' | null;
+  votes: { yes: string[]; no: string[] };
 }
 
 // ─── Town roles (Phase 3) ─────────────────────────────────────────────────

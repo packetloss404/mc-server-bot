@@ -13,6 +13,7 @@ import { TokenLedger } from './ai/TokenLedger';
 import { LLMSettings } from './ai/LLMSettings';
 import { registerLLMRoutes } from './server/llmRoutes';
 import { setupSocketEvents } from './server/socketEvents';
+import { HighlightStream } from './town/HighlightStream';
 
 function buildModelRouter(config: ReturnType<typeof loadConfig>): { client: LLMClient | null; ledger: TokenLedger } {
   const ledger = new TokenLedger();
@@ -65,6 +66,9 @@ async function main() {
   }
 
   const botManager = new BotManager(config, llmClient);
+  // TownManager is instantiated inside BotManager (so spawn hooks can reach it
+  // via getTownManager()). Log here for boot visibility.
+  logger.info({ towns: botManager.getTownManager().listTowns().length }, 'TownManager booted');
   let memoryInterval: NodeJS.Timeout | null = null;
   const snapshotDir = path.join(process.cwd(), 'diagnostics', 'heapsnapshots');
   const snapshotThresholdsMb = [512, 1024, 2048, 3072];
@@ -73,8 +77,13 @@ async function main() {
   // Restore previously saved bots
   await botManager.loadSavedBots();
 
+  // Phase 8 — instantiate the streamer's in-memory highlight ring once,
+  // then hand it to the API layer so the town:event emitter + the
+  // /api/highlights routes share the same buffer.
+  const highlightStream = new HighlightStream();
+
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator } = createAPIServer(botManager, config, tokenLedger);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator, chronicleScheduler } = createAPIServer(botManager, config, tokenLedger, highlightStream);
 
   // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);
@@ -230,6 +239,9 @@ async function main() {
     // Flush supply chain coordinator (stops polling + saves)
     chainCoordinator.shutdown();
 
+    // Stop the chronicle scheduler so no late tick fires after the DB closes.
+    try { chronicleScheduler.stop(); } catch { /* swallow */ }
+
     // Flush campaign manager (persists state)
     campaignManager.shutdown();
 
@@ -255,6 +267,9 @@ async function main() {
 
     // Disconnect and remove all bots (also saves bots.json)
     await botManager.removeAllBots();
+
+    // Close the Town DB connection
+    try { botManager.getTownManager().shutdown(); } catch { /* swallow */ }
 
     logger.info('DyoBot shutdown complete');
     process.exit(0);

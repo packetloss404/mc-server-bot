@@ -23,8 +23,24 @@ export class BlackboardProxy {
     return this.ipc.request('blackboard.addTask', [task, source, goalId]);
   }
 
-  async claimBestTask(botName: string, query?: string, personality?: string, botPosition?: { x: number; y: number; z: number }): Promise<any> {
-    return this.ipc.request('blackboard.claimBestTask', [botName, query, personality, botPosition]);
+  async claimBestTask(
+    botName: string,
+    query?: string,
+    personality?: string,
+    botPosition?: { x: number; y: number; z: number },
+    role?: string,
+  ): Promise<any> {
+    return this.ipc.request('blackboard.claimBestTask', [botName, query, personality, botPosition, role]);
+  }
+
+  /**
+   * Followup #40 — fetch a bot's town role across the IPC boundary.
+   * Returns null when the bot isn't a town resident OR the worker can't
+   * reach TownManager. Result is cached on WorkerHandle for 60s to keep
+   * the hot Voyager-claim path cheap.
+   */
+  async getBotRole(botName: string): Promise<string | null> {
+    return this.ipc.request('blackboard.getBotRole', [botName]);
   }
 
   async completeTask(taskDescription: string, botName: string): Promise<void> {

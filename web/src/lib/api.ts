@@ -501,16 +501,35 @@ export interface LLMTraceEntry {
 export const api = {
   // ─── Auth ───
   getAuthStatus: () =>
-    fetchJSON<{ enabled: boolean; authenticated: boolean; pluginAuthEnabled: boolean }>(
-      '/api/auth/status',
-    ),
+    fetchJSON<{
+      enabled: boolean;
+      authenticated: boolean;
+      pluginAuthEnabled: boolean;
+      playerAuthEnforced?: boolean;
+      playerName?: string | null;
+    }>('/api/auth/status'),
   login: (secret: string) =>
-    fetchJSON<{ ok: boolean; enabled?: boolean }>('/api/auth/login', {
+    fetchJSON<{ ok: boolean; enabled?: boolean; playerName?: string | null }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ secret }),
     }),
+  /**
+   * Followup #58 — player-identity login. Mints a signed `pid` cookie
+   * carrying the playerName so `requireMayor` can validate "is this the
+   * mayor of <town>?" without trusting a body field. When the backend's
+   * `auth.devSecret` is set the `secret` argument is required; when it
+   * isn't, the secret is ignored and any playerName succeeds (local dev).
+   */
+  loginAs: (playerName: string, secret?: string) =>
+    fetchJSON<{ ok: boolean; playerName?: string | null }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ playerName, secret: secret ?? '' }),
+    }),
   logout: () =>
     fetchJSON<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  /** Followup #58 — read the playerName bound to the current session. */
+  getCurrentUser: () =>
+    fetchJSON<{ playerName: string | null }>('/api/auth/me').catch(() => ({ playerName: null })),
 
   // Bots
   getBots: () => fetchJSON<{ bots: BotStatus[] }>('/api/bots'),
@@ -978,7 +997,566 @@ export const api = {
    * is a binary tar.gz stream, not JSON.
    */
   getBackupDownloadUrl: () => `${API_BASE}/api/admin/backup`,
+
+  // ─── Towns (Autonomous Town Builder, Phase 1) ───
+  //
+  // Backend is being implemented in parallel by another agent against the
+  // contract documented in TOWN_BUILDER_SPEC.md §12 and reflected here.
+  // We swallow GET failures so the dashboard doesn't blow up when the
+  // backend hasn't shipped these endpoints yet — the page renders an
+  // empty state.
+  listTowns: () =>
+    fetchJSON<{ towns: TownDTO[] }>('/api/towns').catch(() => ({ towns: [] as TownDTO[] })),
+  getTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(`/api/towns/${encodeURIComponent(id)}`),
+  createTown: (data: {
+    name: string;
+    capital: { x: number; y: number; z: number };
+    stylePreset: 'medieval-communal' | 'mid-century-civic';
+    mayorTitle?: string;
+  }) =>
+    fetchJSON<{ town: TownDTO }>('/api/towns', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+  updateTown: (id: string, data: Partial<TownDTO>) =>
+    fetchJSON<{ town: TownDTO }>(`/api/towns/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    }),
+  deleteTown: (id: string) =>
+    fetchJSON<{ ok: boolean }>(`/api/towns/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
+  getTownBuildings: (id: string) =>
+    fetchJSON<{ buildings: TownBuildingDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/buildings`,
+    ).catch(() => ({ buildings: [] as TownBuildingDTO[] })),
+  getTownResidents: (id: string) =>
+    fetchJSON<{ residents: TownResidentDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/residents`,
+    ).catch(() => ({ residents: [] as TownResidentDTO[] })),
+  getTownDistricts: (id: string) =>
+    fetchJSON<{ districts: TownDistrictDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/districts`,
+    ).catch(() => ({ districts: [] as TownDistrictDTO[] })),
+  getTownEvents: (id: string, params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ events: TownEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/events${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ events: [] as TownEventDTO[] }));
+  },
+  addTownResident: (id: string, data: { botName: string; role: string }) =>
+    fetchJSON<{ resident: TownResidentDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/residents`,
+      { method: 'POST', body: JSON.stringify(data) },
+    ),
+  // The pause/resume backend ships in parallel with this client wiring (Phase
+  // 2 — other agent). Errors propagate to the caller so the toast layer can
+  // surface "Backend not ready yet."
+  pauseTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/pause`,
+      { method: 'POST' },
+    ),
+  resumeTown: (id: string) =>
+    fetchJSON<{ town: TownDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/resume`,
+      { method: 'POST' },
+    ),
+
+  // Followup #38 — surface the TownBrain lifecycle status (running/paused
+  // + lastTickAt + tick count) so the dashboard can render a "last tick Xs
+  // ago" widget. Errors swallow so the card just hides on backend hiccups.
+  getBrainStatus: (id: string) =>
+    fetchJSON<{ brain: TownBrainStatusDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/brain`,
+    ).catch(() => null as { brain: TownBrainStatusDTO } | null),
+
+  // ─── Town roles & schedules (Phase 3 — parallel backend agent) ───
+  //
+  // GET endpoints swallow errors so the UI can fall back to a "no role data
+  // yet" empty state if the backend hasn't shipped yet. The POST surfaces
+  // errors so the caller can revert optimistic state + toast.
+  listTownRoles: (id: string) =>
+    fetchJSON<TownRolesResponse>(
+      `/api/towns/${encodeURIComponent(id)}/roles`,
+    ).catch(() => null as TownRolesResponse | null),
+  setResidentRole: (id: string, botName: string, role: string) =>
+    fetchJSON<{ ok: true; botName: string; role: string }>(
+      `/api/towns/${encodeURIComponent(id)}/roles/${encodeURIComponent(botName)}`,
+      { method: 'POST', body: JSON.stringify({ role }) },
+    ),
+  getTownSchedules: (id: string) =>
+    fetchJSON<TownSchedulesResponse>(
+      `/api/towns/${encodeURIComponent(id)}/schedules`,
+    ).catch(() => null as TownSchedulesResponse | null),
+
+  // ─── Town chronicle (Phase 4-B) ───────────────────────────────────────
+  //
+  // Daily LLM-narrated story entries (last 7 by default) and the manual
+  // "Generate now" trigger. GET swallows errors so the dashboard renders an
+  // empty state when the backend hasn't finished booting; POST surfaces so
+  // toasts can show "Backend not ready yet."
+  listTownChronicle: (id: string, params?: { limit?: number; kind?: string }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.kind !== undefined) q.set('kind', params.kind);
+    const qs = q.toString();
+    return fetchJSON<{ entries: ChronicleEntryDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/chronicle${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ entries: [] as ChronicleEntryDTO[] }));
+  },
+  generateChronicleNow: (
+    id: string,
+    body?: { dayNumber?: number; force?: boolean },
+  ) =>
+    fetchJSON<{ entry?: ChronicleEntryDTO; ok?: false; reason?: string; dayNumber?: number }>(
+      `/api/towns/${encodeURIComponent(id)}/chronicle/generate`,
+      { method: 'POST', body: JSON.stringify(body ?? {}) },
+    ),
+  listBotJournals: (id: string, params?: { botName?: string; limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.botName !== undefined) q.set('botName', params.botName);
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    const qs = q.toString();
+    return fetchJSON<{ journals: BotJournalDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/journals${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ journals: [] as BotJournalDTO[] }));
+  },
+
+  // ─── Phase 5-A Disasters + Memorial Park ──────────────────────────────
+  //
+  // Disaster rows from the Phoenix self-healing loop + the Memorial Park
+  // monument markers. Both GETs swallow errors so the panel renders an
+  // empty state when the backend hasn't booted yet.
+  listTownDisasters: (id: string, params?: { limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    const qs = q.toString();
+    return fetchJSON<{ disasters: TownDisasterDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/disasters${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ disasters: [] as TownDisasterDTO[] }));
+  },
+  getMemorialPark: (id: string) =>
+    fetchJSON<{ bounds: MemorialParkBoundsDTO | null; markers: Marker[] }>(
+      `/api/towns/${encodeURIComponent(id)}/memorial`,
+    ).catch(() => ({ bounds: null, markers: [] as Marker[] })),
+
+  // ─── Phase 5-B: districts (style evolution) + child towns (self-expansion)
+  //
+  // listTownDistricts hits the existing /districts endpoint (it existed in
+  // Phase 1 but the client wasn't using it from a dedicated card). The two
+  // new endpoints — /children and /expand — ship in Phase 5-B. GETs swallow
+  // errors so the cards render an empty state until the backend boots.
+  // requestExpansion surfaces errors so the toast layer can show
+  // "Not eligible" reasons (tier shortfall, daily cap, pending approval).
+  listTownDistricts: (id: string) =>
+    fetchJSON<{ districts: TownDistrictDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/districts`,
+    ).catch(() => ({ districts: [] as TownDistrictDTO[] })),
+  listChildTowns: (id: string) =>
+    fetchJSON<{ children: ChildTownDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/children`,
+    ).catch(() => ({ children: [] as ChildTownDTO[] })),
+  requestExpansion: (id: string, mayorPlayerName: string) =>
+    fetchJSON<ExpansionResponse>(
+      `/api/towns/${encodeURIComponent(id)}/expand`,
+      { method: 'POST', body: JSON.stringify({ mayorPlayerName }) },
+    ),
+
+  // ─── Phase 6-A Mayor decree ───────────────────────────────────────────
+  //
+  // Drops a free-form directive onto the blackboard as a high-priority
+  // swarm task. Requires the caller to assert they are the mayor via
+  // `mayorPlayerName` — the backend compares against town.config.mayor.
+  // Surfaces 4xx errors (403 not mayor, 400 missing text) so the toast
+  // layer can show the reason.
+  issueMayorDecree: (id: string, mayorPlayerName: string, text: string) =>
+    fetchJSON<{ task: MayorDecreeTaskDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/mayor/decree`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ mayorPlayerName, text }),
+      },
+    ),
+  // Followup #59 — persisted mayor decree feed. Pulls rows from the events
+  // table where kind='mayor:decree' so MayorPanelCard can render history
+  // that survives a page reload. GET swallows errors so the panel renders
+  // an empty state when the backend hasn't booted yet.
+  listMayorDecrees: (id: string, limit?: number) => {
+    const q = new URLSearchParams();
+    if (limit !== undefined) q.set('limit', String(limit));
+    const qs = q.toString();
+    return fetchJSON<{ decrees: MayorDecreeEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/decrees${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ decrees: [] as MayorDecreeEventDTO[] }));
+  },
+
+  // ─── Phase 6-B: approvals queue ────────────────────────────────────────
+  //
+  // Anything emitting `*:pending_approval` lands here. The queue card polls
+  // /approvals every 10s; voting + decide endpoints write back. GET swallows
+  // errors so the card renders an empty state until the backend boots; the
+  // POSTs surface so the toast layer can show "Backend not ready yet."
+  listTownApprovals: (
+    id: string,
+    opts?: { status?: 'open' | 'all' | 'approved' | 'denied' | 'expired' },
+  ) => {
+    const q = new URLSearchParams();
+    if (opts?.status) q.set('status', opts.status);
+    const qs = q.toString();
+    return fetchJSON<{ approvals: TownApprovalDTO[]; mode: 'mayor' | 'vote' }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({
+      approvals: [] as TownApprovalDTO[],
+      mode: 'mayor' as 'mayor' | 'vote',
+    }));
+  },
+  castApprovalVote: (
+    id: string,
+    approvalId: string,
+    voterBotName: string,
+    choice: 'yes' | 'no',
+  ) =>
+    fetchJSON<{ approval: TownApprovalDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/vote`,
+      { method: 'POST', body: JSON.stringify({ voterBotName, choice }) },
+    ),
+  decideApproval: (
+    id: string,
+    approvalId: string,
+    choice: 'approved' | 'denied',
+    mayorPlayerName?: string,
+  ) =>
+    fetchJSON<{ approval: TownApprovalDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/decide`,
+      { method: 'POST', body: JSON.stringify({ choice, mayorPlayerName }) },
+    ),
+
+  // ─── Phase 7 — diplomacy + trade routes ───────────────────────────────
+  //
+  // P7-A owns the relationships endpoints; P7-B owns the trade-routes one.
+  // GETs swallow errors so the cards render an empty state until both
+  // backend pieces ship. setRelationship surfaces errors so the toast
+  // layer can show "not mayor" / "town not found" reasons.
+  listTownRelationships: (id: string) =>
+    fetchJSON<{ relationships: TownRelationshipEdgeDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/relationships`,
+    ).catch(() => ({ relationships: [] as TownRelationshipEdgeDTO[] })),
+  setRelationship: (
+    id: string,
+    peerTownId: string,
+    state: 'allied' | 'rival' | 'neutral',
+    mayorPlayerName: string,
+    reason?: string,
+  ) =>
+    fetchJSON<{ relationship: TownRelationshipEdgeDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/relationships/${encodeURIComponent(peerTownId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ state, mayorPlayerName, reason }),
+      },
+    ),
+  getRelationshipGraph: () =>
+    fetchJSON<{ edges: TownRelationshipGraphEdgeDTO[] }>('/api/town-relationships').catch(
+      () => ({ edges: [] as TownRelationshipGraphEdgeDTO[] }),
+    ),
+  listTradeRoutes: (id: string) =>
+    fetchJSON<{ routes: TradeRouteDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/trade-routes`,
+    ).catch(() => ({ routes: [] as TradeRouteDTO[] })),
+
+  // ─── Phase 8 — streaming highlight feeds ────────────────────────────────
+  //
+  // Per-town highlight feed (SQLite, full history) and cross-town "best of
+  // all towns" feed (in-memory ring). Both GETs swallow errors so the
+  // HighlightsCard renders an empty state when the backend hasn't booted.
+  listTownHighlights: (id: string, params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ events: TownEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/highlights${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ events: [] as TownEventDTO[] }));
+  },
+  listGlobalHighlights: (params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ highlights: GlobalHighlightDTO[] }>(
+      `/api/highlights${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ highlights: [] as GlobalHighlightDTO[] }));
+  },
+  getStreamingHealth: () =>
+    fetchJSON<StreamingHealthDTO>('/api/streaming/health').catch(() => ({
+      wsConnected: 0,
+      towns: 0,
+      eventsPerMin: 0,
+      lastEventAt: 0,
+      avgHighlightScore: 0,
+    } as StreamingHealthDTO)),
 };
+
+// ─── Town DTOs (mirror townStore types — kept here so api.ts stays
+// self-contained and import order doesn't matter). The Town* prefix avoids
+// clashing with any backend types the rest of api.ts may grow into. ─
+
+export interface TownDTO {
+  id: string;
+  name: string;
+  foundedAt: number;
+  capital: { x: number; y: number; z: number };
+  tier: 'founding' | 'village' | 'town';
+  status: 'active' | 'dormant' | 'abandoned';
+  population: number;
+  alliance: 'allied' | 'rival' | 'neutral' | null;
+  parentTownId?: string | null;
+  styleSeed: 'medieval-communal' | 'mid-century-civic';
+  mayorTitle?: string | null;
+  /** Phase 6-A — surfaced from the backend DTO; required for the mayor panel. */
+  mayorPlayerName?: string | null;
+  /** Town Brain frozen — Phase 2. Defaults to false on older payloads. */
+  paused?: boolean;
+}
+
+/**
+ * Followup #38 — TownBrain lifecycle snapshot. Mirrors the TownBrainStatus
+ * shape on the backend (src/town/TownBrain.ts) so the BrainStatusCard can
+ * render running/paused + last-tick-ago + tick count without an extra
+ * round-trip.
+ */
+export interface TownBrainStatusDTO {
+  townId: string;
+  running: boolean;
+  paused: boolean;
+  /** Epoch ms of the last completed tick; null when none have run yet. */
+  lastTickAt: number | null;
+  ticks: number;
+}
+
+// Phase 6-A — minimal mirror of the BlackboardTask shape the decree endpoint
+// returns. The dashboard only needs id/description/createdAt to render the
+// "last decree" preview row; everything else is intentionally optional.
+export interface MayorDecreeTaskDTO {
+  id: string;
+  description: string;
+  priority?: 'low' | 'normal' | 'high' | 'critical';
+  createdAt?: number;
+  status?: 'pending' | 'claimed' | 'completed' | 'blocked';
+}
+
+/**
+ * Followup #59 — persisted decree row returned by GET /api/towns/:id/decrees.
+ * Built server-side from events where kind='mayor:decree'. `text` is the raw
+ * decree body, `taskId` references the BlackboardTask the decree dispatched,
+ * `source` carries the upstream label ('mayor_directive' today).
+ */
+export interface MayorDecreeEventDTO {
+  id: string;
+  townId: string;
+  occurredAt: number;
+  text: string | null;
+  taskId: string | null;
+  source: string | null;
+}
+
+export interface TownDistrictDTO {
+  id: string;
+  townId: string;
+  name: string;
+  stylePreset: 'medieval-communal' | 'mid-century-civic';
+  isDefault: boolean;
+  /** Phase 5-B — when the district row was inserted. Optional for backwards
+   *  compat with older API payloads that omitted it. */
+  foundedAt?: number;
+}
+
+export interface TownBuildingDTO {
+  id: string;
+  townId: string;
+  districtId?: string | null;
+  name: string;
+  status: 'planned' | 'building' | 'complete' | 'damaged' | 'destroyed';
+  origin?: { x: number; y: number; z: number };
+}
+
+export interface TownResidentDTO {
+  id: string;
+  townId: string;
+  botName: string;
+  joinedAt: number;
+  currentRole?: string | null;
+  status: 'alive' | 'dead' | 'departed';
+}
+
+export interface TownEventDTO {
+  id: string;
+  townId: string;
+  kind: string;
+  severity: string;
+  payload: unknown;
+  occurredAt: number;
+  highlightScore: number;
+}
+
+// ─── Phase 8 — streaming highlight feeds ───────────────────────────────────
+//
+// GlobalHighlightDTO is the cross-town feed payload — it carries the resolved
+// town name so the HighlightsCard can render a "kind chip + town name" row
+// without a second lookup. StreamingHealthDTO mirrors the in-memory rolling
+// counters returned by /api/streaming/health.
+
+export interface GlobalHighlightDTO {
+  townId: string;
+  townName: string;
+  kind: string;
+  severity: string | null;
+  payload: unknown;
+  occurredAt: number;
+  highlightScore: number;
+}
+
+export interface StreamingHealthDTO {
+  wsConnected: number;
+  towns: number;
+  eventsPerMin: number;
+  lastEventAt: number;
+  avgHighlightScore: number;
+}
+
+// ─── Town chronicle (Phase 4-B) ────────────────────────────────────────────
+//
+// Mirrors `ChronicleEntry` in src/town/TownManager.ts. `kind` is open-ended
+// because milestone kinds are spec-defined string ids ('tier_upgrade', etc.).
+
+export interface ChronicleEntryDTO {
+  id: string;
+  townId: string;
+  dayNumber: number;
+  kind: 'daily' | 'milestone' | 'disaster' | 'voice' | string;
+  body: string;
+  generatedAt: number | null;
+  model: string | null;
+}
+
+export interface BotJournalDTO {
+  id: string;
+  townId: string;
+  botName: string;
+  dayNumber: number | null;
+  body: string;
+  generatedAt: number | null;
+}
+
+// ─── Town disasters + Memorial Park (Phase 5-A) ────────────────────────────
+//
+// Mirrors `Disaster` in src/town/Town.ts and the Memorial Park bounds shape.
+// `kind` is open-ended so a future Phase 5 extension can add new disaster
+// kinds without a client-side schema bump.
+
+export interface TownDisasterDTO {
+  id: string;
+  townId: string;
+  /** 'raid' | 'lava' | 'lost_bot' | 'crash' | <future-kinds> */
+  kind: string;
+  severity: string | null;
+  occurredAt: number | null;
+  memorialMarkerId: string | null;
+  summary: string | null;
+}
+
+export interface MemorialParkBoundsDTO {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  y: number;
+}
+
+// ─── Phase 5-B child towns + expansion proposals ──────────────────────────
+//
+// Children mirror TownDTO with one extra: the world-space distance from the
+// parent capital (rounded blocks). Expansion proposals are emitted by the
+// backend on /expand — `executed: true` means the child town was already
+// founded; `executed: false` means the proposal awaits approval (Phase 6).
+
+export interface ChildTownDTO extends TownDTO {
+  /** Rounded XZ-plane distance from the parent town's capital, in blocks. */
+  distanceFromParent: number | null;
+}
+
+export interface ExpansionProposalDTO {
+  parentTownId: string;
+  parentTownName: string;
+  childName: string;
+  childCapital: { x: number; y: number; z: number };
+  styleSeed: 'medieval-communal' | 'mid-century-civic';
+  direction: 'North' | 'East' | 'South' | 'West';
+  autoApprove: boolean;
+}
+
+export interface ExpansionResponse {
+  proposal: ExpansionProposalDTO;
+  executed: boolean;
+  /** Populated when executed === true (auto-approved first child). */
+  childTown?: TownDTO;
+  /** Populated when executed === false (pending approval, etc.). */
+  reason?: string;
+}
+
+// ─── Phase 6-B: approvals queue ────────────────────────────────────────────
+//
+// Mirrors `Approval` in src/town/Approval.ts. `kind` is open-ended so future
+// proposers (construction approvals, decree ratifications, etc.) can wedge
+// without a client schema bump. `payload` is the original proposal blob and
+// is rendered as a JSON-summary in the queue card.
+
+export type TownApprovalStatus = 'open' | 'approved' | 'denied' | 'expired';
+
+export interface TownApprovalDTO {
+  id: string;
+  townId: string;
+  /** 'expansion' | 'construction' | 'milestone' | 'decree' | <future> */
+  kind: string;
+  payload: unknown;
+  status: TownApprovalStatus;
+  createdAt: number;
+  expiresAt: number;
+  mayorDecision: 'approved' | 'denied' | null;
+  votes: { yes: string[]; no: string[] };
+}
+
+// ─── Town roles (Phase 3) ─────────────────────────────────────────────────
+//
+// Mirrors the contract P3-A is exposing under /api/towns/:id/roles and
+// /api/towns/:id/schedules. Kept loose (`Record<string, number>`) on the
+// breakdown so unknown future roles still render without a code change.
+
+export type TownRoleKey =
+  | 'lumberjack'
+  | 'miner'
+  | 'farmer'
+  | 'blacksmith'
+  | 'builder'
+  | 'guard'
+  | 'gatherer'
+  | 'idle';
+
+export interface TownRolesResponse {
+  breakdown: Record<string, number>;
+  residents: Array<{ botName: string; role: string }>;
+}
+
+export interface TownSchedulesResponse {
+  phase: 'day' | 'night';
+  roleSchedules: Record<string, { day: string[]; night: string[] }>;
+}
 
 export interface AdminInfo {
   uptimeSec: number;
@@ -1025,4 +1603,60 @@ export interface DifficultyResponse {
   botChatFrequency: number;
   combatAggressiveness: number;
   helpfulness: number;
+}
+
+// ─── Phase 7 — diplomacy + trade routes ───────────────────────────────────
+//
+// P7-A's contract for the directed relationship edge as returned by
+// /api/towns/:id/relationships. Optional fields (`peerTownName`, `events`)
+// reflect the GET shape; the POST body shape is tighter (state +
+// mayorPlayerName).
+//
+// `events` is the trailing handful of recent diplomacy interactions on the
+// edge — kind + at + payload — used by the graph card's hover tooltip.
+
+export interface TownRelationshipEventDTO {
+  kind: string;
+  at: number;
+  payload?: unknown;
+}
+
+export interface TownRelationshipEdgeDTO {
+  peerTownId: string;
+  peerTownName?: string | null;
+  state: 'allied' | 'rival' | 'neutral';
+  trust: number;
+  lastInteractionAt: number;
+  events?: TownRelationshipEventDTO[];
+}
+
+/**
+ * Undirected (or A→B canonical) edge as returned by the global graph
+ * endpoint. State carries the worse-of-the-two posture so the graph
+ * paints a single colour per pair.
+ */
+export interface TownRelationshipGraphEdgeDTO {
+  townIdA: string;
+  townIdB: string;
+  state: 'allied' | 'rival' | 'neutral';
+  trust: number;
+  lastInteractionAt: number;
+}
+
+/**
+ * In-flight allied-town trade route. Mirrors the TradeRoute interface in
+ * src/town/TradeRouteManager.ts. `taskId` is null when the blackboard
+ * insert failed but the cooldown still got recorded (defensive).
+ */
+export interface TradeRouteDTO {
+  id: string;
+  sourceTownId: string;
+  sourceTownName: string;
+  targetTownId: string;
+  targetTownName: string;
+  resource: string;
+  amount: number;
+  queuedAt: number;
+  expiresAt: number;
+  taskId: string | null;
 }

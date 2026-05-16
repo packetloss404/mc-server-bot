@@ -21,6 +21,7 @@ import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { BotReputation } from '../voyager/BotReputation';
 import { PlayerPresenceTracker } from './PlayerPresenceTracker';
 import { PlayerPositionCache } from '../control/PlayerPositionCache';
+import { TownManager } from '../town/TownManager';
 
 interface SavedBot {
   name: string;
@@ -49,6 +50,7 @@ export class BotManager {
   private botReputation: BotReputation;
   private playerPresenceTracker: PlayerPresenceTracker;
   private playerPositionCache: PlayerPositionCache;
+  private townManager: TownManager;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -71,6 +73,7 @@ export class BotManager {
     this.botReputation = new BotReputation(path.join(process.cwd(), 'data'));
     this.playerPresenceTracker = new PlayerPresenceTracker(this.difficultyBalancer);
     this.playerPositionCache = new PlayerPositionCache();
+    this.townManager = new TownManager();
   }
 
   async spawnBot(
@@ -112,6 +115,26 @@ export class BotManager {
       (description, requestedBy) => this.handleSwarmDirective(description, requestedBy),
       this.difficultyBalancer,
       this.playerIntentModel,
+      // Followup #40 — resolver so Voyager's claimBestTask can boost
+      // role-tagged tasks. Walks every town (small N) looking for a
+      // resident row whose botName matches; returns null when this bot
+      // isn't a town resident OR the town manager throws. WorkerHandle
+      // caches the result for 60s so the per-claim cost is bounded.
+      (botName: string): string | null => {
+        try {
+          const towns = this.townManager.listTowns();
+          for (const town of towns) {
+            const residents = this.townManager.listResidents(town.id);
+            const hit = residents.find(
+              (r) => r.botName.toLowerCase() === botName.toLowerCase(),
+            );
+            if (hit && hit.currentRole) return hit.currentRole;
+          }
+        } catch {
+          /* swallow — role lookup is additive */
+        }
+        return null;
+      },
     );
 
     // Wire reputation listener immediately so it's ready before the worker sends events
@@ -256,6 +279,7 @@ export class BotManager {
   getBotReputation(): BotReputation { return this.botReputation; }
   getPlayerPresenceTracker(): PlayerPresenceTracker { return this.playerPresenceTracker; }
   getPlayerPositionCache(): PlayerPositionCache { return this.playerPositionCache; }
+  getTownManager(): TownManager { return this.townManager; }
 
   async handleSwarmDirective(description: string, requestedBy: string): Promise<void> {
     // Broadcast swarm directive to all workers — this clears local queues and interrupts current tasks

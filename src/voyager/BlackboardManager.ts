@@ -19,6 +19,22 @@ export interface BlackboardTask {
   updatedAt: number;
   claimedAt?: number;
   blocker?: string;
+  /**
+   * Optional structured task contract. When set, downstream consumers
+   * (Voyager loop, future ChainCoordinator integration, dashboard) can
+   * dispatch a specific action chain instead of relying on NL + keyword
+   * matching. The shape is open (any JSON-serializable object); the
+   * `kind` discriminator identifies the producer.
+   *
+   * Followup #61 (Phase 7-B): trade-route deliveries emit
+   *   { kind: 'trade-route', sourceTownId, targetTownId, resource, amount,
+   *     targetCapital }
+   * so a future ChainCoordinator integration can build a real
+   * gather→walk→deposit pipeline. Today the Voyager loop still treats
+   * such a task as a normal NL task; the metadata is the forward-compat
+   * contract.
+   */
+  metadata?: Record<string, unknown>;
 }
 
 const PERSONALITY_KEYWORDS: Record<string, string[]> = {
@@ -128,7 +144,14 @@ export class BlackboardManager {
     this.persist();
   }
 
-  addTask(task: Task, source: 'swarm' | 'goal' | 'bot', goalId?: string, priority: TaskPriority = 'normal', location?: { x: number; y: number; z: number }): BlackboardTask {
+  addTask(
+    task: Task,
+    source: 'swarm' | 'goal' | 'bot',
+    goalId?: string,
+    priority: TaskPriority = 'normal',
+    location?: { x: number; y: number; z: number },
+    metadata?: Record<string, unknown>,
+  ): BlackboardTask {
     const boardTask: BlackboardTask = {
       id: `task-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       description: task.description,
@@ -138,6 +161,7 @@ export class BlackboardManager {
       source,
       goalId,
       location,
+      metadata,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -146,12 +170,18 @@ export class BlackboardManager {
     return boardTask;
   }
 
-  claimBestTask(botName: string, query?: string, personality?: string, botPosition?: { x: number; y: number; z: number }): BlackboardTask | null {
+  claimBestTask(
+    botName: string,
+    query?: string,
+    personality?: string,
+    botPosition?: { x: number; y: number; z: number },
+    role?: string,
+  ): BlackboardTask | null {
     const candidates = this.state.tasks.filter((t) => t.status === 'pending');
     if (candidates.length === 0) return null;
     const lowered = query?.toLowerCase() || '';
     const ranked = candidates.sort((a, b) =>
-      this.scoreTaskEnhanced(b, lowered, personality, botPosition) - this.scoreTaskEnhanced(a, lowered, personality, botPosition)
+      this.scoreTaskEnhanced(b, lowered, personality, botPosition, role) - this.scoreTaskEnhanced(a, lowered, personality, botPosition, role)
       || a.createdAt - b.createdAt
     );
     const task = ranked[0];
@@ -234,6 +264,60 @@ export class BlackboardManager {
     });
   }
 
+  /**
+   * Followup #41 — true when an open (pending or claimed) task exists with
+   * the same description AND source. Used by ScheduleManager.emitForRole to
+   * skip pushing a duplicate schedule task when the previous one is still
+   * unclaimed/active, since unclaimed schedule tasks aren't aged out by
+   * releaseStale and would otherwise pile up on the blackboard over many
+   * in-game days.
+   *
+   * Matching on (description, source) keeps this scoped: a player-issued
+   * task with the same wording but different source won't be deduped.
+   */
+  existsOpenWithDescription(description: string, source: BlackboardTask['source']): boolean {
+    for (const task of this.state.tasks) {
+      if (task.source !== source) continue;
+      if (task.description !== description) continue;
+      if (task.status !== 'pending' && task.status !== 'claimed') continue;
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Followup #41 — remove schedule-source tasks (swarm-source tasks tagged
+   * with both 'town' and a day/night phase keyword) that are still pending
+   * and older than `maxAgeMs`. Schedule tasks are pushed every phase flip
+   * (~10 in-game minutes apart); over many days the unclaimed ones leak the
+   * blackboard without bound. The scope is intentionally narrow: we only
+   * sweep swarm tasks with BOTH 'town' AND ('day' | 'night') keywords so
+   * supply-chain and demand-loop tasks survive even when they share the
+   * 'town' tag.
+   *
+   * Returns the number of removed tasks. Safe to call on every brain tick.
+   */
+  gcStaleScheduleTasks(maxAgeMs: number = 24 * 60 * 60 * 1000): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const before = this.state.tasks.length;
+    this.state.tasks = this.state.tasks.filter((task) => {
+      if (task.source !== 'swarm') return true;
+      if (task.status !== 'pending') return true;
+      if (task.createdAt >= cutoff) return true;
+      const kw = task.keywords ?? [];
+      const hasTown = kw.includes('town');
+      const hasPhase = kw.includes('day') || kw.includes('night');
+      if (!hasTown || !hasPhase) return true;
+      return false;
+    });
+    const removed = before - this.state.tasks.length;
+    if (removed > 0) {
+      this.postMessage('system', 'info', `GC removed ${removed} stale schedule task(s).`);
+      this.persist();
+    }
+    return removed;
+  }
+
   releaseStale(timeoutMs: number = 5 * 60 * 1000): number {
     const now = Date.now();
     let released = 0;
@@ -274,7 +358,13 @@ export class BlackboardManager {
     return score;
   }
 
-  private scoreTaskEnhanced(task: BlackboardTask, query: string, personality?: string, botPosition?: { x: number; y: number; z: number }): number {
+  private scoreTaskEnhanced(
+    task: BlackboardTask,
+    query: string,
+    personality?: string,
+    botPosition?: { x: number; y: number; z: number },
+    role?: string,
+  ): number {
     let score = this.scoreTask(task, query);
     const priorityBonus: Record<TaskPriority, number> = { low: 0, normal: 3, high: 9, critical: 15 };
     score += (priorityBonus[task.priority] ?? priorityBonus.normal) * 3;
@@ -282,6 +372,27 @@ export class BlackboardManager {
       const words = PERSONALITY_KEYWORDS[personality.toLowerCase()] || [];
       const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
       for (const w of words) { if (text.includes(w)) score += 2; }
+    }
+    // Followup #40 — boost tasks tagged with the bot's town role.
+    // ScheduleManager (and other town producers) tag tasks with role
+    // keywords like 'lumberjack', 'farmer-role', etc.; without this boost
+    // they were only matched against personality. Additive only: when role
+    // is undefined behavior is identical to before.
+    if (role && typeof role === 'string') {
+      const r = role.toLowerCase();
+      if (r && r !== 'idle') {
+        const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
+        // Substring match against the role name itself — ScheduleManager
+        // tags with the raw role string (lumberjack, miner, farmer, ...).
+        if (text.includes(r)) score += 3;
+        // Also boost when any keyword is exactly the role.
+        for (const kw of task.keywords) {
+          if (typeof kw === 'string' && kw.toLowerCase() === r) {
+            score += 3;
+            break;
+          }
+        }
+      }
     }
     if (botPosition && task.location) {
       const dx = botPosition.x - task.location.x, dy = botPosition.y - task.location.y, dz = botPosition.z - task.location.z;

@@ -150,14 +150,19 @@ const CREATE_STATEMENTS = [
     events_json TEXT,
     UNIQUE (town_id_a, town_id_b)
   )`,
-  // Indexes (spec section 10)
-  // Followup #67 — `idx_events_town_kind_time` accelerates the
-  // `/api/towns/:id/decrees` feed (and any other per-kind event scan) by
-  // letting SQLite jump straight to the (town_id, kind='mayor:decree') slice
-  // of the events table in occurred_at DESC order rather than scanning the
-  // entire per-town partition and filtering kind in-process. The additive
-  // CREATE INDEX IF NOT EXISTS pattern is idempotent so no separate
-  // MIGRATIONS entry is required for existing DBs.
+];
+
+/**
+ * Indexes — created AFTER MIGRATIONS run so any index that references a
+ * column added by a migration (e.g. `idx_disasters_dedupe` references
+ * `dedupe_key`, added by the Phase 5 migration) finds the column. Pre-Phase-5
+ * DBs would otherwise fail at boot because the index runs before the ALTER.
+ *
+ * #67 note: `idx_events_town_kind_time` accelerates `/api/towns/:id/decrees`
+ * by letting SQLite jump straight to the (town_id, kind='mayor:decree') slice
+ * in occurred_at DESC order without filtering kind in-process.
+ */
+const INDEX_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_events_town_time ON events(town_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_town_highlight ON events(town_id, highlight_score DESC, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_town_kind_time ON events(town_id, kind, occurred_at DESC)`,
@@ -220,11 +225,16 @@ export function openTownDb(dataDir: string = path.join(process.cwd(), 'data')): 
   sqlite.pragma('journal_mode = WAL');
   sqlite.pragma('foreign_keys = ON');
 
+  // Order matters: tables → migrations (which may add columns) → indexes
+  // (which may reference migration-added columns).
   for (const stmt of CREATE_STATEMENTS) {
     sqlite.exec(stmt);
   }
   for (const migrate of MIGRATIONS) {
     migrate(sqlite);
+  }
+  for (const stmt of INDEX_STATEMENTS) {
+    sqlite.exec(stmt);
   }
 
   const db = drizzle(sqlite, { schema });

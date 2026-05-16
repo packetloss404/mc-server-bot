@@ -21,31 +21,63 @@
  * its argument. Denied/expired rows do NOT fire the handler — the proposer
  * is expected to require an explicit re-issue.
  *
- * In-memory caveats:
- *   - The `resolveOnce` registry lives in-process. A restart loses every
- *     pending handler, leaving rows in 'open' status until the brain's next
- *     tally tries to resolve them. The original proposer (e.g.
- *     ExpansionManager) does NOT retry; an operator must re-issue. Tracked
- *     as a Phase 8 followup (durable handler registry).
+ * Phase 8-followup #54 — vote window + heuristic timing
+ * ------------------------------------------------------
+ * The default vote window now runs five minutes (DEFAULT_VOTE_WINDOW_MS),
+ * giving a real human window before the heuristic auto-fills votes. The
+ * heuristic itself is deferred until 60% of an approval's window has elapsed
+ * (HEURISTIC_DELAY_FRACTION) so a human voter has the early window mostly
+ * to themselves; after the threshold the brain trickles in heuristic votes
+ * on each tick. Callers may still pass `openFor` to override per-approval.
+ *
+ * Phase 8-followup #57 — durable handler registry
+ * -----------------------------------------------
+ * `resolveOnce` and `onSettled` are still in-memory by default, but callers
+ * may now attach a HandlerDescriptor — a serialisable `{ kind, payload,
+ * target }` blob persisted to the approvals row's `handler_descriptor_json`
+ * column. On boot, `rehydrate()` walks every open approval row, looks up
+ * the descriptor's kind in a registered-rehydrator map (e.g.
+ * ExpansionManager registers 'expansion'), and re-registers the resolveOnce
+ * hook so a row that settles to 'approved' after restart still executes
+ * the proposer-side action. The rehydrate path is failure-isolated: any
+ * descriptor whose kind has no registered handler is logged and skipped —
+ * never throws, never crashes startup. Rehydration runs lazily on the
+ * first `listOpen` / `castHeuristicVotes` / `tally` call so no extra wiring
+ * is needed at boot.
  *
  * Failure isolation: every public method swallows DB errors and returns a
  * sensible falsy/null value so the brain's runLoopSafe wrapper never crashes
  * a tick on a wedged DB.
  */
+import path from 'path';
+import Database from 'better-sqlite3';
 import type { TownManager } from './TownManager';
 import type { Approval, ApprovalKind, ApprovalMode, ApprovalStatus, ApprovalVotes } from './Approval';
 import { voteFor } from './VoteHeuristic';
 import { logger } from '../util/logger';
 
-/** Default vote window (real-time milliseconds) when caller doesn't specify. */
-const DEFAULT_VOTE_WINDOW_MS = 90_000;
+/**
+ * Default vote window (real-time milliseconds) when caller doesn't specify.
+ * Phase 8-followup #54: raised from 90s to 5 minutes so humans have a real
+ * window before the heuristic auto-fills. Callers may still override per
+ * approval via CreateApprovalInput.openFor.
+ */
+export const DEFAULT_VOTE_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * Fraction of an approval's window that must elapse before the heuristic
+ * starts casting votes (#54). 0.6 means the heuristic stays silent until
+ * 60% of the window has passed, then trickles in votes on each tick. Set
+ * to 0 to fire on the very first tick (legacy behaviour).
+ */
+export const HEURISTIC_DELAY_FRACTION = 0.6;
 
 export interface CreateApprovalInput {
   townId: string;
   kind: ApprovalKind | string;
   /** Original proposal payload — replayed verbatim on approval. */
   payload: unknown;
-  /** Override the vote window (ms). Defaults to 90s. */
+  /** Override the vote window (ms). Defaults to DEFAULT_VOTE_WINDOW_MS. */
   openFor?: number;
 }
 
@@ -63,11 +95,39 @@ export type ApprovalResolveHandler = (payload: unknown) => Promise<void> | void;
  */
 export type ApprovalSettledHandler = (approval: Approval) => Promise<void> | void;
 
+/**
+ * Phase 8-followup #57 — serialisable description of a resolveOnce handler.
+ * Stored as JSON in the approvals row's `handler_descriptor_json` column.
+ *
+ *   kind:    keys the rehydrator registry (e.g. 'expansion').
+ *   payload: the original CreateApprovalInput.payload — the rehydrator uses
+ *            this to recreate the resolveOnce closure.
+ *   target:  optional free-form hint (e.g. parent town id) for the
+ *            rehydrator's logs; not used to dispatch.
+ */
+export interface HandlerDescriptor {
+  kind: string;
+  payload: unknown;
+  target?: string;
+}
+
+/**
+ * Rehydrator registered by a proposer module (e.g. ExpansionManager) for a
+ * given descriptor kind. Receives the persisted descriptor and is expected
+ * to call `approvalManager.resolveOnce(approvalId, ...)` itself (and any
+ * matching onSettled hook).
+ */
+export type ApprovalRehydrator = (
+  approvalId: string,
+  descriptor: HandlerDescriptor,
+) => Promise<void> | void;
+
 export class ApprovalManager {
   private readonly townManager: TownManager;
   /**
    * Pending in-flight handlers. Keyed by approvalId. Cleared once invoked
-   * (handler fires at most once per approval). Lost on restart.
+   * (handler fires at most once per approval). Re-populated on boot from
+   * the persisted handler descriptor (#57).
    */
   private readonly pendingHandlers: Map<string, ApprovalResolveHandler> = new Map();
   private readonly settledHandlers: Map<string, ApprovalSettledHandler> = new Map();
@@ -78,6 +138,19 @@ export class ApprovalManager {
    */
   private readonly emittedLifecycleEvents: Set<string> = new Set();
 
+  /**
+   * #57 — registered rehydrators keyed by HandlerDescriptor.kind. Proposers
+   * (ExpansionManager today, others later) register on construction; the
+   * lazy rehydrate() call uses these to re-attach resolveOnce handlers for
+   * open approvals after restart.
+   */
+  private readonly rehydrators: Map<string, ApprovalRehydrator> = new Map();
+  private rehydrated = false;
+  /** Dedicated sqlite handle for handler-descriptor reads/writes. Lazy. */
+  private descriptorDb: Database.Database | null = null;
+  /** True once we've tried (and failed) to open the descriptor DB. */
+  private descriptorDbFailed = false;
+
   constructor(townManager: TownManager) {
     this.townManager = townManager;
   }
@@ -85,8 +158,15 @@ export class ApprovalManager {
   /**
    * Insert a new approval row. Caller may follow up with `resolveOnce` to
    * register the handler that fires when the approval is approved.
+   *
+   * #57 — when `handlerDescriptor` is provided, the descriptor is persisted
+   * on the approval row immediately so a restart between create and approve
+   * can re-register the handler.
    */
-  createApproval(input: CreateApprovalInput): Approval | null {
+  createApproval(
+    input: CreateApprovalInput,
+    handlerDescriptor?: HandlerDescriptor,
+  ): Approval | null {
     const now = Date.now();
     const expiresAt = now + (input.openFor ?? DEFAULT_VOTE_WINDOW_MS);
     try {
@@ -99,6 +179,12 @@ export class ApprovalManager {
         status: 'open',
       });
       if (!inserted) return null;
+      if (handlerDescriptor) {
+        // Persist via direct UPDATE — TownManager.insertApproval doesn't
+        // expose the descriptor field yet. Failure is logged + ignored so
+        // a wedged descriptor write never breaks the live resolveOnce path.
+        this.persistDescriptor(inserted.id, handlerDescriptor);
+      }
       const lifecycleKey = `${inserted.id}:created`;
       if (!this.emittedLifecycleEvents.has(lifecycleKey)) {
         this.emittedLifecycleEvents.add(lifecycleKey);
@@ -152,6 +238,7 @@ export class ApprovalManager {
    * here; a mayor decision overrides any in-flight votes.
    */
   async mayorDecide(approvalId: string, choice: 'approved' | 'denied'): Promise<Approval | null> {
+    this.ensureRehydrated();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -194,6 +281,7 @@ export class ApprovalManager {
    * changed.
    */
   async tally(approvalId: string): Promise<Approval | null> {
+    this.ensureRehydrated();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -254,14 +342,21 @@ export class ApprovalManager {
    * who have already cast a vote on this approval. Best-effort: failures
    * are logged and the loop continues.
    *
+   * #54 — heuristic votes are gated by HEURISTIC_DELAY_FRACTION: an approval
+   * whose elapsed-fraction is below the threshold is skipped on this tick.
+   * That gives humans a real early window before the heuristic auto-fills.
+   *
    * Called by the brain's approvalLoop.
    */
   castHeuristicVotes(townId: string, residents: Array<{ botName: string; personality: string | null; alive: boolean }>): void {
+    this.ensureRehydrated();
     const open = this.listOpen(townId);
     if (open.length === 0) return;
     const aliveResidents = residents.filter((r) => r.alive);
     if (aliveResidents.length === 0) return;
+    const now = Date.now();
     for (const approval of open) {
+      if (!this.heuristicReady(approval, now)) continue;
       const votes = approval.votes ?? { yes: [], no: [] };
       const voted = new Set([...(votes.yes ?? []), ...(votes.no ?? [])]);
       for (const r of aliveResidents) {
@@ -282,6 +377,7 @@ export class ApprovalManager {
 
   /** All open approvals for a town (status === 'open'), newest first. */
   listOpen(townId: string): Approval[] {
+    this.ensureRehydrated();
     return this.townManager.listApprovals(townId, { status: 'open' });
   }
 
@@ -296,11 +392,17 @@ export class ApprovalManager {
 
   /**
    * Register a handler that fires once when the named approval resolves to
-   * 'approved'. Lives in-process; lost on restart (see file header). When
-   * the approval already exists in 'approved' status the handler fires
-   * synchronously (covers a creator-side race).
+   * 'approved'. Lives in-process. When `descriptor` is provided, it is
+   * persisted to the row so a restart can re-register the handler via the
+   * registered rehydrator (#57). When the approval already exists in
+   * 'approved' status the handler fires synchronously (covers a creator-side
+   * race).
    */
-  async resolveOnce(approvalId: string, handler: ApprovalResolveHandler): Promise<void> {
+  async resolveOnce(
+    approvalId: string,
+    handler: ApprovalResolveHandler,
+    descriptor?: HandlerDescriptor,
+  ): Promise<void> {
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) {
       logger.warn({ approvalId }, 'ApprovalManager.resolveOnce: unknown approval id');
@@ -316,6 +418,9 @@ export class ApprovalManager {
       return;
     }
     this.pendingHandlers.set(approvalId, handler);
+    if (descriptor) {
+      this.persistDescriptor(approvalId, descriptor);
+    }
   }
 
   /**
@@ -325,6 +430,8 @@ export class ApprovalManager {
    * pendingApprovalIds so a denied/expired row doesn't strand the parent.
    *
    * Like resolveOnce, the registry is in-process: a restart drops handlers.
+   * Settled-side cleanup is generally idempotent so rehydrating the
+   * resolveOnce side alone is sufficient for #57.
    */
   async onSettled(approvalId: string, handler: ApprovalSettledHandler): Promise<void> {
     const approval = this.townManager.getApproval(approvalId);
@@ -341,6 +448,90 @@ export class ApprovalManager {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  //  #57 — Handler descriptor persistence + rehydration
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Register a rehydrator for the given HandlerDescriptor.kind. Called by
+   * proposer modules (ExpansionManager registers 'expansion'). Idempotent —
+   * re-registration replaces the previous rehydrator. Triggers an immediate
+   * rehydrate pass so descriptors persisted before this registration get
+   * picked up.
+   */
+  registerKindHandler(kind: string, rehydrator: ApprovalRehydrator): void {
+    this.rehydrators.set(kind, rehydrator);
+    // Best-effort: scan again so any open rows whose descriptor matches this
+    // kind get wired up even if rehydrate already ran without us.
+    if (this.rehydrated) {
+      void this.rehydrateForKind(kind);
+    }
+  }
+
+  /**
+   * Walk every open approval and re-register the resolveOnce hook for each
+   * row whose persisted handler descriptor's kind has a known rehydrator.
+   * Failure-isolated: a bad descriptor (parse error, unknown kind, throwing
+   * rehydrator) is logged and the loop continues. Returns the number of
+   * descriptors successfully rehydrated.
+   */
+  async rehydrate(): Promise<number> {
+    this.rehydrated = true;
+    const db = this.openDescriptorDb();
+    if (!db) return 0;
+    let rows: Array<{ id: string; town_id: string | null; handler_descriptor_json: string | null }> = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT id, town_id, handler_descriptor_json FROM approvals WHERE status = 'open' AND handler_descriptor_json IS NOT NULL`,
+        )
+        .all() as typeof rows;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg }, 'ApprovalManager.rehydrate: query failed; skipping');
+      return 0;
+    }
+    let restored = 0;
+    for (const row of rows) {
+      const descriptor = this.parseDescriptor(row.handler_descriptor_json);
+      if (!descriptor) continue;
+      const ok = await this.dispatchRehydrate(row.id, descriptor);
+      if (ok) restored++;
+    }
+    if (restored > 0) {
+      logger.info({ restored }, 'ApprovalManager.rehydrate: re-registered handlers');
+    }
+    return restored;
+  }
+
+  /**
+   * Rehydrate just the rows whose descriptor matches a particular kind —
+   * called when a rehydrator is registered after rehydrate() has already
+   * run, so a late-registered ExpansionManager still picks up its rows.
+   */
+  private async rehydrateForKind(kind: string): Promise<void> {
+    const db = this.openDescriptorDb();
+    if (!db) return;
+    let rows: Array<{ id: string; handler_descriptor_json: string | null }> = [];
+    try {
+      rows = db
+        .prepare(
+          `SELECT id, handler_descriptor_json FROM approvals WHERE status = 'open' AND handler_descriptor_json IS NOT NULL`,
+        )
+        .all() as typeof rows;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg, kind }, 'ApprovalManager.rehydrateForKind: query failed');
+      return;
+    }
+    for (const row of rows) {
+      const descriptor = this.parseDescriptor(row.handler_descriptor_json);
+      if (!descriptor || descriptor.kind !== kind) continue;
+      if (this.pendingHandlers.has(row.id)) continue;
+      await this.dispatchRehydrate(row.id, descriptor);
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   //  Helpers
   // ──────────────────────────────────────────────────────────────────────
 
@@ -352,6 +543,20 @@ export class ApprovalManager {
     const town = this.townManager.getTown(townId);
     const cfg = (town?.config ?? {}) as { approvalMode?: ApprovalMode };
     return cfg.approvalMode === 'vote' ? 'vote' : 'mayor';
+  }
+
+  /**
+   * #54 — has enough of this approval's window elapsed for the heuristic to
+   * trickle in votes? Returns true when:
+   *   - elapsed/window >= HEURISTIC_DELAY_FRACTION, OR
+   *   - the window is already past expiry (we want a final pre-tally pass).
+   */
+  private heuristicReady(approval: Approval, now: number): boolean {
+    const windowMs = approval.expiresAt - approval.createdAt;
+    if (windowMs <= 0) return true;
+    if (now >= approval.expiresAt) return true;
+    const elapsed = now - approval.createdAt;
+    return elapsed / windowMs >= HEURISTIC_DELAY_FRACTION;
   }
 
   private async fireResolveHandler(approval: Approval): Promise<void> {
@@ -389,6 +594,102 @@ export class ApprovalManager {
         { err: msg, approvalId: approval.id, kind: approval.kind, status: approval.status },
         'ApprovalManager: onSettled handler threw',
       );
+    }
+  }
+
+  /** Lazy rehydrate — called from any public path that benefits from it. */
+  private ensureRehydrated(): void {
+    if (this.rehydrated) return;
+    // Fire-and-forget; rehydrate sets the flag synchronously up-front.
+    void this.rehydrate();
+  }
+
+  private async dispatchRehydrate(
+    approvalId: string,
+    descriptor: HandlerDescriptor,
+  ): Promise<boolean> {
+    const rehydrator = this.rehydrators.get(descriptor.kind);
+    if (!rehydrator) {
+      logger.debug(
+        { approvalId, kind: descriptor.kind },
+        'ApprovalManager.rehydrate: no rehydrator registered for kind; skipping',
+      );
+      return false;
+    }
+    try {
+      await rehydrator(approvalId, descriptor);
+      return true;
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg, approvalId, kind: descriptor.kind },
+        'ApprovalManager.rehydrate: rehydrator threw',
+      );
+      return false;
+    }
+  }
+
+  private parseDescriptor(json: string | null | undefined): HandlerDescriptor | null {
+    if (!json) return null;
+    try {
+      const parsed = JSON.parse(json);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const obj = parsed as { kind?: unknown; payload?: unknown; target?: unknown };
+      if (typeof obj.kind !== 'string') return null;
+      return {
+        kind: obj.kind,
+        payload: obj.payload,
+        target: typeof obj.target === 'string' ? obj.target : undefined,
+      };
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg }, 'ApprovalManager.parseDescriptor: invalid JSON');
+      return null;
+    }
+  }
+
+  private persistDescriptor(approvalId: string, descriptor: HandlerDescriptor): void {
+    const db = this.openDescriptorDb();
+    if (!db) return;
+    try {
+      db.prepare(`UPDATE approvals SET handler_descriptor_json = ? WHERE id = ?`).run(
+        JSON.stringify(descriptor),
+        approvalId,
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg, approvalId, kind: descriptor.kind },
+        'ApprovalManager.persistDescriptor: UPDATE failed',
+      );
+    }
+  }
+
+  /**
+   * Open a dedicated better-sqlite3 handle to the same town.db file the
+   * TownManager owns, just for handler_descriptor_json reads/writes. Multiple
+   * connections to the same file are safe under SQLite's WAL mode (which
+   * TownManager already enables). Failure is sticky (descriptorDbFailed) so
+   * we don't thrash retry on a broken DB.
+   */
+  private openDescriptorDb(): Database.Database | null {
+    if (this.descriptorDb) return this.descriptorDb;
+    if (this.descriptorDbFailed) return null;
+    try {
+      const dataDir = this.townManager.getDataDir();
+      const dbPath = path.join(dataDir, 'town.db');
+      const handle = new Database(dbPath);
+      handle.pragma('journal_mode = WAL');
+      this.descriptorDb = handle;
+      return handle;
+    } catch (err: unknown) {
+      this.descriptorDbFailed = true;
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg },
+        'ApprovalManager.openDescriptorDb: failed to open companion handle; handler persistence disabled for this process',
+      );
+      return null;
     }
   }
 }

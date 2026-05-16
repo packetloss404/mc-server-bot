@@ -403,11 +403,22 @@ export class TownManager {
 
   /**
    * Inject the dependencies the Town Brain needs and boot a brain for every
-   * currently-active town. Idempotent — calling it twice replaces existing
-   * dep refs but leaves running brains alone (subsequent tick calls pick up
-   * the latest refs because the brain holds them by reference).
+   * currently-active town.
    *
-   * Called from the API layer at startup after the BuildCoordinator exists.
+   * Followup #39 — on a re-wire we MUST stop every existing brain and
+   * recreate it with the new deps. The previous implementation only updated
+   * `brainDeps` and left running brains holding stale dep references by
+   * closure, so a second `wireBrains` quietly diverged the dep set between
+   * old and new brains (e.g. some held the original BuildCoordinator while
+   * fresh brains held the replacement). Stop+restart is the cleanest fix:
+   * the brain ctor is cheap, and the persisted budget ledger + DB-backed
+   * resident/building state survive the rebuild. Per-tick in-memory state
+   * (lastEmittedPhase, cooldowns, observedCacheHashes) intentionally resets
+   * — a re-wire is rare and a conservative state reset matches the brain
+   * restart behavior on a hard failure.
+   *
+   * Called from the API layer at startup after the BuildCoordinator exists,
+   * and at config-reload time when any dep is swapped.
    */
   wireBrains(deps: {
     botManager: BotManager;
@@ -416,11 +427,27 @@ export class TownManager {
     /** Phase 4 — used as the library fallback when LLM design fails. */
     schematicMatcher?: SchematicMatcher;
   }): void {
+    // Stop+drop every existing brain so the next startBrain pass rebuilds
+    // them against the new deps. Failures during stop are logged but never
+    // abort the re-wire — the worst case is a leaked timer that the GC will
+    // catch when the brain object is dropped from townBrains below.
+    const replacedBrains = this.townBrains.size;
+    for (const [townId, brain] of this.townBrains.entries()) {
+      try {
+        brain.stop();
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId },
+          'wireBrains: brain.stop() threw during re-wire (continuing)',
+        );
+      }
+    }
+    this.townBrains.clear();
+
     this.brainDeps = deps;
     let booted = 0;
     for (const town of this.listTowns()) {
       if (town.status !== 'active') continue;
-      if (this.townBrains.has(town.id)) continue;
       try {
         this.startBrain(town.id);
         booted++;
@@ -431,7 +458,10 @@ export class TownManager {
         );
       }
     }
-    logger.info({ booted, totalTowns: this.listTowns().length }, 'TownManager wired brains');
+    logger.info(
+      { booted, replacedBrains, totalTowns: this.listTowns().length },
+      'TownManager wired brains',
+    );
   }
 
   /**
@@ -673,6 +703,15 @@ export class TownManager {
       },
       occurredAt: now,
       highlightScore: 100,
+    });
+
+    // Followup #49 — fire the `town_founded` chronicle milestone too so the
+    // chronicler writes a founding narrative entry. Best-effort: a wedged
+    // chronicler (rate-limited LLM, unwired generator) must not abort
+    // createTown. recordMilestone wraps both halves in their own try/catch.
+    this.recordMilestone(id, 'town_founded', {
+      name: input.name,
+      stylePreset: input.stylePreset,
     });
 
     const townRow = this.db.select().from(schema.towns).where(eq(schema.towns.id, id)).get();
@@ -951,15 +990,6 @@ export class TownManager {
   }
 
   /**
-   * Cheap helper for Phase 3 — used by ScheduleManager + the roles API to
-   * filter without re-traversing the residents table for every role. Stays
-   * a thin wrapper around listResidents to avoid duplicating row-mapping.
-   */
-  getResidentsByRole(townId: string, role: string): Resident[] {
-    return this.listResidents(townId).filter((r) => r.currentRole === role);
-  }
-
-  /**
    * Persist a role change. Returns false when the resident doesn't exist for
    * the given town. Failures (DB write) are logged and surfaced as false so
    * the caller can decide whether to retry. RoleManager is the primary
@@ -1123,6 +1153,83 @@ export class TownManager {
    * Socket.IO and feed the HighlightStream ring. The emitter is best-effort:
    * a thrown callback never blocks the caller or hides the persisted event.
    */
+  /**
+   * Followup #49 — fire a chronicle milestone hook. Records a structured
+   * `chronicle:milestone:<kind>` event (so the dashboard event feed picks
+   * it up even without an LLM) and best-effort asks the ChronicleGenerator
+   * to write a milestone narrative entry. Both halves are independently
+   * wrapped — a wedged generator never aborts the event record, and a
+   * failed event record never blocks the generator call.
+   *
+   * Callers:
+   *   - `createTown` fires `town_founded` directly.
+   *   - DistrictManager (agent C) calls into this hook from its
+   *     `onTierUpgrade` seed flow with `kind='tier_upgrade'`.
+   *   - ExpansionManager (agent C) calls into this hook from
+   *     `executeProposal` with `kind='expansion'`.
+   *
+   * The chronicle leg is fire-and-forget: the LLM round-trip happens on a
+   * background promise and any rejection is swallowed by the inner catch
+   * inside the generator (its generateMilestone already wraps the LLM
+   * call). We additionally swallow any synchronous throw from the call
+   * itself so the caller never has to await.
+   */
+  recordMilestone(
+    townId: string,
+    kind: string,
+    payload: Record<string, unknown> = {},
+  ): void {
+    // Sanity check — silently no-op for unknown towns so callers don't
+    // have to pre-validate.
+    if (!this.getTown(townId)) {
+      logger.debug({ townId, kind }, 'recordMilestone: town not found, skipping');
+      return;
+    }
+    // 1) Event row so the dashboard always sees a milestone marker, even
+    //    when the chronicle generator is unwired or rate-limited.
+    try {
+      this.recordEvent({
+        townId,
+        kind: `chronicle:milestone:${kind}`,
+        severity: 'major',
+        payload: { milestone: kind, ...payload },
+        highlightScore: 60,
+      });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, kind },
+        'recordMilestone: recordEvent leg threw (continuing)',
+      );
+    }
+    // 2) Chronicle narrative — best-effort, fire-and-forget. The generator
+    //    itself already wraps the LLM call in a try/catch and falls back
+    //    to a placeholder; we just need to guard the call site.
+    const gen = this.phoenixDeps?.chronicleGenerator ?? null;
+    if (!gen) {
+      logger.debug(
+        { townId, kind },
+        'recordMilestone: chronicleGenerator not wired yet, skipping narrative',
+      );
+      return;
+    }
+    try {
+      const p = gen.generateMilestone(townId, kind, payload);
+      if (p && typeof (p as Promise<unknown>).catch === 'function') {
+        (p as Promise<unknown>).catch((err: any) => {
+          logger.warn(
+            { err: err?.message, townId, kind },
+            'recordMilestone: generateMilestone rejected (background)',
+          );
+        });
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, kind },
+        'recordMilestone: generateMilestone threw synchronously (continuing)',
+      );
+    }
+  }
+
   recordEvent(input: TownEventInput): TownEvent {
     const id = genId('evt');
     const occurredAt = input.occurredAt ?? Date.now();

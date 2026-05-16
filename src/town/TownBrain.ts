@@ -218,10 +218,12 @@ export class TownBrain {
     this.designCache = new DesignCache(schematicsRoot);
     this.styleObserver = new StyleObserver(townManager, townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'));
     // Followup #45 — load the persisted design-LLM spend ledger so a brain
-    // restart honours yesterday's cap. Failures inside budgetLedger.load are
-    // swallowed and logged; the brain falls back to an empty ledger.
+    // restart honours yesterday's cap. Followup #64 — read only the design
+    // slice from its own file (legacy `budget.json` is migrated through on the
+    // first save). Failures inside budgetLedger.loadDesign are swallowed and
+    // logged; the brain falls back to an empty ledger.
     try {
-      const ledger = budgetLedger.load(
+      const ledger = budgetLedger.loadDesign(
         townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'),
         townId,
       );
@@ -676,12 +678,14 @@ export class TownBrain {
     });
 
     // 1) Cache hit — skip the paid LLM call. The JSON cache file lives in
-    //    `schematics/<townId>/<kind>-<hash>.json`. BuildCoordinator today
-    //    only loads `.schem` files; we still need to fall through to the
-    //    library fallback for a buildable file, but we MUST NOT re-run the
-    //    LLM or re-observe the style on every tick. Once the JSON→.schem
-    //    encoder lands, return the cached.filename here directly.
+    //    `schematics/<townId>/<kind>-<hash>.json`; followup #44 also writes a
+    //    `.schem` companion file at the same path so BuildCoordinator can
+    //    swing the LLM's actual geometry. When the companion is present we
+    //    return it directly with source='cache'; when it's missing (legacy
+    //    JSON-only entry whose lazy re-encode also failed) we fall through to
+    //    the library matcher.
     let cacheHit = false;
+    let cachedSchemRelPath: string | null = null;
     try {
       const cached = this.designCache.get({
         townId: this.townId,
@@ -690,9 +694,22 @@ export class TownBrain {
       });
       if (cached) {
         cacheHit = true;
+        if (cached.schemFilename) {
+          // BuildCoordinator joins this against `schematics/` so we hand it
+          // the `<townId>/<file>` relative path. Using POSIX-style join keeps
+          // the schematic filename portable across platforms.
+          cachedSchemRelPath = `${this.townId}/${cached.schemFilename}`;
+        }
         logger.info(
-          { townId: this.townId, kind: item.kind, filename: cached.filename },
-          'TownBrain build: design cache hit (JSON-only; library fallback used for build)',
+          {
+            townId: this.townId,
+            kind: item.kind,
+            filename: cached.filename,
+            schem: cached.schemFilename ?? null,
+          },
+          cachedSchemRelPath
+            ? 'TownBrain build: design cache hit with .schem companion — using LLM geometry'
+            : 'TownBrain build: design cache hit (JSON-only; falling back to library for build)',
         );
         // Observe ONCE on first cache hit during this brain's lifetime so the
         // style doc converges. The cache file's own existence is the
@@ -707,6 +724,12 @@ export class TownBrain {
         { err: err?.message, townId: this.townId, kind: item.kind },
         'TownBrain build: design cache read failed',
       );
+    }
+
+    // Cache hit with a buildable .schem? Return now — the LLM's design is
+    // ready to swing without paying for a new design call.
+    if (cacheHit && cachedSchemRelPath) {
+      return { schematicFile: cachedSchemRelPath, source: 'cache' };
     }
 
     // 2) Daily budget cap.
@@ -753,8 +776,12 @@ export class TownBrain {
         // crash the design path.
         this.dailySpendUsd.set(budgetKey, spentToday + design.cost.estUsd);
         this.persistDesignSpend();
-        // Cache the plan; record an event with the attempts/cost for telemetry.
-        const saved = this.designCache.save(
+        // Cache the plan + encode the .schem companion in one call.
+        // Followup #44: when the encode succeeds, BuildCoordinator can swing
+        // the LLM's actual geometry; on encode failure we fall through to
+        // the library matcher just like before (the JSON cache is still
+        // written so introspection/observer keep working).
+        const saved = await this.designCache.save(
           { townId: this.townId, kind: item.kind, styleHashInput: hashInput },
           design.plan,
         );
@@ -773,14 +800,21 @@ export class TownBrain {
             estUsd: design.cost.estUsd,
             blocks: design.plan.blocks.length,
             cacheFile: saved?.filename ?? null,
+            schemFile: saved?.schemFilename ?? null,
           },
           highlightScore: 30,
         });
-        // Even though we now have a JSON block plan, BuildCoordinator can
-        // only swing `.schem` files today. Fall through to library to pick
-        // an actual buildable file — but we've already saved the plan and
-        // observed the style. The JSON→schem encoder is a TODO; once
-        // landed, swap the return here to use the cached file path.
+        // Return the .schem path when the encoder succeeded. BuildCoordinator
+        // resolves `schematicFile` relative to its `schematics/` root, so we
+        // hand it `<townId>/<filename>`. When the encoder failed, fall through
+        // to the library matcher below (saved.schemFilename will be null).
+        if (saved?.schemFilename) {
+          return {
+            schematicFile: `${this.townId}/${saved.schemFilename}`,
+            source: 'llm',
+            plan: design,
+          };
+        }
       } catch (err: any) {
         logger.warn(
           { err: err?.message, townId: this.townId, kind: item.kind },
@@ -834,23 +868,20 @@ export class TownBrain {
   }
 
   /**
-   * Followup #45 — flush the in-memory design-spend map to disk. Reads the
-   * existing chronicle ledger first so we preserve the chronicle generator's
-   * own slice (it owns the `chronicleCostCentsByKey` field). Failures are
-   * swallowed inside budgetLedger.save.
+   * Followup #45 — flush the in-memory design-spend map to disk.
+   * Followup #64 — writes only the design slice into its own file so a
+   * concurrent chronicle save can no longer clobber the design slice (or
+   * vice versa) around the LLM call window. Failures are swallowed inside
+   * budgetLedger.saveDesign.
    */
   private persistDesignSpend(): void {
     try {
       const dataDir = this.townManager.getDataDir?.() ?? path.join(process.cwd(), 'data');
-      const existing = budgetLedger.load(dataDir, this.townId);
       const designSpendUsdByDay: Record<string, number> = {};
       for (const [day, usd] of this.dailySpendUsd.entries()) {
         designSpendUsdByDay[day] = usd;
       }
-      budgetLedger.save(dataDir, this.townId, {
-        designSpendUsdByDay,
-        chronicleCostCentsByKey: existing.chronicleCostCentsByKey,
-      });
+      budgetLedger.saveDesign(dataDir, this.townId, { designSpendUsdByDay });
     } catch (err: any) {
       logger.warn(
         { err: err?.message, townId: this.townId },

@@ -44,6 +44,8 @@ import {
   isDashboardAuthEnabled,
   requirePluginAuth,
   registerAuthRoutes,
+  setAuthConfig,
+  getSessionPlayerName,
 } from './auth';
 import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
@@ -121,6 +123,9 @@ export function createAPIServer(
   // Auth: register public endpoints BEFORE the gating middleware so they
   // remain reachable. `requireDashboardAuth` exempts `/api/auth/*`,
   // `/api/events/*`, `/api/health`, and `/api/status` internally.
+  // Followup #58 — wire the runtime config so the `pid` session can validate
+  // the dev secret. setAuthConfig is a no-op when config is undefined.
+  if (config) setAuthConfig(config);
   registerAuthRoutes(app);
 
   app.get('/api/health', (_req: Request, res: Response) => {
@@ -276,6 +281,25 @@ export function createAPIServer(
     botManager.getTownManager(),
     chronicleGenerator,
   );
+  // Followup #48 — wire the chronicle emitter so BOTH the manual
+  // `/chronicle/generate` route AND the scheduler's auto-generated entries
+  // (and milestone entries) broadcast over `town:chronicle`. The emitter
+  // is best-effort: a thrown io.emit must never crash the scheduler tick
+  // (the generator wraps the callback already, but be defensive here too).
+  try {
+    chronicleGenerator.setEventEmitter(({ townId, dayNumber, entry, kind }) => {
+      try {
+        io.emit('town:chronicle', { townId, dayNumber, entry, kind });
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId, kind },
+          'town:chronicle io.emit failed',
+        );
+      }
+    });
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'chronicleGenerator.setEventEmitter failed');
+  }
   try {
     chronicleScheduler.start();
   } catch (err: any) {
@@ -2503,10 +2527,14 @@ export function createAPIServer(
   // ═══════════════════════════════════════════════════════════════
 
   /**
-   * Phase 6-A mayor-only auth helper. There is no real session auth on the
-   * existing town endpoints — we rely on the honor-system body param
-   * `mayorPlayerName` and compare it case-insensitively to the town's
-   * config.mayor.playerName (set at founding via FoundTownModal).
+   * Phase 6-A mayor-only auth helper.
+   *
+   * Followup #58 — the caller's identity is now sourced from the signed
+   * `pid` session cookie (POST /api/auth/login) instead of the
+   * honor-system body field `mayorPlayerName`. The legacy body-based
+   * path is still accepted when the request includes `?legacyAuth=true`,
+   * which exists purely to ease migration of any external scripts that
+   * haven't been updated to call /api/auth/login first.
    *
    * Returns true when the caller is the mayor; otherwise sends a 403 with
    * a descriptive error and returns false. Routes should bail immediately
@@ -2519,9 +2547,23 @@ export function createAPIServer(
       res.status(403).json({ error: 'No mayor set for this town' });
       return false;
     }
-    const claimed = ((req.body ?? {}) as { mayorPlayerName?: unknown }).mayorPlayerName;
-    if (typeof claimed !== 'string' || claimed.length === 0) {
-      res.status(403).json({ error: 'mayorPlayerName is required' });
+
+    // Prefer the session cookie. When absent, optionally fall back to the
+    // legacy body field (gated on the explicit migration flag).
+    const sessionName = getSessionPlayerName(req);
+    let claimed: string | null = sessionName;
+    if (!claimed) {
+      const allowLegacy = String((req.query as Record<string, unknown>)?.legacyAuth ?? '') === 'true';
+      if (allowLegacy) {
+        const legacy = ((req.body ?? {}) as { mayorPlayerName?: unknown }).mayorPlayerName;
+        if (typeof legacy === 'string' && legacy.length > 0) {
+          claimed = legacy;
+        }
+      }
+    }
+
+    if (!claimed) {
+      res.status(401).json({ error: 'Not signed in — POST /api/auth/login first' });
       return false;
     }
     if (claimed.toLowerCase() !== mayor.playerName.toLowerCase()) {
@@ -2838,12 +2880,57 @@ export function createAPIServer(
         res.status(202).json({ ok: false, reason: 'budget_capped', dayNumber });
         return;
       }
-      io.emit('town:chronicle', { townId, dayNumber, entry });
+      io.emit('town:chronicle', { townId, dayNumber, entry, kind: entry.kind });
       res.json({ entry });
     } catch (err: any) {
       logger.warn({ err: err?.message, townId, dayNumber }, 'chronicle/generate failed');
       res.status(500).json({ error: err?.message ?? 'chronicle generation failed' });
     }
+  });
+
+  // Followup #59 — persisted mayor decree feed. MayorPanelCard's history
+  // used to live in component-state only (refresh wiped it); this endpoint
+  // surfaces decrees from the events table where kind='mayor:decree' so
+  // the panel can survive reloads. Newest-first, capped at 50 by default
+  // so a chatty mayor doesn't dump thousands of rows into one response.
+  app.get('/api/towns/:id/decrees', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const limit =
+      Number.isFinite(limitRaw) && limitRaw > 0
+        ? Math.min(Math.floor(limitRaw), 500)
+        : 50;
+    // TownManager.listEvents doesn't support a kind filter, so pull a wider
+    // window and filter in-process. Most towns won't accumulate enough
+    // events to make this expensive; if it ever does, the right fix is a
+    // dedicated index on (town_id, kind, occurred_at) on the events table.
+    const SCAN_WINDOW = Math.max(500, limit * 20);
+    const events = tm.listEvents(townId, { limit: SCAN_WINDOW });
+    const decrees = events
+      .filter((e) => e.kind === 'mayor:decree')
+      .slice(0, limit)
+      .map((e) => {
+        // The mayor/decree route writes payload as { taskId, text, source }.
+        // Be defensive — older rows may have a different shape.
+        const p =
+          e.payload && typeof e.payload === 'object'
+            ? (e.payload as Record<string, unknown>)
+            : {};
+        return {
+          id: e.id,
+          townId: e.townId,
+          occurredAt: e.occurredAt,
+          taskId: typeof p.taskId === 'string' ? p.taskId : null,
+          text: typeof p.text === 'string' ? p.text : null,
+          source: typeof p.source === 'string' ? p.source : null,
+        };
+      });
+    res.json({ decrees });
   });
 
   // ─── Phase 5-A Disasters + Memorial Park ──────────────────────────────
@@ -3256,7 +3343,11 @@ export function createAPIServer(
       return;
     }
     if (!requireMayor(req, res, id)) return;
-    const body = (req.body ?? {}) as { state?: unknown; reason?: unknown };
+    const body = (req.body ?? {}) as {
+      state?: unknown;
+      reason?: unknown;
+      oneWay?: unknown;
+    };
     const state = body.state;
     if (state !== 'allied' && state !== 'rival' && state !== 'neutral') {
       res
@@ -3265,6 +3356,12 @@ export function createAPIServer(
       return;
     }
     const reason = typeof body.reason === 'string' ? body.reason : undefined;
+    // Followup #62 — admin overrides via the mayor-gated route mirror to
+    // the peer side by default so an explicit mayor move (`A → B = allied`)
+    // is symmetric across the directed graph. Auto-transitions in the
+    // diplomacy loop remain directional. Advanced callers can opt out by
+    // setting `oneWay: true` in the request body.
+    const oneWay = body.oneWay === true;
     try {
       const diplomacy = tm.getDiplomacyManager();
       const updated = diplomacy.setRelationship(id, peerId, state, { reason });
@@ -3274,7 +3371,51 @@ export function createAPIServer(
       }
       // diplomacy:state_changed is recorded inside DiplomacyManager.setRelationship
       // and fans out via the unified TownManager.setEventEmitter hook.
-      res.json({ relationship: updated });
+
+      // Followup #62 — try the peer-side mirror write. Wrapped in try/catch
+      // so a failure on the mirror doesn't roll back the primary A→B edge:
+      // the admin still gets the original change recorded and a warning in
+      // the response payload (HTTP 207) so the dashboard can surface the
+      // resulting asymmetry.
+      let mirror: ReturnType<typeof diplomacy.setRelationship> | null = null;
+      let mirrorWarning: string | null = null;
+      if (!oneWay) {
+        try {
+          mirror = diplomacy.setRelationship(peerId, id, state, {
+            reason: reason ? `mirror: ${reason}` : 'admin mirror',
+          });
+          if (!mirror) {
+            mirrorWarning = 'peer-side mirror write returned null (edge not updated)';
+            logger.warn(
+              { townId: id, peerId, state },
+              'Followup #62: peer-side mirror returned null; primary edge committed',
+            );
+          }
+        } catch (mirrorErr: any) {
+          mirrorWarning = `peer-side mirror failed: ${mirrorErr?.message ?? mirrorErr}`;
+          logger.warn(
+            { err: mirrorErr?.message, townId: id, peerId, state },
+            'Followup #62: peer-side mirror threw; primary edge committed',
+          );
+        }
+      }
+
+      // 207 Multi-Status when the mirror failed but the primary succeeded;
+      // plain 200 with mirror=null when the caller opted out, or with the
+      // mirror edge when the mirror succeeded.
+      if (mirrorWarning) {
+        res.status(207).json({
+          relationship: updated,
+          mirror: null,
+          warning: mirrorWarning,
+        });
+        return;
+      }
+      res.json({
+        relationship: updated,
+        mirror: oneWay ? null : mirror,
+        oneWay,
+      });
     } catch (err: any) {
       logger.warn(
         { err: err?.message, townId: id, peerId },
@@ -3369,6 +3510,11 @@ export function createAPIServer(
     res.json({ approval: approvalManager.getApproval(approvalId) });
   });
 
+  // Phase 8-followup #55 — mayor-gated by default. Body must include
+  // `mayorPlayerName` matching the town's mayor. Admin override: pass
+  // `?admin=true` on the query string to bypass the mayor check (intended
+  // for break-glass / ops scripts). Without admin=true and without a valid
+  // mayor signature, the request 403s through requireMayor.
   app.post('/api/towns/:id/approvals/:approvalId/decide', async (req: Request, res: Response) => {
     const tm = botManager.getTownManager();
     const id = String(req.params.id);
@@ -3383,10 +3529,9 @@ export function createAPIServer(
       res.status(409).json({ error: 'Town brain not wired yet' });
       return;
     }
-    const { mayorPlayerName, choice } = (req.body ?? {}) as {
-      mayorPlayerName?: string;
-      choice?: string;
-    };
+    const adminOverride = String(req.query.admin ?? '').toLowerCase() === 'true';
+    if (!adminOverride && !requireMayor(req, res, id)) return;
+    const { choice } = (req.body ?? {}) as { choice?: string };
     if (choice !== 'approved' && choice !== 'denied') {
       res.status(400).json({ error: 'choice must be "approved" or "denied"' });
       return;
@@ -3404,10 +3549,59 @@ export function createAPIServer(
       res.json({ approval: updated });
     } catch (err: any) {
       logger.warn(
-        { err: err?.message, approvalId, townId: id },
+        { err: err?.message, approvalId, townId: id, adminOverride },
         'POST /approvals/:id/decide failed',
       );
       res.status(500).json({ error: err?.message ?? 'mayorDecide failed' });
+    }
+  });
+
+  // Phase 8-followup #56 — flip a town's `approvalMode` between 'mayor' and
+  // 'vote'. Mayor-gated via requireMayor. Body: { mode, mayorPlayerName }.
+  // Returns the updated town DTO so the dashboard can refresh without an
+  // extra GET. Records `approval:mode_changed` when the mode actually flips.
+  app.post('/api/towns/:id/approval-mode', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    if (!requireMayor(req, res, id)) return;
+    const { mode } = (req.body ?? {}) as { mode?: string };
+    if (mode !== 'mayor' && mode !== 'vote') {
+      res.status(400).json({ error: 'mode must be "mayor" or "vote"' });
+      return;
+    }
+    try {
+      const currentConfig = (town.config ?? {}) as Record<string, unknown>;
+      const previousMode =
+        (currentConfig as { approvalMode?: string }).approvalMode === 'vote' ? 'vote' : 'mayor';
+      const nextConfig = { ...currentConfig, approvalMode: mode };
+      const updated = tm.updateTown(id, { config: nextConfig });
+      if (!updated) {
+        res.status(500).json({ error: 'Failed to update town config' });
+        return;
+      }
+      if (previousMode !== mode) {
+        tm.recordEvent({
+          townId: id,
+          kind: 'approval:mode_changed',
+          severity: 'minor',
+          payload: { mode, previousMode },
+          highlightScore: 30,
+        });
+      }
+      res.json({
+        town: townToDTO(updated, tm.listResidents(updated.id), tm.isTownPaused(updated.id)),
+      });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: id, mode },
+        'POST /approval-mode failed',
+      );
+      res.status(500).json({ error: err?.message ?? 'approval-mode failed' });
     }
   });
 

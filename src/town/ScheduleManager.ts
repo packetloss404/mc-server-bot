@@ -177,6 +177,17 @@ export class ScheduleManager {
   private readonly lastEmittedPhase: Map<string, SchedulePhase> = new Map();
   /** Per-town hydration set so we only load each town's slice once. */
   private readonly loadedTowns: Set<string> = new Set();
+  /**
+   * Followup #41 — last epoch-ms we ran the schedule-task GC pass. We sweep
+   * at most once per `GC_INTERVAL_MS` regardless of how often `tick()` is
+   * called, since the sweep walks the full blackboard tasks array.
+   */
+  private lastGcAt = 0;
+
+  /** Followup #41 — minimum gap between GC sweeps (1 hour). */
+  private static readonly GC_INTERVAL_MS = 60 * 60 * 1000;
+  /** Followup #41 — schedule-source tasks older than 24h get GC'd. */
+  private static readonly GC_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 
   constructor(townManager: TownManager, blackboard: BlackboardManager) {
     this.townManager = townManager;
@@ -190,6 +201,11 @@ export class ScheduleManager {
    */
   tick(townId: string, worldTimeTicks: number | null): void {
     this.hydrateTown(townId);
+    // Followup #41 — opportunistic GC pass for stale schedule tasks. Runs at
+    // most once per GC_INTERVAL_MS regardless of brain cadence so the sweep
+    // is cheap on busy boards. Failure-isolated because the cleanup mustn't
+    // block schedule emission.
+    this.maybeRunGc();
     const phase = this.phaseFor(worldTimeTicks);
     const residents = this.townManager
       .listResidents(townId)
@@ -216,6 +232,35 @@ export class ScheduleManager {
       mutated = true;
     }
     if (mutated) this.persistTown(townId);
+  }
+
+  /**
+   * Followup #41 — periodic GC pass on the blackboard. The dedup check in
+   * `emitForRole` keeps the steady state quiet, but a long-running town
+   * still wants the unclaimed schedule tasks pruned out so the board doesn't
+   * grow unboundedly. Scope is intentionally narrow (see
+   * BlackboardManager.gcStaleScheduleTasks): only swarm-source tasks with
+   * BOTH 'town' AND ('day' | 'night') keywords are eligible, so supply
+   * tasks survive.
+   */
+  private maybeRunGc(): void {
+    const now = Date.now();
+    if (now - this.lastGcAt < ScheduleManager.GC_INTERVAL_MS) return;
+    this.lastGcAt = now;
+    try {
+      const removed = this.blackboard.gcStaleScheduleTasks?.(ScheduleManager.GC_MAX_AGE_MS) ?? 0;
+      if (removed > 0) {
+        logger.info(
+          { removed, maxAgeMs: ScheduleManager.GC_MAX_AGE_MS },
+          'ScheduleManager: GC removed stale schedule tasks',
+        );
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message },
+        'ScheduleManager: gcStaleScheduleTasks threw; continuing',
+      );
+    }
   }
 
   /** Read-only — the task descriptions for a role/phase pair. */
@@ -325,6 +370,20 @@ export class ScheduleManager {
     const entries = SCHEDULES[role]?.[phase] ?? [];
     for (const entry of entries) {
       try {
+        // Followup #41 — skip the push if an open (pending or claimed)
+        // swarm-source task with the same description is already on the
+        // board. Phase-flip cadence means duplicate descriptions otherwise
+        // pile up every in-game day. The dedup is by (description, source)
+        // — see BlackboardManager.existsOpenWithDescription — so the
+        // schedule can still re-emit once the previous instance completes
+        // or is GC'd.
+        if (this.blackboard.existsOpenWithDescription?.(entry.description, 'swarm')) {
+          logger.debug(
+            { townId, role, phase, description: entry.description },
+            'ScheduleManager: skipping duplicate emit (open swarm task exists)',
+          );
+          continue;
+        }
         // Tag the task with role + town so idle pickup and other towns'
         // bots score them correctly. The leading `town:<id>` keyword is
         // also what the demand-loop uses — keep them consistent.

@@ -252,6 +252,25 @@ export class TradeRouteManager {
     let taskId: string | null = null;
     try {
       const description = `town:${source.id} ally trade — deliver ${amount} ${resource} to ${target.name}`;
+      // Followup #61 (Phase 8-followup): emit a structured metadata blob
+      // alongside the NL description so the Voyager loop / a future
+      // ChainCoordinator integration can dispatch a real
+      // gather→walk→deposit pipeline instead of relying on keyword match
+      // + LLM improvisation. The metadata.kind discriminator is the
+      // forward-compat contract; see BlackboardTask.metadata docstring.
+      const targetCapital = target.capital
+        ? { x: target.capital.x, y: target.capital.y, z: target.capital.z }
+        : null;
+      const tradeMetadata: Record<string, unknown> = {
+        kind: 'trade-route',
+        sourceTownId: source.id,
+        sourceTownName: source.name,
+        targetTownId: target.id,
+        targetTownName: target.name,
+        resource,
+        amount,
+        targetCapital,
+      };
       const task = this.blackboard.addTask(
         {
           description,
@@ -260,9 +279,8 @@ export class TradeRouteManager {
         'swarm',
         undefined,
         'high',
-        target.capital
-          ? { x: target.capital.x, y: target.capital.y, z: target.capital.z }
-          : undefined,
+        targetCapital ?? undefined,
+        tradeMetadata,
       );
       taskId = task?.id ?? null;
     } catch (err: any) {

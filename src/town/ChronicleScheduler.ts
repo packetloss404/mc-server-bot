@@ -9,16 +9,27 @@
  * Failure isolation: a thrown generator call must NOT crash the scheduler.
  * The scheduler's tick is wrapped, errors are logged, and the next tick
  * picks back up. Paused / abandoned towns are skipped entirely.
+ *
+ * Followup #46 — tick aligned to the 20-minute Minecraft-day cadence (was
+ * 5 minutes). The generator's idempotency check still protects against
+ * accidental re-billing if the interval is overridden in tests, but the
+ * default cadence now produces exactly one DB read per town per day
+ * instead of four.
  */
 import { logger } from '../util/logger';
 import type { TownManager } from './TownManager';
 import type { ChronicleGenerator } from './ChronicleGenerator';
 
-/** Fire the scheduler every 5 real minutes — generator is idempotent. */
-const DEFAULT_TICK_INTERVAL_MS = 5 * 60 * 1000;
+/**
+ * Fire the scheduler every 20 real minutes — matches the Minecraft-day
+ * rollover cadence used by TownManager.getChronicleDayNumber, so each
+ * scheduler tick lines up with at most one new daily entry per town and
+ * we avoid 3 wasted DB reads per town per day (followup #46).
+ */
+const DEFAULT_TICK_INTERVAL_MS = 20 * 60 * 1000;
 
 export interface ChronicleSchedulerOptions {
-  /** Override the tick cadence (mostly for tests). Default 5 minutes. */
+  /** Override the tick cadence (mostly for tests). Default 20 minutes. */
   intervalMs?: number;
   /** When true, skip the initial tick on start() (tests). */
   skipInitialTick?: boolean;

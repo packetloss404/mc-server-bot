@@ -65,6 +65,22 @@ export interface ChronicleGeneratorOptions {
   defaultBudgetUsd?: number;
 }
 
+/**
+ * Followup #48 — payload shape broadcast on the `town:chronicle` socket
+ * event. The API layer registers a callback via `setEventEmitter()` so
+ * both manual (`POST /chronicle/generate`) and scheduler-driven paths
+ * fan out the same payload to dashboard subscribers.
+ */
+export interface ChronicleEmitPayload {
+  townId: string;
+  dayNumber: number;
+  entry: ChronicleEntry;
+  /** 'daily' | 'milestone' — surfaced so consumers can filter the stream. */
+  kind: ChronicleEntry['kind'];
+}
+
+export type ChronicleEventEmitter = (payload: ChronicleEmitPayload) => void;
+
 export class ChronicleGenerator {
   private readonly townManager: TownManager;
   private readonly llm: LLMClient | null;
@@ -81,6 +97,13 @@ export class ChronicleGenerator {
   private readonly dailyCostCents: Map<string, number> = new Map();
   /** Per-town hydration set so we only load each town's slice once. */
   private readonly loadedTowns: Set<string> = new Set();
+  /**
+   * Followup #48 — optional callback the API layer wires at startup so the
+   * scheduler's auto-generated daily entries (and any milestone entries)
+   * fan out over Socket.IO too. Kept as a callback so the generator
+   * doesn't have to import socket.io. Errors are swallowed.
+   */
+  private eventEmitter: ChronicleEventEmitter | null = null;
 
   constructor(
     townManager: TownManager,
@@ -90,6 +113,30 @@ export class ChronicleGenerator {
     this.townManager = townManager;
     this.llm = llm;
     this.defaultBudgetUsd = opts.defaultBudgetUsd ?? DEFAULT_BUDGET_USD;
+  }
+
+  /**
+   * Followup #48 — inject the socket-fanout callback. Idempotent: passing a
+   * new callback replaces the previous one. Pass `null` to detach.
+   */
+  setEventEmitter(fn: ChronicleEventEmitter | null): void {
+    this.eventEmitter = fn;
+  }
+
+  /**
+   * Best-effort fanout — failures (throwing callback, socket teardown)
+   * must never bubble up into the generator's caller. Logged + swallowed.
+   */
+  private emitChronicleEvent(payload: ChronicleEmitPayload): void {
+    if (!this.eventEmitter) return;
+    try {
+      this.eventEmitter(payload);
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: payload.townId, kind: payload.kind },
+        'ChronicleGenerator: eventEmitter callback threw',
+      );
+    }
   }
 
   /**
@@ -187,6 +234,10 @@ export class ChronicleGenerator {
       payload: { dayNumber, chronicleId: entry.id, model },
       highlightScore: 30,
     });
+    // Followup #48 — fan out so the scheduler's auto-generated entries
+    // reach dashboard subscribers too (the manual /chronicle/generate
+    // route already emits, but the scheduler path didn't until now).
+    this.emitChronicleEvent({ townId, dayNumber, entry, kind: 'daily' });
     logger.info(
       { townId, dayNumber, model, bodyLen: body.length },
       'ChronicleGenerator: daily entry written',
@@ -247,6 +298,10 @@ export class ChronicleGenerator {
       payload: { dayNumber, chronicleId: entry.id, milestone: kind, ...payload },
       highlightScore: 60,
     });
+    // Followup #48 — fan out milestones too so the dashboard surfaces
+    // ad-hoc entries (founding, tier upgrade, disaster) without waiting
+    // for the next chronicle poll.
+    this.emitChronicleEvent({ townId, dayNumber, entry, kind: 'milestone' });
     logger.info(
       { townId, dayNumber, kind, bodyLen: body.length },
       'ChronicleGenerator: milestone entry written',
@@ -491,8 +546,10 @@ export class ChronicleGenerator {
 
   /**
    * Followup #45 — load the persisted chronicle slice for one town once per
-   * process. Failures are swallowed inside budgetLedger.load; the generator
-   * falls back to the in-memory map.
+   * process. Followup #64 — reads only the chronicle slice from its own file
+   * (legacy `budget.json` is migrated through on the first save). Failures
+   * are swallowed inside budgetLedger.loadChronicle; the generator falls
+   * back to the in-memory map.
    */
   private hydrateTownLedger(townId: string): void {
     if (this.loadedTowns.has(townId)) return;
@@ -500,7 +557,7 @@ export class ChronicleGenerator {
     const dataDir = this.dataDirOrNull();
     if (!dataDir) return;
     try {
-      const ledger = budgetLedger.load(dataDir, townId);
+      const ledger = budgetLedger.loadChronicle(dataDir, townId);
       const prefix = `${townId}|`;
       for (const [key, cents] of Object.entries(ledger.chronicleCostCentsByKey)) {
         if (!key.startsWith(prefix)) continue;
@@ -517,15 +574,16 @@ export class ChronicleGenerator {
   }
 
   /**
-   * Persist the chronicle slice for one town. Reads the existing file first
-   * so we preserve TownBrain's `designSpendUsdByDay` slice. Failures are
-   * swallowed inside budgetLedger.save.
+   * Persist the chronicle slice for one town.
+   * Followup #64 — writes only the chronicle slice into its own file so a
+   * concurrent design save can no longer clobber the chronicle slice (or
+   * vice versa) around the LLM call window. Failures are swallowed inside
+   * budgetLedger.saveChronicle.
    */
   private persistTownLedger(townId: string): void {
     const dataDir = this.dataDirOrNull();
     if (!dataDir) return;
     try {
-      const existing = budgetLedger.load(dataDir, townId);
       // Walk our in-memory map and pick out keys for this town.
       const prefix = `${townId}|`;
       const chronicleCostCentsByKey: Record<string, number> = {};
@@ -533,10 +591,7 @@ export class ChronicleGenerator {
         if (!key.startsWith(prefix)) continue;
         chronicleCostCentsByKey[key] = cents;
       }
-      budgetLedger.save(dataDir, townId, {
-        designSpendUsdByDay: existing.designSpendUsdByDay,
-        chronicleCostCentsByKey,
-      });
+      budgetLedger.saveChronicle(dataDir, townId, { chronicleCostCentsByKey });
     } catch (err: any) {
       logger.warn(
         { err: err?.message, townId },

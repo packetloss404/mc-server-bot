@@ -1,7 +1,9 @@
+import crypto from 'crypto';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+import type { Config } from '../config';
 
 /**
- * Lightweight dashboard auth + plugin auth.
+ * Lightweight dashboard auth + plugin auth + player-identity session.
  *
  * Behavior:
  *  - `DASHBOARD_AUTH_SECRET` env var, when set, gates all `/api/*` routes
@@ -10,6 +12,12 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
  *    (current behavior preserved — single-user local-dev case).
  *  - `PLUGIN_AUTH_TOKEN` env var, when set, gates `/api/events/*` via
  *    `requirePluginAuth`. When unset, the wide-open behavior is preserved.
+ *  - Followup #58 — a separate player-identity session lives in the `pid`
+ *    cookie. `POST /api/auth/login` accepts `{ playerName, secret }` and
+ *    issues a signed `pid` cookie binding the request to that player.
+ *    `getSessionPlayerName(req)` reads it back. The Town's `requireMayor`
+ *    helper compares this to `town.config.mayor.playerName` instead of the
+ *    old honor-system body field.
  *
  * Cookies are parsed inline (no `cookie-parser` dependency) since we only
  * need to read one cookie name.
@@ -17,6 +25,9 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 const COOKIE_NAME = 'auth';
 const COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
+/** Player-identity session cookie. Separate from the dashboard secret cookie. */
+const PID_COOKIE_NAME = 'pid';
+const PID_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
 function readCookie(req: Request, name: string): string | undefined {
   const header = req.headers.cookie;
@@ -142,20 +153,122 @@ export const requirePluginAuth: RequestHandler = (
  * it came over HTTPS (so plain-HTTP local dev still works).
  */
 function buildAuthCookie(req: Request, value: string, clear: boolean): string {
+  return buildCookie(req, COOKIE_NAME, value, clear, COOKIE_MAX_AGE_MS);
+}
+
+function buildCookie(
+  req: Request,
+  name: string,
+  value: string,
+  clear: boolean,
+  maxAgeMs: number,
+): string {
   const parts: string[] = [];
-  parts.push(`${COOKIE_NAME}=${encodeURIComponent(value)}`);
+  parts.push(`${name}=${encodeURIComponent(value)}`);
   parts.push('Path=/');
   parts.push('HttpOnly');
   parts.push('SameSite=Lax');
   if (clear) {
     parts.push('Max-Age=0');
   } else {
-    parts.push(`Max-Age=${Math.floor(COOKIE_MAX_AGE_MS / 1000)}`);
+    parts.push(`Max-Age=${Math.floor(maxAgeMs / 1000)}`);
   }
   const xfproto = req.headers['x-forwarded-proto'];
   const isHttps = req.secure || (typeof xfproto === 'string' && xfproto.split(',')[0].trim() === 'https');
   if (isHttps) parts.push('Secure');
   return parts.join('; ');
+}
+
+// ──────────────────────────────────────────────────────────────────────
+//  Followup #58 — player-identity session
+//
+//  Separate from the dashboard secret cookie. Stores `playerName` in a
+//  signed `pid` cookie. The signing key is derived from the config's
+//  `auth.devSecret` (or the env var `DASHBOARD_AUTH_SECRET` if that's
+//  not set), so an attacker can't mint cookies without the secret.
+//
+//  Session contract: `pid=<playerName>.<hmac>` — both pieces are needed
+//  to validate. We reject any cookie whose HMAC doesn't match.
+// ──────────────────────────────────────────────────────────────────────
+
+let authConfig: { devSecret?: string | null } | null = null;
+
+/** Wire the runtime config into the auth module. Idempotent. */
+export function setAuthConfig(config: Pick<Config, 'auth'> | null | undefined): void {
+  authConfig = (config?.auth as { devSecret?: string | null } | undefined) ?? null;
+}
+
+/**
+ * Resolve the dev secret used to validate player logins. Order of
+ * precedence: explicit env var `DASHBOARD_AUTH_DEV_SECRET` > `config.auth.devSecret`
+ * > the dashboard secret env var > none.
+ *
+ * Returns null when no secret is configured at all — in that mode any
+ * playerName logs in successfully (single-user local dev).
+ */
+function getDevSecret(): string | null {
+  if (process.env.DASHBOARD_AUTH_DEV_SECRET) return process.env.DASHBOARD_AUTH_DEV_SECRET;
+  if (authConfig?.devSecret) return String(authConfig.devSecret);
+  if (process.env.DASHBOARD_AUTH_SECRET) return process.env.DASHBOARD_AUTH_SECRET;
+  return null;
+}
+
+/** True when a dev secret is configured (player login enforces it). */
+export function isPlayerAuthEnforced(): boolean {
+  return getDevSecret() !== null;
+}
+
+/** Derive the signing key for the `pid` cookie HMAC. */
+function getSessionSigningKey(): string {
+  // Mix in a stable suffix so a leaked dev secret alone can't be used as a
+  // session signing key for other purposes. Acceptable for dev — followup
+  // would migrate to a generated server key persisted on disk.
+  const base = getDevSecret() ?? 'dyobot-session-fallback';
+  return `${base}::pid`;
+}
+
+function signPid(playerName: string): string {
+  const h = crypto.createHmac('sha256', getSessionSigningKey());
+  h.update(playerName);
+  return h.digest('hex').slice(0, 32);
+}
+
+function makePidValue(playerName: string): string {
+  return `${playerName}.${signPid(playerName)}`;
+}
+
+function parsePidValue(value: string | undefined): string | null {
+  if (!value || typeof value !== 'string') return null;
+  const dot = value.lastIndexOf('.');
+  if (dot < 1 || dot >= value.length - 1) return null;
+  const name = value.slice(0, dot);
+  const sig = value.slice(dot + 1);
+  const expected = signPid(name);
+  try {
+    const a = Buffer.from(sig, 'hex');
+    const b = Buffer.from(expected, 'hex');
+    if (a.length !== b.length) return null;
+    if (!crypto.timingSafeEqual(a, b)) return null;
+  } catch {
+    return null;
+  }
+  return name;
+}
+
+/**
+ * Returns the playerName bound to the current request via the `pid`
+ * cookie, or null when no valid session cookie is present.
+ *
+ * The Town's `requireMayor` helper uses this as the source of truth
+ * for "is the caller the mayor of <town>?"
+ */
+export function getSessionPlayerName(req: Request): string | null {
+  const raw = readCookie(req, PID_COOKIE_NAME);
+  return parsePidValue(raw);
+}
+
+function buildPidCookie(req: Request, value: string, clear: boolean): string {
+  return buildCookie(req, PID_COOKIE_NAME, value, clear, PID_COOKIE_MAX_AGE_MS);
 }
 
 /**
@@ -165,23 +278,64 @@ function buildAuthCookie(req: Request, value: string, clear: boolean): string {
  */
 export function registerAuthRoutes(app: import('express').Application): void {
   app.post('/api/auth/login', (req: Request, res: Response): void => {
-    const secret = process.env.DASHBOARD_AUTH_SECRET;
-    if (!secret) {
-      // Auth disabled — login is a no-op success.
+    const body = (req.body ?? {}) as { secret?: unknown; playerName?: unknown };
+    const provided = typeof body.secret === 'string' ? body.secret : undefined;
+    const playerName = typeof body.playerName === 'string' ? body.playerName.trim() : '';
+
+    // Set-Cookie can include multiple headers. We accumulate them so a
+    // single login call can mint both the dashboard cookie AND the pid
+    // cookie when appropriate.
+    const cookies: string[] = [];
+
+    // ── Dashboard-secret gate (legacy + dashboard auth) ──────────────
+    const dashSecret = process.env.DASHBOARD_AUTH_SECRET;
+    if (dashSecret) {
+      if (typeof provided !== 'string' || provided !== dashSecret) {
+        res.status(401).json({ error: 'invalid secret' });
+        return;
+      }
+      cookies.push(buildAuthCookie(req, dashSecret, false));
+    }
+
+    // ── Followup #58: player-identity session ─────────────────────────
+    // When a playerName is provided we attempt to mint a `pid` cookie.
+    // A dev secret (config.auth.devSecret or env) is required when set;
+    // when no secret is configured at all, any playerName succeeds
+    // (local dev convenience).
+    let player: string | null = null;
+    if (playerName) {
+      if (playerName.length > 64) {
+        res.status(400).json({ error: 'playerName too long' });
+        return;
+      }
+      const devSecret = getDevSecret();
+      if (devSecret) {
+        if (typeof provided !== 'string' || provided !== devSecret) {
+          res.status(401).json({ error: 'invalid secret' });
+          return;
+        }
+      }
+      cookies.push(buildPidCookie(req, makePidValue(playerName), false));
+      player = playerName;
+    }
+
+    if (cookies.length === 0 && !dashSecret) {
+      // Auth disabled, no playerName supplied → preserve legacy behavior.
       res.json({ ok: true, enabled: false });
       return;
     }
-    const provided = req.body?.secret;
-    if (typeof provided !== 'string' || provided !== secret) {
-      res.status(401).json({ error: 'invalid secret' });
-      return;
+    if (cookies.length > 0) {
+      res.setHeader('Set-Cookie', cookies);
     }
-    res.setHeader('Set-Cookie', buildAuthCookie(req, secret, false));
-    res.json({ ok: true });
+    res.json({ ok: true, playerName: player });
   });
 
   app.post('/api/auth/logout', (req: Request, res: Response): void => {
-    res.setHeader('Set-Cookie', buildAuthCookie(req, '', true));
+    // Clear both the dashboard cookie and the player-identity cookie.
+    res.setHeader('Set-Cookie', [
+      buildAuthCookie(req, '', true),
+      buildPidCookie(req, '', true),
+    ]);
     res.json({ ok: true });
   });
 
@@ -190,6 +344,13 @@ export function registerAuthRoutes(app: import('express').Application): void {
       enabled: isDashboardAuthEnabled(),
       authenticated: isDashboardAuthenticated(req),
       pluginAuthEnabled: isPluginAuthEnabled(),
+      playerAuthEnforced: isPlayerAuthEnforced(),
+      playerName: getSessionPlayerName(req),
     });
+  });
+
+  // Followup #58 — convenience accessor for the frontend's "who am I?"
+  app.get('/api/auth/me', (req: Request, res: Response): void => {
+    res.json({ playerName: getSessionPlayerName(req) });
   });
 }

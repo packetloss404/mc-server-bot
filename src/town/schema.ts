@@ -158,6 +158,11 @@ export const approvals = sqliteTable('approvals', {
   mayorDecision: text('mayor_decision'),
   // { yes: string[], no: string[] } — bot-name lists keyed by choice
   votesJson: text('votes_json'),
+  // Phase 8-followup #57 — handler descriptor for resolveOnce rehydration.
+  // Serialised `{ kind, payload, target }` (see ApprovalManager.HandlerDescriptor).
+  // Lets the brain re-register the resolveOnce hook after a restart, so a row
+  // that approves while the process is down still executes on the next boot.
+  handlerDescriptorJson: text('handler_descriptor_json'),
 });
 
 /**

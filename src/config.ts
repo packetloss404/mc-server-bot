@@ -74,6 +74,25 @@ export interface Config {
     timeoutMs?: number;
   };
   logging: { level: string };
+  /**
+   * Followup #58 — player-identity session secret (dev-mode).
+   *
+   * When `auth.devSecret` is set, `POST /api/auth/login` requires the
+   * caller to supply that secret as `secret` in the JSON body and is
+   * accepted for ANY `playerName`. The login mints a signed `pid`
+   * cookie that `requireMayor` then validates against the town's
+   * mayor.playerName.
+   *
+   * Per-player secrets are intentionally out-of-scope for this
+   * followup (see #58 acceptance notes); the dev secret is a single
+   * shared key. When `auth.devSecret` is missing AND no
+   * `DASHBOARD_AUTH_SECRET` env var is set, player login is wide
+   * open (any playerName succeeds) — preserves single-user local
+   * dev behavior.
+   */
+  auth?: {
+    devSecret?: string | null;
+  };
 }
 
 export function loadConfig(configPath?: string): Config {

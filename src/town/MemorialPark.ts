@@ -68,6 +68,20 @@ export class MemorialPark {
    */
   private readonly placements: Map<string, Map<string, string>> = new Map();
 
+  /**
+   * Followup #52 — per-town slot-occupancy map. Tracks every occupied
+   * `${x}|${z}` slot key (including overflow positions outside the 64-slot
+   * grid) so the deterministic SHA-1 overflow path can detect collisions
+   * between two disaster ids that hash to the same overflow row+col.
+   *
+   * Lazily hydrated from MarkerStore on the first pickSlot call for each
+   * town (or rebuilt during setMarkerStore wiring), then maintained
+   * in-memory as new monuments are placed.
+   */
+  private readonly slotOccupancy: Map<string, Set<string>> = new Map();
+  /** Tracks which towns have already had their slotOccupancy hydrated. */
+  private readonly slotOccupancyHydrated: Set<string> = new Set();
+
   constructor(townManager: TownManager, markerStore: MarkerStore | null = null) {
     this.townManager = townManager;
     this.markerStore = markerStore;
@@ -79,6 +93,11 @@ export class MemorialPark {
     // Rebuild placement cache from MarkerStore when wiring late so we don't
     // re-place over an existing monument.
     if (store) this.rebuildCacheFromStore();
+    // Followup #52 — slot-occupancy is hydrated per-town on first use
+    // (we don't know which towns exist here). Clear any stale state so the
+    // next pickSlot call re-reads from the just-wired store.
+    this.slotOccupancy.clear();
+    this.slotOccupancyHydrated.clear();
   }
 
   /** Compute the park bounds for a town. Returns null when the town has no capital. */
@@ -127,7 +146,12 @@ export class MemorialPark {
       // Marker was deleted out from under us — fall through to re-place.
     }
 
-    const occupiedSlots = this.collectOccupiedSlots(townId, bounds);
+    // Followup #52 — hydrate the per-town slot-occupancy map on first use
+    // so the overflow path can detect cross-disaster hash collisions
+    // (the in-grid linear-probe was already collision-safe; the overflow
+    // computation was not).
+    this.hydrateSlotOccupancy(townId, bounds);
+    const occupiedSlots = this.slotOccupancy.get(townId) ?? new Set<string>();
     const slot = this.pickSlot(disaster.id, bounds, occupiedSlots);
 
     const town = this.townManager.getTown(townId);
@@ -142,6 +166,10 @@ export class MemorialPark {
 
     cache.set(disaster.id, marker.id);
     this.placements.set(townId, cache);
+    // Followup #52 — record the newly-occupied slot so the next placement
+    // in this town sees the live state without re-querying MarkerStore.
+    occupiedSlots.add(this.slotKey(marker.position.x, marker.position.z));
+    this.slotOccupancy.set(townId, occupiedSlots);
     logger.info(
       { townId, disasterId: disaster.id, markerId: marker.id, position: marker.position },
       'MemorialPark: monument placed',
@@ -187,6 +215,23 @@ export class MemorialPark {
     return taken;
   }
 
+  /**
+   * Followup #52 — hydrate `slotOccupancy[townId]` from MarkerStore on
+   * first call for each town. Idempotent: the `slotOccupancyHydrated` set
+   * guards against re-reading the store on every monument placement.
+   *
+   * The map captures every monument marker tagged for this town,
+   * including overflow markers placed outside the 64-slot grid. This is
+   * what lets pickSlot detect collisions between two distinct disaster
+   * ids whose SHA-1 hashes alias to the same overflow row+col.
+   */
+  private hydrateSlotOccupancy(townId: string, bounds: MemorialPark_Bounds): void {
+    if (this.slotOccupancyHydrated.has(townId)) return;
+    const taken = this.collectOccupiedSlots(townId, bounds);
+    this.slotOccupancy.set(townId, taken);
+    this.slotOccupancyHydrated.add(townId);
+  }
+
   private markerBelongsToTown(
     m: MarkerRecord,
     townId: string,
@@ -208,6 +253,13 @@ export class MemorialPark {
    * Map a disaster id deterministically into a free grid slot. Uses sha-1 of
    * the disaster id (so a process restart with the same row reproduces the
    * placement) then linear-probes for collisions.
+   *
+   * Followup #52 — the overflow path (when the 64-slot grid is full) used
+   * to land a single hash-derived position. Two distinct disaster ids
+   * hashing to the same overflow row+col mathematically collided. The
+   * overflow path now also linear-probes, walking +z then wrapping in +x,
+   * using the same `occupied` map so the chosen slot is unique within the
+   * town's full monument footprint.
    */
   private pickSlot(
     disasterId: string,
@@ -228,14 +280,37 @@ export class MemorialPark {
         return { x, y: bounds.y, z };
       }
     }
-    // Grid full — overflow north along +z so each disaster still gets a
-    // unique position. Indexed by the disaster id hash so the overflow row
-    // is itself deterministic.
+    // Grid full — overflow north along +z. We start at a hash-derived
+    // position so process restarts reproduce the same target slot, then
+    // linear-probe along +z (and wrap +x) until we find an unoccupied
+    // slot. The probe count is bounded — GRID_DIM rows × 256 columns =
+    // 2048 candidate slots is well past any realistic town's lifetime
+    // disaster count.
     const overflow = hash.readUInt32LE(4);
+    const seedOverflowX = overflow % GRID_DIM;
+    const seedOverflowZRow = (overflow >> 8) & 0xff; // 0..255
+    const OVERFLOW_Z_ROWS = 256;
+    for (let probe = 0; probe < GRID_DIM * OVERFLOW_Z_ROWS; probe++) {
+      const gx = (seedOverflowX + (probe % GRID_DIM)) % GRID_DIM;
+      const gzRow = (seedOverflowZRow + Math.floor(probe / GRID_DIM)) % OVERFLOW_Z_ROWS;
+      const x = bounds.minX + gx * SLOT_SPACING;
+      const z = bounds.maxZ + SLOT_SPACING + gzRow * SLOT_SPACING;
+      const key = this.slotKey(x, z);
+      if (!occupied.has(key)) {
+        return { x, y: bounds.y, z };
+      }
+    }
+    // Last-ditch — extremely unlikely (would require 2048+ disasters in
+    // one town's overflow band). Fall through to the original hash-only
+    // position; logging makes the failure mode visible if it ever fires.
+    logger.warn(
+      { disasterId, occupiedCount: occupied.size },
+      'MemorialPark.pickSlot: overflow probe exhausted; reverting to deterministic hash slot (may collide)',
+    );
     return {
-      x: bounds.minX + (overflow % GRID_DIM) * SLOT_SPACING,
+      x: bounds.minX + seedOverflowX * SLOT_SPACING,
       y: bounds.y,
-      z: bounds.maxZ + SLOT_SPACING + ((overflow >> 8) & 0xff) * SLOT_SPACING,
+      z: bounds.maxZ + SLOT_SPACING + seedOverflowZRow * SLOT_SPACING,
     };
   }
 

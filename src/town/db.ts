@@ -122,6 +122,9 @@ const CREATE_STATEMENTS = [
     included INTEGER DEFAULT 1
   )`,
   // Phase 6-B — approvals queue (mayor-direct or resident-vote).
+  // `handler_descriptor_json` (Phase 8-followup #57) lets the brain replay
+  // the resolveOnce hook after a restart so an in-flight row that approves
+  // while the process is down still fires its handler on next boot.
   `CREATE TABLE IF NOT EXISTS approvals (
     id TEXT PRIMARY KEY,
     town_id TEXT REFERENCES towns(id),
@@ -131,7 +134,8 @@ const CREATE_STATEMENTS = [
     created_at INTEGER NOT NULL,
     expires_at INTEGER NOT NULL,
     mayor_decision TEXT,
-    votes_json TEXT
+    votes_json TEXT,
+    handler_descriptor_json TEXT
   )`,
   // Phase 7-A — inter-town directed relationship edges. One row per ordered
   // (town_id_a, town_id_b) pair; supersedes the legacy towns.alliance_state
@@ -170,6 +174,17 @@ const MIGRATIONS: Array<(sqlite: Database.Database) => void> = [
       sqlite.exec(`ALTER TABLE disasters ADD COLUMN dedupe_key TEXT`);
     } catch (err: any) {
       // SQLite throws "duplicate column name" if it already exists — fine.
+      if (!/duplicate column/i.test(String(err?.message ?? ''))) throw err;
+    }
+  },
+  // Phase 8-followup #57: handler_descriptor_json on approvals lets
+  // ApprovalManager re-register the resolveOnce handler after a restart so
+  // an open row that approves while the process is down still executes its
+  // proposer-side action on next boot.
+  (sqlite) => {
+    try {
+      sqlite.exec(`ALTER TABLE approvals ADD COLUMN handler_descriptor_json TEXT`);
+    } catch (err: any) {
       if (!/duplicate column/i.test(String(err?.message ?? ''))) throw err;
     }
   },

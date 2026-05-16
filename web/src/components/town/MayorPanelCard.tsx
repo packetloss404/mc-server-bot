@@ -1,7 +1,7 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { api, type MayorDecreeTaskDTO } from '@/lib/api';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { api, type MayorDecreeEventDTO } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 import type { Town } from '@/lib/townStore';
 
@@ -11,6 +11,7 @@ interface Props {
 
 const POLL_MS = 30_000;
 const MAX_DECREE_LENGTH = 1000;
+const DECREE_HISTORY_LIMIT = 5;
 
 /**
  * Phase 6-A Mayor panel.
@@ -23,21 +24,22 @@ const MAX_DECREE_LENGTH = 1000;
  * dedicated endpoint; it reads the mayor fields from the town DTO so it
  * stays current when Phase 6-B re-elects a mayor.
  *
- * Decree history is locally cached (last 3) because the backend doesn't
- * persist a `mayor_directive` feed yet. When the page refreshes the list
- * resets — that's the "no decrees yet" empty state mentioned in the brief.
+ * Followup #59 — decree history now comes from GET /api/towns/:id/decrees
+ * (backed by the events table where kind='mayor:decree') so the list
+ * survives a page reload. We refresh after every successful submit so the
+ * mayor sees their just-issued decree at the top.
  */
 export function MayorPanelCard({ town }: Props) {
   const { toast } = useToast();
   const [text, setText] = useState('');
   const [submitting, setSubmitting] = useState(false);
   /**
-   * In-memory history of decrees issued from THIS tab in the current
-   * session. Persisting across reloads is a Phase-7 followup; we keep the
-   * last 3 so the mayor sees an instant confirmation that the directive
-   * was queued.
+   * Followup #59 — server-backed decree history. Re-fetched on mount, on
+   * town change, and after each successful submit. We swallow fetch errors
+   * (api.listMayorDecrees returns `{ decrees: [] }` on failure) so the
+   * panel renders an empty state when the backend hasn't booted yet.
    */
-  const [recent, setRecent] = useState<MayorDecreeTaskDTO[]>([]);
+  const [recent, setRecent] = useState<MayorDecreeEventDTO[]>([]);
 
   // Background re-poll of the town record so a Phase-6-B re-election shows
   // up here without the user navigating away. We don't push results into
@@ -73,6 +75,25 @@ export function MayorPanelCard({ town }: Props) {
     };
   }, [town.id]);
 
+  /**
+   * Followup #59 — pull the persisted decree feed from the backend. We
+   * call this on mount, when the town changes, and after each successful
+   * submit so the panel reflects the just-issued decree without waiting
+   * for a poll.
+   */
+  const refreshDecrees = useCallback(async () => {
+    try {
+      const { decrees } = await api.listMayorDecrees(town.id, DECREE_HISTORY_LIMIT);
+      setRecent(decrees);
+    } catch {
+      // Already swallowed inside api.listMayorDecrees; defensive double-catch.
+    }
+  }, [town.id]);
+
+  useEffect(() => {
+    void refreshDecrees();
+  }, [refreshDecrees]);
+
   const honorific = useMemo(() => {
     return [mayorTitle, mayorPlayerName].filter(Boolean).join(' ').trim();
   }, [mayorTitle, mayorPlayerName]);
@@ -88,10 +109,12 @@ export function MayorPanelCard({ town }: Props) {
     if (!body) return;
     setSubmitting(true);
     try {
-      const { task } = await api.issueMayorDecree(town.id, mayorPlayerName, body);
-      setRecent((prev) => [task, ...prev].slice(0, 3));
+      await api.issueMayorDecree(town.id, mayorPlayerName, body);
       setText('');
       toast('Decree issued.', 'success');
+      // Refresh from the persisted feed so the optimistic value matches
+      // exactly what the backend stored (id, occurredAt, etc).
+      await refreshDecrees();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to issue decree.';
       toast(msg, 'error');
@@ -158,7 +181,7 @@ export function MayorPanelCard({ town }: Props) {
           </div>
         </div>
 
-        {/* Recent decrees (session-local) */}
+        {/* Recent decrees (server-backed — Followup #59) */}
         <div className="space-y-1.5">
           <span className="text-[10px] text-zinc-500 uppercase tracking-wider font-semibold">
             Recent decrees
@@ -167,19 +190,25 @@ export function MayorPanelCard({ town }: Props) {
             <p className="text-[11px] text-zinc-600 italic">No decrees yet.</p>
           ) : (
             <ul className="space-y-1.5">
-              {recent.map((task) => (
-                <li
-                  key={task.id}
-                  className="text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800/60 rounded-md px-2.5 py-1.5"
-                >
-                  <div className="truncate" title={task.description}>
-                    {task.description}
-                  </div>
-                  <div className="text-[9px] text-zinc-500 mt-0.5 uppercase tracking-wider">
-                    {task.priority ?? 'high'} priority
-                  </div>
-                </li>
-              ))}
+              {recent.map((decree) => {
+                const when = decree.occurredAt
+                  ? new Date(decree.occurredAt).toLocaleString()
+                  : '';
+                const body = decree.text ?? '(decree body unavailable)';
+                return (
+                  <li
+                    key={decree.id}
+                    className="text-[11px] text-zinc-300 bg-zinc-950/60 border border-zinc-800/60 rounded-md px-2.5 py-1.5"
+                  >
+                    <div className="truncate" title={body}>
+                      {body}
+                    </div>
+                    <div className="text-[9px] text-zinc-500 mt-0.5 uppercase tracking-wider">
+                      high priority{when ? ` · ${when}` : ''}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>

@@ -25,11 +25,22 @@
  * manager itself never throws in the proposal path — it returns `null` and
  * logs.
  */
+import fs from 'fs';
+import path from 'path';
 import type { TownManager } from './TownManager';
 import type { Town, Vec3 } from './Town';
 import type { StyleSeed } from './StyleDoc';
-import type { ApprovalManager } from './ApprovalManager';
+import type { ApprovalManager, HandlerDescriptor } from './ApprovalManager';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
+
+/**
+ * Phase 8-followup #57 — descriptor kind for expansion handlers. Persisted
+ * verbatim into approvals.handler_descriptor_json so the brain can replay
+ * the resolveOnce hookup on restart even when this in-process registry is
+ * empty.
+ */
+const EXPANSION_HANDLER_KIND = 'expansion';
 
 /** Distance from parent capital to child capital, in blocks. */
 const CHILD_OFFSET_BLOCKS = 256;
@@ -91,8 +102,24 @@ export class ExpansionManager {
   /** Phase 6-B — set by the brain after construction (avoids ctor cycles). */
   private approvalManager: ApprovalManager | null;
 
-  /** UTC yyyy-mm-dd → proposals issued that day. In-memory only for Phase 5. */
+  /**
+   * UTC yyyy-mm-dd → proposals issued that day. Followup #51 — also
+   * persisted to `data/towns/<parentTownId>/expansion.json` so a restart
+   * doesn't reset the daily cap and allow a second child-town proposal
+   * within the same day.
+   */
   private readonly dailyProposalCount: Map<string, number> = new Map();
+
+  /**
+   * Followup #51 — parent town id whose counter is persisted on disk.
+   * Lazily learned on first proposeExpansion call (the brain doesn't pass
+   * the townId at construction; ExpansionManager is per-town because each
+   * TownBrain owns one). null means we haven't seen any parent yet, so
+   * nothing's loaded from disk and writes are deferred.
+   */
+  private persistTownId: string | null = null;
+  /** True once we've attempted (success or failure) the on-disk load. */
+  private hydrated = false;
 
   /**
    * Tracks which parent towns have logged a `pending_approval` event for
@@ -119,9 +146,53 @@ export class ExpansionManager {
    * Phase 6-B — late-binding setter so the brain can wire the approval
    * manager after constructing both. ApprovalManager is owned by the brain;
    * passing it here preserves the existing constructor signature.
+   *
+   * Phase 8-followup #57 — also registers the 'expansion' rehydrator so the
+   * ApprovalManager's boot-time rehydrate() can re-attach the resolveOnce
+   * hook for any open expansion-approval row persisted before this process
+   * started. Registration is idempotent on ApprovalManager's side.
    */
   setApprovalManager(approvalManager: ApprovalManager | null): void {
     this.approvalManager = approvalManager;
+    if (approvalManager) {
+      approvalManager.registerKindHandler(EXPANSION_HANDLER_KIND, (approvalId, descriptor) =>
+        this.rehydrateHandler(approvalId, descriptor),
+      );
+    }
+  }
+
+  /**
+   * Phase 8-followup #57 — replay the resolveOnce + onSettled hooks for a
+   * persisted approval row. Called by ApprovalManager during rehydrate(): we
+   * reconstruct the same `executable` proposal the live proposeExpansion()
+   * path would have built and re-register the same callbacks. Failure-
+   * isolated: a bad descriptor logs and returns rather than throwing into
+   * the rehydrate loop.
+   */
+  async rehydrateHandler(approvalId: string, descriptor: HandlerDescriptor): Promise<void> {
+    if (!this.approvalManager) return;
+    const payload = descriptor.payload as ChildProposal | null | undefined;
+    if (!payload || typeof payload !== 'object' || typeof payload.parentTownId !== 'string') {
+      logger.warn(
+        { approvalId, kind: descriptor.kind, target: descriptor.target },
+        'ExpansionManager.rehydrateHandler: descriptor payload is not a ChildProposal; skipping',
+      );
+      return;
+    }
+    // Re-bind the per-parent tracker so a denied/expired row still clears
+    // pendingApprovalIds (same as the live path).
+    this.pendingApprovalIds.set(payload.parentTownId, approvalId);
+    const executable: ChildProposal = { ...payload, autoApprove: true };
+    await this.approvalManager.resolveOnce(approvalId, async () => {
+      this.executeProposal(executable);
+    });
+    await this.approvalManager.onSettled(approvalId, async () => {
+      this.pendingApprovalIds.delete(payload.parentTownId);
+    });
+    logger.info(
+      { approvalId, parentTownId: payload.parentTownId, childName: payload.childName },
+      'ExpansionManager.rehydrateHandler: re-registered expansion approval',
+    );
   }
 
   /**
@@ -138,6 +209,12 @@ export class ExpansionManager {
     if (parent.tier !== 'town') return null;
     if (parent.status !== 'active') return null;
     if (!parent.capital) return null;
+
+    // Followup #51 — hydrate counter from disk the first time we see this
+    // parent. The brain doesn't pass the townId at construction (D's lane,
+    // out of scope for this followup), so we late-bind it here once the
+    // first proposeExpansion call surfaces a parent town.
+    this.hydrateForTownIfNeeded(parent.id);
 
     const population = this.currentPopulation(parent.id);
     const target = parent.populationTarget ?? DEFAULT_EXPANSION_POPULATION_THRESHOLD;
@@ -185,24 +262,40 @@ export class ExpansionManager {
       // Phase 6-B — open an approval row + register the resolve hook so an
       // 'approved' decision actually founds the child. Skipped when no
       // approval manager has been wired (legacy Phase 5 tests).
+      //
+      // Phase 8-followup #57 — also persist a HandlerDescriptor on the row
+      // so a restart between create and approve can re-register the same
+      // resolveOnce hook via ExpansionManager.rehydrateHandler.
       if (this.approvalManager && !this.pendingApprovalIds.has(parent.id)) {
-        const approval = this.approvalManager.createApproval({
-          townId: parent.id,
-          kind: 'expansion',
+        const descriptor: HandlerDescriptor = {
+          kind: EXPANSION_HANDLER_KIND,
           payload: pendingProposal,
-        });
+          target: parent.id,
+        };
+        const approval = this.approvalManager.createApproval(
+          {
+            townId: parent.id,
+            kind: 'expansion',
+            payload: pendingProposal,
+          },
+          descriptor,
+        );
         if (approval) {
           this.pendingApprovalIds.set(parent.id, approval.id);
           // Force-promote autoApprove to true at execution time so
           // executeProposal doesn't reject the resolved payload as still
           // requiring approval — it has already been approved by the queue.
           const executable: ChildProposal = { ...pendingProposal, autoApprove: true };
-          void this.approvalManager.resolveOnce(approval.id, async () => {
-            // Always re-execute via the manager's own method so the
-            // event/chronicle/founded-events pipeline fires identically to
-            // the auto-approval path.
-            this.executeProposal(executable);
-          });
+          void this.approvalManager.resolveOnce(
+            approval.id,
+            async () => {
+              // Always re-execute via the manager's own method so the
+              // event/chronicle/founded-events pipeline fires identically to
+              // the auto-approval path.
+              this.executeProposal(executable);
+            },
+            descriptor,
+          );
           // Clear pendingApprovalIds on ANY terminal status so a
           // denied/expired row doesn't strand the parent until UTC
           // midnight. resolveOnce above only fires on 'approved'.
@@ -227,6 +320,9 @@ export class ExpansionManager {
     // Reserve the daily slot the moment we propose so a long-running tick
     // can't double-spawn.
     this.dailyProposalCount.set(dayKey, proposalsToday + 1);
+    // Followup #51 — persist immediately so a crash between propose and
+    // execute still has the slot recorded.
+    this.persistCounter();
 
     this.townManager.recordEvent({
       townId: parent.id,
@@ -342,6 +438,7 @@ export class ExpansionManager {
     this.dailyProposalCount.clear();
     this.pendingApprovalLogged.clear();
     this.pendingApprovalIds.clear();
+    this.persistCounter();
   }
 
   /** Snapshot for the dashboard / API debug surface. */
@@ -352,5 +449,87 @@ export class ExpansionManager {
       dailyCap: this.dailyProposalCap,
       dayKey,
     };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Followup #51 — daily proposal counter persistence
+  //
+  //  File layout: `data/towns/<parentTownId>/expansion.json`
+  //    {
+  //      "dailyProposalCount": { "2026-05-15": 1, "2026-05-14": 1 },
+  //      "updatedAt": 1747315200000
+  //    }
+  //
+  //  Failure-isolated: load/save errors log a warn and continue with
+  //  in-memory state — a wedged disk never breaks the expansion loop.
+  // ──────────────────────────────────────────────────────────────────────
+
+  /** Resolve the on-disk path for the counter file. Returns null when no town bound. */
+  private getPersistFile(): string | null {
+    if (!this.persistTownId) return null;
+    const dataDir = this.townManager.getDataDir?.() ?? path.join(process.cwd(), 'data');
+    return path.join(dataDir, 'towns', this.persistTownId, 'expansion.json');
+  }
+
+  /**
+   * Late-bind the parent town id and hydrate the in-memory counter from
+   * disk on the first proposeExpansion call. Subsequent calls are no-ops
+   * (the counter is already in sync). If the parent id changes mid-flight
+   * (shouldn't happen — ExpansionManager is per-town) we keep the first
+   * id we saw to avoid swapping persistence files.
+   */
+  private hydrateForTownIfNeeded(townId: string): void {
+    if (this.hydrated) return;
+    this.persistTownId = townId;
+    this.hydrated = true;
+    const file = this.getPersistFile();
+    if (!file) return;
+    try {
+      if (!fs.existsSync(file)) return;
+      const raw = fs.readFileSync(file, 'utf8');
+      const parsed = JSON.parse(raw) as { dailyProposalCount?: Record<string, number> };
+      const counts = parsed?.dailyProposalCount;
+      if (counts && typeof counts === 'object') {
+        for (const [day, n] of Object.entries(counts)) {
+          if (typeof n === 'number' && Number.isFinite(n) && n >= 0) {
+            this.dailyProposalCount.set(day, Math.floor(n));
+          }
+        }
+      }
+      logger.debug(
+        { townId, file, entries: this.dailyProposalCount.size },
+        'ExpansionManager: hydrated daily proposal counter from disk',
+      );
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg, townId, file },
+        'ExpansionManager: failed to hydrate daily counter; using in-memory state',
+      );
+    }
+  }
+
+  /**
+   * Atomically persist the counter to disk. No-op when no parent town has
+   * been bound yet (i.e. proposeExpansion has never been called). Failure
+   * logs a warn and continues — the in-memory state is still authoritative
+   * until the next successful write.
+   */
+  private persistCounter(): void {
+    const file = this.getPersistFile();
+    if (!file) return;
+    try {
+      const payload = {
+        dailyProposalCount: Object.fromEntries(this.dailyProposalCount.entries()),
+        updatedAt: Date.now(),
+      };
+      atomicWriteJsonSync(file, payload);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg, file },
+        'ExpansionManager: failed to persist daily counter (continuing in-memory)',
+      );
+    }
   }
 }

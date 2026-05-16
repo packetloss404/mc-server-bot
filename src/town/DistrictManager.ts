@@ -195,13 +195,66 @@ export class DistrictManager {
     if (toTier !== 'town') return null;
     if (fromTier === 'town') return null;
 
+    return this.seedSecondDistrictIfNeeded(townId);
+  }
+
+  /**
+   * Followup #50 — restart-safe back-fill. Today TownBrain.lastSeenTier
+   * initializes to the current tier on first tick after a restart, so a
+   * village → town transition that happened across the restart never
+   * fires `onTierUpgrade` and the town never gets its second district.
+   *
+   * This method is invoked from every `listDistricts` call (which the
+   * brain's districtLoop runs each tick) and back-fills the second
+   * district when:
+   *
+   *   - the town has reached `town` tier, AND
+   *   - it still has fewer than 2 districts, AND
+   *   - no existing non-default district is already present (idempotent —
+   *     we never re-add over an admin-created district).
+   *
+   * Safe to call on every tick: the underlying `seedSecondDistrictIfNeeded`
+   * short-circuits when the town already has the right shape. Errors are
+   * swallowed so a wedged DB or style.json write never breaks the brain
+   * tick — the actual listDistricts read still runs.
+   */
+  private maybeBackfillSecondDistrict(townId: string): void {
+    try {
+      const town = this.townManager.getTown(townId);
+      if (!town) return;
+      if (town.tier !== 'town') return;
+      this.seedSecondDistrictIfNeeded(townId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn(
+        { err: msg, townId },
+        'DistrictManager.maybeBackfillSecondDistrict: back-fill check threw (non-fatal)',
+      );
+    }
+  }
+
+  /**
+   * Shared back-fill core used by both `onTierUpgrade` (tier-transition
+   * path) and `maybeBackfillSecondDistrict` (per-tick restart-safe path).
+   * Returns the new district when one was created, null otherwise.
+   *
+   * Idempotency rules:
+   *   - if any non-default district already exists, do nothing
+   *     (an admin or earlier seeding already placed a second district);
+   *   - if there are 2+ districts of any kind, do nothing.
+   */
+  private seedSecondDistrictIfNeeded(townId: string): AddDistrictResult | null {
     const town = this.townManager.getTown(townId);
     if (!town) return null;
 
-    const existing = this.listDistricts(townId);
+    const existing = this.townManager.listDistricts(townId);
     // If the town already has 2+ districts, the second one has already
     // been seeded — nothing to do.
     if (existing.length >= 2) return null;
+    // If there's already a non-default district (length === 1 case),
+    // some other path (admin add, earlier seed) handled it — don't
+    // stomp it with our preset.
+    if (existing.some((d) => !d.isDefault)) return null;
 
     const currentPreset = (town.styleSeed ?? 'medieval-communal') as StyleSeed;
     const otherPreset: StyleSeed =
@@ -209,8 +262,8 @@ export class DistrictManager {
     const newDistrictName = otherPreset === 'mid-century-civic' ? 'Downtown' : 'Old Quarter';
 
     logger.info(
-      { townId, fromTier, toTier, otherPreset },
-      'DistrictManager.onTierUpgrade: seeding second district',
+      { townId, tier: town.tier, otherPreset },
+      'DistrictManager.seedSecondDistrictIfNeeded: seeding second district',
     );
 
     return this.addDistrict(townId, {
@@ -219,8 +272,15 @@ export class DistrictManager {
     });
   }
 
-  /** Thin pass-through to TownManager.listDistricts so callers can use just this manager. */
+  /**
+   * Thin pass-through to TownManager.listDistricts so callers can use just
+   * this manager. Followup #50 — also runs the restart-safe back-fill check
+   * so a missed `onTierUpgrade` (e.g. across a process restart) is healed
+   * the next time the brain reads the district list. The back-fill is
+   * idempotent and runs at most once per call.
+   */
   listDistricts(townId: string): District[] {
+    this.maybeBackfillSecondDistrict(townId);
     return this.townManager.listDistricts(townId);
   }
 

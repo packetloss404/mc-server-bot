@@ -66,3 +66,14 @@ skills:
 
 logging:
   level: "debug"
+
+# Followup #58 — player-identity session.
+#   devSecret: when set, POST /api/auth/login requires this string as
+#     the `secret` body field and accepts it for ANY playerName. The
+#     login mints a signed `pid` cookie that requireMayor validates
+#     against the town's mayor.playerName.
+#   Leave commented out (or set to null) for local-dev mode where any
+#     playerName logs in successfully. Per-player secrets are a future
+#     followup; today this is a single shared key.
+auth:
+  devSecret: null

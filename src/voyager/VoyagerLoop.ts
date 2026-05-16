@@ -652,7 +652,21 @@ export class VoyagerLoop {
     const goalTask = this.activeLongTermGoal ? longTermGoalToTask(this.activeLongTermGoal) : null;
     this.blackboardManager?.releaseStale();
     const botPos = this.bot.entity?.position ? { x: this.bot.entity.position.x, y: this.bot.entity.position.y, z: this.bot.entity.position.z } : undefined;
-    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos)) || null : null;
+    // Followup #40 — fetch the bot's town role (if any) so ScheduleManager's
+    // role-tagged tasks get the role-keyword boost in claimBestTask scoring.
+    // The BlackboardProxy round-trips to the main thread; WorkerHandle
+    // caches the result for 60s. Resolves to null for non-resident bots
+    // and behavior is identical to before.
+    let botRole: string | null = null;
+    try {
+      const bp = this.blackboardManager as unknown as { getBotRole?: (n: string) => Promise<string | null> } | null;
+      if (bp?.getBotRole) {
+        botRole = (await bp.getBotRole(this.botName)) ?? null;
+      }
+    } catch {
+      /* swallow — role boost is additive */
+    }
+    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos, botRole ?? undefined)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
     const task = goalOverrideTask

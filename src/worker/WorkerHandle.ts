@@ -58,6 +58,15 @@ export class WorkerHandle {
   private difficultyBalancer: DifficultyBalancer | null;
   private playerIntentModel: PlayerIntentModel | null;
   private onSwarmDirective: (description: string, requestedBy: string) => void;
+  /**
+   * Optional resolver for a bot's town role. Wired by BotManager from the
+   * TownManager. Returns the bot's currentRole or null when the bot isn't
+   * a town resident. WorkerHandle caches the lookup for 60s to keep the
+   * hot Voyager-claim path (~1 IPC per claim) cheap. Followup #40.
+   */
+  private resolveBotRole: ((botName: string) => string | null) | null = null;
+  private botRoleCache: { value: string | null; expiresAt: number } | null = null;
+  private static readonly ROLE_CACHE_TTL_MS = 60_000;
 
   constructor(
     data: WorkerBotData,
@@ -69,6 +78,7 @@ export class WorkerHandle {
     onSwarmDirective: (description: string, requestedBy: string) => void,
     difficultyBalancer: DifficultyBalancer | null = null,
     playerIntentModel: PlayerIntentModel | null = null,
+    resolveBotRole: ((botName: string) => string | null) | null = null,
   ) {
     this.botName = data.botName;
     this.personality = data.personality;
@@ -83,6 +93,7 @@ export class WorkerHandle {
     this.difficultyBalancer = difficultyBalancer;
     this.playerIntentModel = playerIntentModel;
     this.onSwarmDirective = onSwarmDirective;
+    this.resolveBotRole = resolveBotRole;
 
     // Provide a basic cached status while worker boots
     this.lastStatus = {
@@ -147,7 +158,8 @@ export class WorkerHandle {
     if (type === 'blackboard.setBotGoal') return this.blackboardManager.setBotGoal(args[0], args[1]);
     if (type === 'blackboard.clearBotGoal') return this.blackboardManager.clearBotGoal(args[0]);
     if (type === 'blackboard.addTask') return this.blackboardManager.addTask(args[0], args[1], args[2]);
-    if (type === 'blackboard.claimBestTask') return this.blackboardManager.claimBestTask(args[0], args[1], args[2], args[3]);
+    if (type === 'blackboard.claimBestTask') return this.blackboardManager.claimBestTask(args[0], args[1], args[2], args[3], args[4]);
+    if (type === 'blackboard.getBotRole') return this.getCachedBotRole(args[0]);
     if (type === 'blackboard.getState') return this.blackboardManager.getState();
     if (type === 'blackboard.getRecentMessages') return this.blackboardManager.getRecentMessages(args[0]);
     if (type === 'blackboard.getSwarmGoal') return this.blackboardManager.getSwarmGoal();
@@ -301,6 +313,38 @@ export class WorkerHandle {
         this.start();
       }
     }, delay);
+  }
+
+  /**
+   * Followup #40 — resolve the bot's town role with a 60s in-memory cache.
+   * Called from the worker's claimBestTask path, so this runs on every
+   * Voyager tick when a task is up for grabs. Without the cache that
+   * would be one TownManager DB query per claim — cheap individually but
+   * pointlessly noisy.
+   *
+   * Returns null when the resolver isn't wired or the bot isn't a town
+   * resident; callers (BlackboardManager.scoreTaskEnhanced) treat null
+   * as "no role boost" and behave exactly like before.
+   */
+  private getCachedBotRole(botName: string): string | null {
+    const target = botName ?? this.botName;
+    // Cache is keyed implicitly by `this.botName` — a WorkerHandle is per-bot.
+    // If a caller ever passes a different name, fall through to the resolver
+    // without caching to avoid surprising cross-bot results.
+    if (target === this.botName) {
+      const now = Date.now();
+      if (this.botRoleCache && this.botRoleCache.expiresAt > now) {
+        return this.botRoleCache.value;
+      }
+      let value: string | null = null;
+      if (this.resolveBotRole) {
+        try { value = this.resolveBotRole(target); } catch { value = null; }
+      }
+      this.botRoleCache = { value, expiresAt: now + WorkerHandle.ROLE_CACHE_TTL_MS };
+      return value;
+    }
+    if (!this.resolveBotRole) return null;
+    try { return this.resolveBotRole(target); } catch { return null; }
   }
 
   /** Send a command to the worker */

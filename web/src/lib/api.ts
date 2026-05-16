@@ -501,16 +501,35 @@ export interface LLMTraceEntry {
 export const api = {
   // ─── Auth ───
   getAuthStatus: () =>
-    fetchJSON<{ enabled: boolean; authenticated: boolean; pluginAuthEnabled: boolean }>(
-      '/api/auth/status',
-    ),
+    fetchJSON<{
+      enabled: boolean;
+      authenticated: boolean;
+      pluginAuthEnabled: boolean;
+      playerAuthEnforced?: boolean;
+      playerName?: string | null;
+    }>('/api/auth/status'),
   login: (secret: string) =>
-    fetchJSON<{ ok: boolean; enabled?: boolean }>('/api/auth/login', {
+    fetchJSON<{ ok: boolean; enabled?: boolean; playerName?: string | null }>('/api/auth/login', {
       method: 'POST',
       body: JSON.stringify({ secret }),
     }),
+  /**
+   * Followup #58 — player-identity login. Mints a signed `pid` cookie
+   * carrying the playerName so `requireMayor` can validate "is this the
+   * mayor of <town>?" without trusting a body field. When the backend's
+   * `auth.devSecret` is set the `secret` argument is required; when it
+   * isn't, the secret is ignored and any playerName succeeds (local dev).
+   */
+  loginAs: (playerName: string, secret?: string) =>
+    fetchJSON<{ ok: boolean; playerName?: string | null }>('/api/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ playerName, secret: secret ?? '' }),
+    }),
   logout: () =>
     fetchJSON<{ ok: boolean }>('/api/auth/logout', { method: 'POST' }),
+  /** Followup #58 — read the playerName bound to the current session. */
+  getCurrentUser: () =>
+    fetchJSON<{ playerName: string | null }>('/api/auth/me').catch(() => ({ playerName: null })),
 
   // Bots
   getBots: () => fetchJSON<{ bots: BotStatus[] }>('/api/bots'),
@@ -1164,6 +1183,18 @@ export const api = {
         body: JSON.stringify({ mayorPlayerName, text }),
       },
     ),
+  // Followup #59 — persisted mayor decree feed. Pulls rows from the events
+  // table where kind='mayor:decree' so MayorPanelCard can render history
+  // that survives a page reload. GET swallows errors so the panel renders
+  // an empty state when the backend hasn't booted yet.
+  listMayorDecrees: (id: string, limit?: number) => {
+    const q = new URLSearchParams();
+    if (limit !== undefined) q.set('limit', String(limit));
+    const qs = q.toString();
+    return fetchJSON<{ decrees: MayorDecreeEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/decrees${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ decrees: [] as MayorDecreeEventDTO[] }));
+  },
 
   // ─── Phase 6-B: approvals queue ────────────────────────────────────────
   //
@@ -1318,6 +1349,21 @@ export interface MayorDecreeTaskDTO {
   priority?: 'low' | 'normal' | 'high' | 'critical';
   createdAt?: number;
   status?: 'pending' | 'claimed' | 'completed' | 'blocked';
+}
+
+/**
+ * Followup #59 — persisted decree row returned by GET /api/towns/:id/decrees.
+ * Built server-side from events where kind='mayor:decree'. `text` is the raw
+ * decree body, `taskId` references the BlackboardTask the decree dispatched,
+ * `source` carries the upstream label ('mayor_directive' today).
+ */
+export interface MayorDecreeEventDTO {
+  id: string;
+  townId: string;
+  occurredAt: number;
+  text: string | null;
+  taskId: string | null;
+  source: string | null;
 }
 
 export interface TownDistrictDTO {

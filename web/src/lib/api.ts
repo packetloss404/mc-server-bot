@@ -1100,6 +1100,46 @@ export const api = {
       `/api/towns/${encodeURIComponent(id)}/journals${qs ? `?${qs}` : ''}`,
     ).catch(() => ({ journals: [] as BotJournalDTO[] }));
   },
+
+  // ─── Phase 5-A Disasters + Memorial Park ──────────────────────────────
+  //
+  // Disaster rows from the Phoenix self-healing loop + the Memorial Park
+  // monument markers. Both GETs swallow errors so the panel renders an
+  // empty state when the backend hasn't booted yet.
+  listTownDisasters: (id: string, params?: { limit?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    const qs = q.toString();
+    return fetchJSON<{ disasters: TownDisasterDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/disasters${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ disasters: [] as TownDisasterDTO[] }));
+  },
+  getMemorialPark: (id: string) =>
+    fetchJSON<{ bounds: MemorialParkBoundsDTO | null; markers: Marker[] }>(
+      `/api/towns/${encodeURIComponent(id)}/memorial`,
+    ).catch(() => ({ bounds: null, markers: [] as Marker[] })),
+
+  // ─── Phase 5-B: districts (style evolution) + child towns (self-expansion)
+  //
+  // listTownDistricts hits the existing /districts endpoint (it existed in
+  // Phase 1 but the client wasn't using it from a dedicated card). The two
+  // new endpoints — /children and /expand — ship in Phase 5-B. GETs swallow
+  // errors so the cards render an empty state until the backend boots.
+  // requestExpansion surfaces errors so the toast layer can show
+  // "Not eligible" reasons (tier shortfall, daily cap, pending approval).
+  listTownDistricts: (id: string) =>
+    fetchJSON<{ districts: TownDistrictDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/districts`,
+    ).catch(() => ({ districts: [] as TownDistrictDTO[] })),
+  listChildTowns: (id: string) =>
+    fetchJSON<{ children: ChildTownDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/children`,
+    ).catch(() => ({ children: [] as ChildTownDTO[] })),
+  requestExpansion: (id: string) =>
+    fetchJSON<ExpansionResponse>(
+      `/api/towns/${encodeURIComponent(id)}/expand`,
+      { method: 'POST' },
+    ),
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1128,6 +1168,9 @@ export interface TownDistrictDTO {
   name: string;
   stylePreset: 'medieval-communal' | 'mid-century-civic';
   isDefault: boolean;
+  /** Phase 5-B — when the district row was inserted. Optional for backwards
+   *  compat with older API payloads that omitted it. */
+  foundedAt?: number;
 }
 
 export interface TownBuildingDTO {
@@ -1180,6 +1223,62 @@ export interface BotJournalDTO {
   dayNumber: number | null;
   body: string;
   generatedAt: number | null;
+}
+
+// ─── Town disasters + Memorial Park (Phase 5-A) ────────────────────────────
+//
+// Mirrors `Disaster` in src/town/Town.ts and the Memorial Park bounds shape.
+// `kind` is open-ended so a future Phase 5 extension can add new disaster
+// kinds without a client-side schema bump.
+
+export interface TownDisasterDTO {
+  id: string;
+  townId: string;
+  /** 'raid' | 'lava' | 'lost_bot' | 'crash' | <future-kinds> */
+  kind: string;
+  severity: string | null;
+  occurredAt: number | null;
+  memorialMarkerId: string | null;
+  summary: string | null;
+}
+
+export interface MemorialParkBoundsDTO {
+  minX: number;
+  maxX: number;
+  minZ: number;
+  maxZ: number;
+  y: number;
+}
+
+// ─── Phase 5-B child towns + expansion proposals ──────────────────────────
+//
+// Children mirror TownDTO with one extra: the world-space distance from the
+// parent capital (rounded blocks). Expansion proposals are emitted by the
+// backend on /expand — `executed: true` means the child town was already
+// founded; `executed: false` means the proposal awaits approval (Phase 6).
+
+export interface ChildTownDTO extends TownDTO {
+  /** Rounded XZ-plane distance from the parent town's capital, in blocks. */
+  distanceFromParent: number | null;
+}
+
+export interface ExpansionProposalDTO {
+  parentTownId: string;
+  parentTownName: string;
+  childName: string;
+  childCapital: { x: number; y: number; z: number };
+  styleSeed: 'medieval-communal' | 'mid-century-civic';
+  direction: 'North' | 'East' | 'South' | 'West';
+  autoApprove: boolean;
+}
+
+export interface ExpansionResponse {
+  proposal: ExpansionProposalDTO;
+  executed: boolean;
+  /** Populated when executed === true (auto-approved first child). */
+  childTown?: TownDTO;
+  /** Populated when executed === false (pending approval, etc.). */
+  reason?: string;
 }
 
 // ─── Town roles (Phase 3) ─────────────────────────────────────────────────

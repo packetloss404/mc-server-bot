@@ -90,6 +90,25 @@ export interface TownEvent {
   highlightScore: number | null;
 }
 
+/**
+ * Disaster row — Phase 5-A "Phoenix" self-healing.
+ *
+ * `kind` follows the schema enum (`raid` | `lava` | `lost_bot` | `crash`) but
+ * is intentionally typed as a free string so Phase-5 extensions can add new
+ * kinds without a schema bump. `memorialMarkerId` links to MarkerStore.
+ */
+export interface Disaster {
+  id: string;
+  townId: string;
+  kind: string;
+  severity: EventSeverity | string | null;
+  occurredAt: number | null;
+  memorialMarkerId: string | null;
+  summary: string | null;
+  /** Caller's natural-key for cross-restart dedup. Null for legacy rows. */
+  dedupeKey: string | null;
+}
+
 export interface CreateTownInput {
   name: string;
   capital: Vec3;

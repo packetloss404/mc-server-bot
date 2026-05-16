@@ -116,6 +116,9 @@ export const disasters = sqliteTable('disasters', {
   // references markers.json — the park monument id
   memorialMarkerId: text('memorial_marker_id'),
   summary: text('summary'),
+  // Caller-supplied natural-key (e.g. `lost_bot:<residentId>`) — when set,
+  // insertDisaster returns the existing row instead of inserting a duplicate.
+  dedupeKey: text('dedupe_key'),
 });
 
 export const styleObservations = sqliteTable('style_observations', {

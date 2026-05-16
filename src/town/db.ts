@@ -110,7 +110,8 @@ const CREATE_STATEMENTS = [
     severity TEXT,
     occurred_at INTEGER,
     memorial_marker_id TEXT,
-    summary TEXT
+    summary TEXT,
+    dedupe_key TEXT
   )`,
   `CREATE TABLE IF NOT EXISTS style_observations (
     id TEXT PRIMARY KEY,
@@ -125,6 +126,26 @@ const CREATE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_events_town_highlight ON events(town_id, highlight_score DESC, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_buildings_town_status ON buildings(town_id, status)`,
   `CREATE INDEX IF NOT EXISTS idx_chronicle_town_day ON chronicle_entries(town_id, day_number DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_disasters_dedupe ON disasters(town_id, dedupe_key)`,
+];
+
+/**
+ * Migrations to apply on existing DBs that pre-date a schema change. Each entry
+ * runs every boot and must be idempotent — wrap in try/catch where the SQL
+ * itself isn't (sqlite ALTER TABLE doesn't support IF NOT EXISTS).
+ */
+const MIGRATIONS: Array<(sqlite: Database.Database) => void> = [
+  // Phase 5: dedupe_key on disasters so PhoenixManager.scanDeaths is
+  // idempotent across restarts (a known-bad death already in the table is
+  // surfaced as the existing row, not a fresh duplicate).
+  (sqlite) => {
+    try {
+      sqlite.exec(`ALTER TABLE disasters ADD COLUMN dedupe_key TEXT`);
+    } catch (err: any) {
+      // SQLite throws "duplicate column name" if it already exists — fine.
+      if (!/duplicate column/i.test(String(err?.message ?? ''))) throw err;
+    }
+  },
 ];
 
 export interface TownDbHandle {
@@ -151,6 +172,9 @@ export function openTownDb(dataDir: string = path.join(process.cwd(), 'data')): 
 
   for (const stmt of CREATE_STATEMENTS) {
     sqlite.exec(stmt);
+  }
+  for (const migrate of MIGRATIONS) {
+    migrate(sqlite);
   }
 
   const db = drizzle(sqlite, { schema });

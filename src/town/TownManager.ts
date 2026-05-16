@@ -14,6 +14,7 @@ import {
   Building,
   CreateResidentInput,
   CreateTownInput,
+  Disaster,
   District,
   Resident,
   Town,
@@ -293,6 +294,15 @@ export class TownManager {
     /** Phase 4 — optional library-fallback matcher for the LLM design pipeline. */
     schematicMatcher?: SchematicMatcher;
   } | null = null;
+  /**
+   * Phase 5-A — post-hoc deps for the Phoenix loop. Set by wirePhoenixDeps()
+   * once api.ts has built the ChronicleGenerator + MarkerStore. Late-created
+   * brains (createTown after wirePhoenixDeps) read these to wire themselves.
+   */
+  private phoenixDeps: {
+    chronicleGenerator: import('./ChronicleGenerator').ChronicleGenerator | null;
+    markerStore: import('../control/MarkerStore').MarkerStore | null;
+  } | null = null;
 
   constructor(opts: TownManagerOptions = {}) {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
@@ -377,6 +387,23 @@ export class TownManager {
       this.brainDeps.blackboard,
       { schematicMatcher: this.brainDeps.schematicMatcher },
     );
+    // Phase 5-A — back-fill the Phoenix deps if api.ts has already wired
+    // them. Towns founded BEFORE wirePhoenixDeps run get caught by that
+    // method's per-brain loop instead.
+    if (this.phoenixDeps) {
+      try {
+        const phoenix = brain.getPhoenixManager?.();
+        if (phoenix) {
+          phoenix.setChronicleGenerator(this.phoenixDeps.chronicleGenerator);
+          phoenix.setMarkerStore(this.phoenixDeps.markerStore);
+        }
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId },
+          'startBrain: failed to inject Phoenix deps (continuing)',
+        );
+      }
+    }
     this.townBrains.set(townId, brain);
     brain.start();
     return brain;
@@ -398,6 +425,41 @@ export class TownManager {
     if (!brain) return false;
     brain.resume();
     return true;
+  }
+
+  /**
+   * Phase 5-A — inject post-hoc deps the Phoenix loop needs but that don't
+   * exist until later in the API bootstrap (ChronicleGenerator is built after
+   * wireBrains, MarkerStore even later). Idempotent: calling again replaces
+   * the previous refs on every brain. Safe before any brain exists (no-op).
+   */
+  wirePhoenixDeps(deps: {
+    chronicleGenerator?: import('./ChronicleGenerator').ChronicleGenerator | null;
+    markerStore?: import('../control/MarkerStore').MarkerStore | null;
+  }): void {
+    for (const brain of this.townBrains.values()) {
+      try {
+        const phoenix = brain.getPhoenixManager?.();
+        if (!phoenix) continue;
+        if (deps.chronicleGenerator !== undefined) {
+          phoenix.setChronicleGenerator(deps.chronicleGenerator);
+        }
+        if (deps.markerStore !== undefined) {
+          phoenix.setMarkerStore(deps.markerStore);
+        }
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message },
+          'wirePhoenixDeps: failed to wire deps on a brain (continuing)',
+        );
+      }
+    }
+    // Stash on this so future-created brains pick up the same refs. createTown
+    // calls startBrain after wirePhoenixDeps so we propagate there too.
+    this.phoenixDeps = {
+      chronicleGenerator: deps.chronicleGenerator ?? this.phoenixDeps?.chronicleGenerator ?? null,
+      markerStore: deps.markerStore ?? this.phoenixDeps?.markerStore ?? null,
+    };
   }
 
   /**
@@ -658,6 +720,72 @@ export class TownManager {
     return rows.map(rowToDistrict);
   }
 
+  /**
+   * Phase 5-B — public district insertion. Used by DistrictManager when a
+   * town tier-ups or an admin manually adds a district. Caller supplies the
+   * style preset + a centerpoint; we derive a 64x64 default bounding box
+   * around the center the same way `defaultDistrictBounds` does for the
+   * founding district. `isDefault` defaults to false — only the founding
+   * "Old Town" carries the default flag.
+   *
+   * Returns null on DB failure so callers can decide whether to retry.
+   */
+  createDistrict(input: {
+    townId: string;
+    name: string;
+    stylePreset: string;
+    center: Vec3;
+    isDefault?: boolean;
+  }): District | null {
+    if (!this.getTown(input.townId)) return null;
+    const id = genId('dist');
+    const foundedAt = Date.now();
+    const bounds = defaultDistrictBounds(input.center);
+    try {
+      this.db
+        .insert(schema.districts)
+        .values({
+          id,
+          townId: input.townId,
+          name: input.name,
+          stylePreset: input.stylePreset,
+          boundsJson: JSON.stringify(bounds),
+          foundedAt,
+          isDefault: input.isDefault === true,
+        })
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: input.townId, name: input.name },
+        'createDistrict: insert failed',
+      );
+      return null;
+    }
+    return {
+      id,
+      townId: input.townId,
+      name: input.name,
+      stylePreset: input.stylePreset,
+      bounds,
+      foundedAt,
+      isDefault: input.isDefault === true,
+    };
+  }
+
+  /**
+   * Phase 5-B — list every town whose `parentTownId` equals the given
+   * townId. Used by ExpansionManager to enforce the "one child per tick"
+   * cap and by the dashboard to render the child-towns card.
+   */
+  getChildTowns(parentTownId: string): Town[] {
+    const rows = this.db
+      .select()
+      .from(schema.towns)
+      .where(eq(schema.towns.parentTownId, parentTownId))
+      .all();
+    return rows.map(rowToTown);
+  }
+
   // ──────────────────────────────────────────────────────────────────────
   //  Residents
   // ──────────────────────────────────────────────────────────────────────
@@ -810,6 +938,35 @@ export class TownManager {
       );
     }
     return rowToBuilding(row as unknown as BuildingRow);
+  }
+
+  /**
+   * Phase 5-B — attach a districtId to a building row. Used by the brain's
+   * district loop to back-fill the district once the planned row has been
+   * inserted. No-op when the row already has a districtId (idempotent).
+   */
+  setBuildingDistrict(buildingId: string, districtId: string): boolean {
+    try {
+      const row = this.db
+        .select()
+        .from(schema.buildings)
+        .where(eq(schema.buildings.id, buildingId))
+        .get();
+      if (!row) return false;
+      if (row.districtId === districtId) return true;
+      this.db
+        .update(schema.buildings)
+        .set({ districtId })
+        .where(eq(schema.buildings.id, buildingId))
+        .run();
+      return true;
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, buildingId, districtId },
+        'setBuildingDistrict: update failed',
+      );
+      return false;
+    }
   }
 
   /** Flip a planned/building row's status. Used when a build job resolves. */
@@ -1098,6 +1255,159 @@ export class TownManager {
       },
       highlightScore: 20,
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Disasters (Phase 5-A — Phoenix self-healing)
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Insert a `disasters` row. Failures fall through to the JSONL fallback so
+   * the Phoenix loop still surfaces every catastrophe even when the DB is
+   * wedged. Returns the canonical Disaster (with the generated id).
+   */
+  insertDisaster(input: {
+    townId: string;
+    kind: string;
+    severity?: string | null;
+    summary?: string | null;
+    memorialMarkerId?: string | null;
+    occurredAt?: number;
+    /**
+     * Optional natural-key for idempotency across restarts. When provided,
+     * if a disaster with the same (townId, dedupeKey) already exists, that
+     * row is returned unchanged instead of inserting a duplicate.
+     */
+    dedupeKey?: string | null;
+  }): Disaster {
+    // Idempotency check: if the caller supplied a dedupeKey, see if a row
+    // already exists for this town and short-circuit with it. This is the
+    // restart-safety story for PhoenixManager — re-scanning the same dead
+    // resident never produces a fresh disaster row + monument duplicate.
+    if (input.dedupeKey) {
+      try {
+        const existing = this.db
+          .select()
+          .from(schema.disasters)
+          .where(
+            and(
+              eq(schema.disasters.townId, input.townId),
+              eq(schema.disasters.dedupeKey, input.dedupeKey),
+            ),
+          )
+          .limit(1)
+          .all();
+        if (existing.length > 0) {
+          const r = existing[0];
+          return {
+            id: r.id,
+            townId: r.townId ?? input.townId,
+            kind: r.kind ?? input.kind,
+            severity: r.severity ?? null,
+            occurredAt: r.occurredAt ?? null,
+            memorialMarkerId: r.memorialMarkerId ?? null,
+            summary: r.summary ?? null,
+            dedupeKey: r.dedupeKey ?? null,
+          };
+        }
+      } catch (err: any) {
+        // Dedup lookup failure is non-fatal — fall through to insert.
+        logger.warn(
+          { err: err?.message, townId: input.townId, dedupeKey: input.dedupeKey },
+          'insertDisaster: dedupe lookup failed; proceeding with insert',
+        );
+      }
+    }
+    const id = genId('dst');
+    const occurredAt = input.occurredAt ?? Date.now();
+    const row = {
+      id,
+      townId: input.townId,
+      kind: input.kind,
+      severity: input.severity ?? null,
+      occurredAt,
+      memorialMarkerId: input.memorialMarkerId ?? null,
+      summary: input.summary ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+    };
+    try {
+      this.db.insert(schema.disasters).values(row).run();
+    } catch (err: any) {
+      this.appendFallbackRow('disasters', input.townId, row);
+      logger.warn(
+        { err: err?.message, townId: input.townId, kind: input.kind },
+        'insertDisaster: DB write failed; routed to fallback',
+      );
+    }
+    return {
+      id,
+      townId: input.townId,
+      kind: input.kind,
+      severity: input.severity ?? null,
+      occurredAt,
+      memorialMarkerId: input.memorialMarkerId ?? null,
+      summary: input.summary ?? null,
+      dedupeKey: input.dedupeKey ?? null,
+    };
+  }
+
+  /**
+   * Update the memorial marker reference on an existing disaster row. Called
+   * by the Phoenix loop once the Memorial Park places a monument — recording
+   * happens first (so the disaster is durable even if the park placement
+   * fails), then this back-fills the marker id.
+   */
+  updateDisasterMemorialMarker(disasterId: string, markerId: string | null): void {
+    try {
+      this.db
+        .update(schema.disasters)
+        .set({ memorialMarkerId: markerId })
+        .where(eq(schema.disasters.id, disasterId))
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, disasterId, markerId },
+        'updateDisasterMemorialMarker: update failed',
+      );
+    }
+  }
+
+  /**
+   * List disaster rows for a town, newest-first. `limit` defaults to 100 and
+   * is clamped to the same 1..1000 window the events table uses.
+   */
+  listDisasters(townId: string, opts: { limit?: number } = {}): Disaster[] {
+    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
+    const rows = this.db
+      .select()
+      .from(schema.disasters)
+      .where(eq(schema.disasters.townId, townId))
+      .orderBy(desc(schema.disasters.occurredAt))
+      .limit(limit)
+      .all();
+    return rows.map((r): Disaster => ({
+      id: r.id,
+      townId: r.townId ?? townId,
+      kind: r.kind ?? '',
+      severity: r.severity ?? null,
+      occurredAt: r.occurredAt ?? null,
+      memorialMarkerId: r.memorialMarkerId ?? null,
+      summary: r.summary ?? null,
+      dedupeKey: r.dedupeKey ?? null,
+    }));
+  }
+
+  /**
+   * Residents who entered the 'dead' status. Phase 5-A keeps this simple:
+   * status='dead' rows are filtered in-memory rather than via a timestamp
+   * column (the schema doesn't track diedAt). The Phoenix loop tracks
+   * already-handled ids in-memory so the `since` argument is advisory.
+   *
+   * Once the residents schema grows a diedAt column this should switch to a
+   * server-side filter — keep the signature stable so callers don't break.
+   */
+  getDeadResidentsSince(townId: string, _since: number): Resident[] {
+    return this.listResidents(townId).filter((r) => r.status === 'dead');
   }
 
   // ──────────────────────────────────────────────────────────────────────

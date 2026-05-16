@@ -14,6 +14,9 @@ import { RoleBreakdownCard } from '@/components/town/RoleBreakdownCard';
 import { ScheduleStripCard } from '@/components/town/ScheduleStripCard';
 import { RoleResidentList } from '@/components/town/RoleResidentList';
 import { ChronicleFeedCard } from '@/components/town/ChronicleFeedCard';
+import { MemorialPanelCard } from '@/components/town/MemorialPanelCard';
+import { DistrictsCard } from '@/components/town/DistrictsCard';
+import { ChildTownsCard } from '@/components/town/ChildTownsCard';
 
 /**
  * The API may return `paused` as optional (older builds) or omit it entirely
@@ -275,6 +278,15 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
 
       {/* Chronicle (Phase 4-B) — LLM-narrated daily story stream. */}
       <ChronicleFeedCard townId={town.id} />
+
+      {/* Memorial Park (Phase 5-A) — disasters + monument markers. */}
+      <MemorialPanelCard townId={town.id} />
+
+      {/* Districts + child towns (Phase 5-B) — style evolution & self-expansion. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <DistrictsCard townId={town.id} />
+        <ChildTownsCard townId={town.id} />
+      </div>
 
       {/* Two-column: events + quick actions */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

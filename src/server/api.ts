@@ -231,12 +231,41 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     logger.warn({ err: err?.message }, 'ChronicleScheduler.start failed');
   }
 
+  // ── Phase 5-A Phoenix wiring (chronicle leg) ──
+  // The Phoenix loop calls ChronicleGenerator.generateMilestone when a
+  // disaster is recorded. Inject it now; the MarkerStore leg is wired
+  // further down (once `markerStore` exists).
+  try {
+    botManager.getTownManager().wirePhoenixDeps({ chronicleGenerator });
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'wirePhoenixDeps(chronicle) failed');
+  }
+
   // Wire build dependencies into CommanderService now that they exist.
   commanderService.setBuildCoordinator(buildCoordinator);
   commanderService.setCampaignManager(campaignManager);
 
   // ── Control platform: wire managers in dependency order ──
   const markerStore = new MarkerStore(io);
+  // Phase 5-A — wire the marker store into Phoenix so Memorial Park can
+  // place monuments. The chronicle leg was injected up above; this
+  // completes the Phoenix dependency surface.
+  try {
+    botManager.getTownManager().wirePhoenixDeps({ markerStore });
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'wirePhoenixDeps(markers) failed');
+  }
+  // Phase 5-A — also let DisasterRecorder emit `town:disaster` socket events
+  // by handing it the io ref. We poke each brain's recorder directly since
+  // wirePhoenixDeps doesn't carry io (yet).
+  try {
+    for (const town of botManager.getTownManager().listTowns()) {
+      const brain = botManager.getTownManager().getTownBrain(town.id);
+      brain?.getPhoenixManager?.()?.getDisasterRecorder()?.setIo(io);
+    }
+  } catch (err: any) {
+    logger.warn({ err: err?.message }, 'Phoenix io wiring failed');
+  }
   const squadManager = new SquadManager(io);
   const roleManager = new RoleManager(io);
   const templateManager = new TemplateManager();
@@ -2663,6 +2692,48 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     }
   });
 
+  // ─── Phase 5-A Disasters + Memorial Park ──────────────────────────────
+  // GET /api/towns/:id/disasters?limit=N — list disaster rows newest-first.
+  // Defaults to limit=50 so a long-running town doesn't dump the whole
+  // history into one response.
+  app.get('/api/towns/:id/disasters', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const disasters = tm.listDisasters(townId, {
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+    });
+    res.json({ disasters });
+  });
+
+  // GET /api/towns/:id/memorial — the markers within the Memorial Park
+  // bounds for a town. The Memorial Park lives at capital + (+12/0/+12)
+  // with an 8x8 monument grid (see MemorialPark.ts).
+  app.get('/api/towns/:id/memorial', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    const phoenix = brain?.getPhoenixManager?.();
+    if (!phoenix) {
+      // Brain isn't wired yet — return an empty payload rather than 500 so
+      // the dashboard renders a "no monuments yet" empty state.
+      res.json({ bounds: null, markers: [] });
+      return;
+    }
+    const park = phoenix.getMemorialPark();
+    const bounds = park.getBounds(townId);
+    const markers = park.getMonumentsForTown(townId);
+    res.json({ bounds, markers });
+  });
+
   // Per-bot journals (Phase 4-B scaffolding only — per-resident LLM call is
   // a follow-up). Query: ?botName=... &limit=N. Returns rows newest-first.
   app.get('/api/towns/:id/journals', (req: Request, res: Response) => {
@@ -2800,6 +2871,135 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       phase,
       worldTimeTicks: ticks,
       roleSchedules: scheduleManager.getScheduleTable(),
+    });
+  });
+
+  // ─── Phase 5-B districts + child towns (self-expansion) ───────────────
+  //
+  // GET /districts already exists above (returns the raw rows). The POST
+  // here is the admin-override seam — drops a new district immediately
+  // without waiting for a tier-up. Used by the dashboard to test the
+  // medieval→mid-century arc on demand and to stamp custom districts.
+  app.post('/api/towns/:id/districts', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const { name, stylePreset, center } = (req.body ?? {}) as {
+      name?: string;
+      stylePreset?: 'medieval-communal' | 'mid-century-civic';
+      center?: { x: number; y: number; z: number };
+    };
+    if (!name || typeof name !== 'string') {
+      res.status(400).json({ error: 'name is required' });
+      return;
+    }
+    if (stylePreset !== 'medieval-communal' && stylePreset !== 'mid-century-civic') {
+      res.status(400).json({ error: 'stylePreset must be medieval-communal or mid-century-civic' });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    if (!brain) {
+      res.status(409).json({ error: 'Town brain not wired — try again once the town is active' });
+      return;
+    }
+    const result = brain.getDistrictManager().addDistrict(townId, {
+      name,
+      stylePreset,
+      center,
+    });
+    if (!result) {
+      res.status(500).json({ error: 'Failed to add district' });
+      return;
+    }
+    res.status(result.created ? 201 : 200).json({
+      district: result.district,
+      created: result.created,
+    });
+  });
+
+  // GET children — every town whose `parentTownId` is `:id`. Used by the
+  // dashboard's ChildTownsCard. We hand back the bare `Town` rows plus the
+  // distance from the parent capital so the UI doesn't have to recompute.
+  app.get('/api/towns/:id/children', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const parent = tm.getTown(String(req.params.id));
+    if (!parent) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const children = tm.getChildTowns(parent.id).map((child) => {
+      const residents = tm.listResidents(child.id);
+      const dto = townToDTO(child, residents, tm.isTownPaused(child.id));
+      let distance: number | null = null;
+      if (parent.capital && child.capital) {
+        const dx = child.capital.x - parent.capital.x;
+        const dz = child.capital.z - parent.capital.z;
+        distance = Math.round(Math.sqrt(dx * dx + dz * dz));
+      }
+      return { ...dto, distanceFromParent: distance };
+    });
+    res.json({ children });
+  });
+
+  // POST /expand — manual expansion trigger. Builds a proposal off the
+  // current parent town and (when auto-approved) immediately founds the
+  // child town. Returns the proposal + execution result so the dashboard
+  // can surface "Founded <name> 256 blocks <direction>."
+  app.post('/api/towns/:id/expand', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const parent = tm.getTown(String(req.params.id));
+    if (!parent) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(parent.id);
+    if (!brain) {
+      res.status(409).json({ error: 'Town brain not wired — try again once the town is active' });
+      return;
+    }
+    const expansionManager = brain.getExpansionManager();
+    const proposal = expansionManager.proposeExpansion(parent);
+    if (!proposal) {
+      res.status(409).json({
+        error:
+          'Expansion not eligible (tier < town, population under target, daily cap reached, or pending approval)',
+        status: expansionManager.getStatus(),
+      });
+      return;
+    }
+    if (!proposal.autoApprove) {
+      // Pending approval — Phase 6. Surface the proposal so the UI can
+      // render an "awaiting approval" banner.
+      res.status(202).json({ proposal, executed: false, reason: 'pending_approval' });
+      return;
+    }
+    const result = expansionManager.executeProposal(proposal);
+    if (!result.ok || !result.childTown) {
+      res.status(500).json({ error: result.reason ?? 'Failed to execute expansion' });
+      return;
+    }
+    io.emit('town:event', {
+      townId: parent.id,
+      kind: 'expansion:founded',
+      severity: 'major',
+      ts: Date.now(),
+      highlightScore: 90,
+      payload: {
+        childTownId: result.childTown.id,
+        childName: result.childTown.name,
+      },
+    });
+    res.status(201).json({
+      proposal,
+      executed: true,
+      childTown: townToDTO(
+        result.childTown,
+        tm.listResidents(result.childTown.id),
+        tm.isTownPaused(result.childTown.id),
+      ),
     });
   });
 

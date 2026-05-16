@@ -40,6 +40,9 @@ import {
 } from './LlmDesigner';
 import { DesignCache, buildStyleHashInput } from './DesignCache';
 import { StyleObserver } from './StyleObserver';
+import { DistrictManager } from './DistrictManager';
+import { ExpansionManager } from './ExpansionManager';
+import { PhoenixManager } from './PhoenixManager';
 import { logger } from '../util/logger';
 
 const TICK_INTERVAL_MS = 60_000;
@@ -114,6 +117,25 @@ export class TownBrain {
   /** Style-hashes whose cache hits we've already observed during this brain's
    *  lifetime; prevents re-observing on every tick. */
   private readonly observedCacheHashes: Set<string> = new Set();
+  /** Phase 5-B — district lifecycle owner (tier-up adds a second district). */
+  private readonly districtManager: DistrictManager;
+  /** Phase 5-B — child-town proposer (capped daily, first child auto-approved). */
+  private readonly expansionManager: ExpansionManager;
+  /**
+   * Phase 5-A — Phoenix self-healing loop owner. Tracks damaged/destroyed
+   * buildings and dead residents, queues repairs/rebuilds/replacements, and
+   * places Memorial Park monuments. Chronicle + MarkerStore deps are wired
+   * post-construction via `setChronicleGenerator()`/`setMarkerStore()` since
+   * those exist only after the brain is built.
+   */
+  private readonly phoenixManager: PhoenixManager;
+  /**
+   * Phase 5-B — tier snapshot from the previous tick. Lets the district loop
+   * detect village→town transitions without an explicit hook. Initialised
+   * lazily on the first tick so a freshly-constructed brain doesn't fire a
+   * spurious tier-upgrade on startup.
+   */
+  private lastSeenTier: string | null = null;
 
   constructor(
     townId: string,
@@ -145,6 +167,21 @@ export class TownBrain {
     const schematicsRoot = path.join(process.cwd(), 'schematics');
     this.designCache = new DesignCache(schematicsRoot);
     this.styleObserver = new StyleObserver(townManager, townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'));
+    // Phase 5-B — district + self-expansion managers. Both are stateless
+    // wrappers around TownManager; constructing them here keeps the tick
+    // loop's dependency wiring centralised.
+    this.districtManager = new DistrictManager(townManager);
+    this.expansionManager = new ExpansionManager(townManager);
+    // Phase 5-A — Phoenix self-healing. Chronicler + marker store are
+    // injected post-construction by TownManager.wirePhoenixDeps once the
+    // API layer builds them (api.ts ordering keeps the brain constructor
+    // small).
+    this.phoenixManager = new PhoenixManager(
+      townManager,
+      botManager,
+      buildCoordinator,
+      blackboard,
+    );
   }
 
   /** Exposed so TownManager (and the API) can call assignment outside the tick. */
@@ -155,6 +192,21 @@ export class TownBrain {
   /** Exposed so the API can read the schedule table for the dashboard. */
   getScheduleManager(): ScheduleManager {
     return this.scheduleManager;
+  }
+
+  /** Phase 5-B — exposed so the API can list districts + trigger admin overrides. */
+  getDistrictManager(): DistrictManager {
+    return this.districtManager;
+  }
+
+  /** Phase 5-B — exposed so the API can read expansion status + force proposals. */
+  getExpansionManager(): ExpansionManager {
+    return this.expansionManager;
+  }
+
+  /** Phase 5-A — exposed so the API/TownManager can wire post-hoc deps + read state. */
+  getPhoenixManager(): PhoenixManager {
+    return this.phoenixManager;
   }
 
   /** Begin periodic ticking. Idempotent — a second call is a no-op. */
@@ -243,6 +295,12 @@ export class TownBrain {
     await this.runLoopSafe('role', () => this.roleLoop(town));
     await this.runLoopSafe('schedule', () => this.scheduleLoop(town));
     await this.runLoopSafe('threat', () => this.threatLoop(town));
+    // P5-A inserts `phoenix` here (between threat and district). The
+    // canonical order is: demand → build → role → schedule → threat →
+    // phoenix → district → expansion.
+    await this.runLoopSafe('phoenix', () => this.phoenixLoop(town));
+    await this.runLoopSafe('district', () => this.districtLoop(town));
+    await this.runLoopSafe('expansion', () => this.expansionLoop(town));
   }
 
   private async runLoopSafe(name: string, fn: () => void | Promise<void>): Promise<void> {
@@ -775,5 +833,93 @@ export class TownBrain {
 
   private threatLoop(_town: Town): void {
     // Intentionally empty — Phase 5 wires this up to mob/player scans.
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 6 (Phase 5-A): phoenix — self-heal damaged/destroyed buildings,
+  //  record disasters when residents die, and stamp Memorial Park monuments.
+  //
+  //  The PhoenixManager owns the per-town in-memory ledgers + the
+  //  DisasterRecorder / MemorialPark sub-objects. queueRepairs() is fully
+  //  idempotent so repeated ticks never double-queue.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private async phoenixLoop(_town: Town): Promise<void> {
+    await this.phoenixManager.queueRepairs(this.townId);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 7 (Phase 5-B): district — manage style evolution as the town grows
+  //
+  //  Two responsibilities per tick:
+  //    1. Detect a tier transition (village → town) and let DistrictManager
+  //       seed the *opposite* style preset's district so the town evolves
+  //       from medieval village → mid-century downtown (or vice versa).
+  //    2. Back-fill `districtId` on any in-flight building rows so the
+  //       LLM design pipeline can scope its style.json lookup to a
+  //       district rather than the whole town. This is the integration
+  //       seam with P4-A's LlmDesigner.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private districtLoop(town: Town): void {
+    // 1) Tier-up hook. We compare the previous tick's snapshot to the
+    //    current tier. `onTierUpgrade` is idempotent (checks existing
+    //    district count) so a duplicate fire is harmless.
+    const currentTier = town.tier ?? 'founding';
+    const prev = this.lastSeenTier;
+    if (prev !== null && prev !== currentTier) {
+      try {
+        this.districtManager.onTierUpgrade(this.townId, prev as TownTier, currentTier);
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, townId: this.townId, prev, currentTier },
+          'TownBrain district: onTierUpgrade threw',
+        );
+      }
+    }
+    this.lastSeenTier = currentTier;
+
+    // 2) District-aware building back-fill. When the town has 2+ districts
+    //    we route in-flight (planned + building) rows that lack a
+    //    districtId into the active district for their kind. Buildings
+    //    already tagged stay untouched.
+    const districts = this.districtManager.listDistricts(this.townId);
+    if (districts.length < 2) return; // single-district towns don't need routing
+
+    const buildings = this.townManager.listBuildings(this.townId);
+    for (const b of buildings) {
+      if (b.districtId) continue;
+      if (b.status !== 'planned' && b.status !== 'building') continue;
+      const kind = this.kindFromName(b.name) ?? '';
+      const target = this.districtManager.getActiveDistrictFor(this.townId, kind);
+      if (!target) continue;
+      const ok = this.townManager.setBuildingDistrict(b.id, target.id);
+      if (ok) {
+        this.townManager.recordEvent({
+          townId: this.townId,
+          kind: 'district:building_routed',
+          severity: 'info',
+          payload: { buildingId: b.id, districtId: target.id, kind },
+          highlightScore: 15,
+        });
+      }
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 8 (Phase 5-B): expansion — propose + spawn child towns
+  //
+  //  Caps:
+  //    - 1 child per tick (proposeExpansion short-circuits past the cap).
+  //    - Daily proposal counter inside ExpansionManager (default 1/day).
+  //    - First child auto-approves; subsequent proposals require Phase 6
+  //      approval flow and only emit `expansion:pending_approval`.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private expansionLoop(town: Town): void {
+    const proposal = this.expansionManager.proposeExpansion(town);
+    if (!proposal) return;
+    if (!proposal.autoApprove) return; // pending_approval already emitted
+    this.expansionManager.executeProposal(proposal);
   }
 }

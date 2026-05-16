@@ -3038,6 +3038,161 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
   });
 
   // ───────────────────────────────────────────────────────────────────
+  //  Phase 7-B — allied-town trade routes
+  //
+  //  GET /api/towns/:id/trade-routes — list the in-flight allied-town
+  //  trade routes originating from this town. Backed by the brain's
+  //  TradeRouteManager (in-memory; restart resets). Returns an empty
+  //  list when the brain isn't wired or no routes are open.
+  // ───────────────────────────────────────────────────────────────────
+
+  app.get('/api/towns/:id/trade-routes', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(id);
+    if (!brain) {
+      res.json({ routes: [] });
+      return;
+    }
+    try {
+      const trader = brain.getTradeRouteManager();
+      res.json({ routes: trader.getOpenRoutes(id) });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: id },
+        'GET /api/towns/:id/trade-routes failed',
+      );
+      res.json({ routes: [] });
+    }
+  });
+
+  // ───────────────────────────────────────────────────────────────────
+  //  Phase 7-A — inter-town relationships (directed graph)
+  //
+  //  GET  /api/towns/:id/relationships
+  //       — outgoing edges from this town with state + trust + recent
+  //         events. Used by the dashboard's diplomacy view.
+  //  POST /api/towns/:id/relationships/:peerTownId
+  //       body: { state: 'allied'|'rival'|'neutral', mayorPlayerName, reason? }
+  //       — admin override. Mayor-gated via requireMayor. Bypasses the
+  //         sustain window and commits immediately.
+  //  GET  /api/town-relationships
+  //       — full directed graph for the network view (P7-B consumer).
+  //       NOTE: renamed from /api/relationships to avoid clashing with
+  //       the existing bot-affinity route at line ~886.
+  // ───────────────────────────────────────────────────────────────────
+
+  app.get('/api/towns/:id/relationships', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    try {
+      const diplomacy = tm.getDiplomacyManager();
+      // Project (townIdA, townIdB) edges into the dashboard DTO so the UI
+      // doesn't have to know which side is the source. peerTownName is
+      // resolved at projection time so a renamed town shows up correctly.
+      const projected = diplomacy.listOutgoing(id).map((edge) => {
+        const peerTownId = edge.townIdA === id ? edge.townIdB : edge.townIdA;
+        const peer = tm.getTown(peerTownId);
+        return {
+          peerTownId,
+          peerTownName: peer?.name ?? null,
+          state: edge.state,
+          trust: edge.trust,
+          lastInteractionAt: edge.lastInteractionAt,
+          events: edge.events ?? [],
+        };
+      });
+      res.json({ relationships: projected });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: id },
+        'GET /api/towns/:id/relationships failed',
+      );
+      res.json({ relationships: [] });
+    }
+  });
+
+  app.post('/api/towns/:id/relationships/:peerTownId', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    const peerId = String(req.params.peerTownId);
+    const town = tm.getTown(id);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    if (id === peerId) {
+      res.status(400).json({ error: 'A town cannot have a relationship with itself' });
+      return;
+    }
+    const peer = tm.getTown(peerId);
+    if (!peer) {
+      res.status(404).json({ error: 'Peer town not found' });
+      return;
+    }
+    if (!requireMayor(req, res, id)) return;
+    const body = (req.body ?? {}) as { state?: unknown; reason?: unknown };
+    const state = body.state;
+    if (state !== 'allied' && state !== 'rival' && state !== 'neutral') {
+      res
+        .status(400)
+        .json({ error: 'state must be "allied", "rival", or "neutral"' });
+      return;
+    }
+    const reason = typeof body.reason === 'string' ? body.reason : undefined;
+    try {
+      const diplomacy = tm.getDiplomacyManager();
+      const updated = diplomacy.setRelationship(id, peerId, state, { reason });
+      if (!updated) {
+        res.status(500).json({ error: 'Failed to update relationship' });
+        return;
+      }
+      io.emit('town:event', {
+        townId: id,
+        kind: 'diplomacy:state_changed',
+        severity: 'major',
+        ts: Date.now(),
+        highlightScore: 70,
+        payload: {
+          fromTownId: id,
+          toTownId: peerId,
+          newState: state,
+          source: 'admin',
+          reason: reason ?? null,
+        },
+      });
+      res.json({ relationship: updated });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: id, peerId },
+        'POST /api/towns/:id/relationships/:peerTownId failed',
+      );
+      res.status(500).json({ error: 'Failed to set relationship' });
+    }
+  });
+
+  app.get('/api/town-relationships', (_req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    try {
+      const diplomacy = tm.getDiplomacyManager();
+      res.json({ relationships: diplomacy.listAll() });
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'GET /api/town-relationships failed');
+      res.json({ relationships: [] });
+    }
+  });
+
+  // ───────────────────────────────────────────────────────────────────
   //  Phase 6-B — approvals queue (mayor-direct + resident vote)
   //
   //  - GET    /api/towns/:id/approvals?status=open|all  — list rows.

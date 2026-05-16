@@ -133,6 +133,19 @@ const CREATE_STATEMENTS = [
     mayor_decision TEXT,
     votes_json TEXT
   )`,
+  // Phase 7-A — inter-town directed relationship edges. One row per ordered
+  // (town_id_a, town_id_b) pair; supersedes the legacy towns.alliance_state
+  // column for diplomacy logic (the column itself stays for back-compat).
+  `CREATE TABLE IF NOT EXISTS relationships (
+    id TEXT PRIMARY KEY,
+    town_id_a TEXT REFERENCES towns(id),
+    town_id_b TEXT REFERENCES towns(id),
+    state TEXT NOT NULL,
+    trust INTEGER NOT NULL,
+    last_interaction_at INTEGER NOT NULL,
+    events_json TEXT,
+    UNIQUE (town_id_a, town_id_b)
+  )`,
   // Indexes (spec section 10)
   `CREATE INDEX IF NOT EXISTS idx_events_town_time ON events(town_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_events_town_highlight ON events(town_id, highlight_score DESC, occurred_at DESC)`,
@@ -140,6 +153,7 @@ const CREATE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS idx_chronicle_town_day ON chronicle_entries(town_id, day_number DESC)`,
   `CREATE INDEX IF NOT EXISTS idx_disasters_dedupe ON disasters(town_id, dedupe_key)`,
   `CREATE INDEX IF NOT EXISTS idx_approvals_town_status ON approvals(town_id, status)`,
+  `CREATE INDEX IF NOT EXISTS idx_relationships_a_state ON relationships(town_id_a, state)`,
 ];
 
 /**

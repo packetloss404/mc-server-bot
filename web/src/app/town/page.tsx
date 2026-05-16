@@ -19,6 +19,8 @@ import { DistrictsCard } from '@/components/town/DistrictsCard';
 import { ChildTownsCard } from '@/components/town/ChildTownsCard';
 import { MayorPanelCard } from '@/components/town/MayorPanelCard';
 import { ApprovalQueueCard } from '@/components/town/ApprovalQueueCard';
+import { RelationshipGraphCard } from '@/components/town/RelationshipGraphCard';
+import { TradeRoutesCard } from '@/components/town/TradeRoutesCard';
 
 /**
  * The API may return `paused` as optional (older builds) or omit it entirely
@@ -276,6 +278,12 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
 
       {/* Approvals (Phase 6-B) — pending gated actions (mayor decide / vote). */}
       <ApprovalQueueCard town={town} />
+
+      {/* Diplomacy (Phase 7) — inter-town relationship graph + allied trade routes. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <RelationshipGraphCard activeTownId={town.id} />
+        <TradeRoutesCard townId={town.id} />
+      </div>
 
       {/* Roles + schedule (Phase 3) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

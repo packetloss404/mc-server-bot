@@ -159,3 +159,31 @@ export const approvals = sqliteTable('approvals', {
   // { yes: string[], no: string[] } — bot-name lists keyed by choice
   votesJson: text('votes_json'),
 });
+
+/**
+ * Phase 7-A — inter-town relationships (directed edges).
+ *
+ * Supersedes the legacy `towns.alliance_state` column (which is a single
+ * global posture per town — kept in place for back-compat). One row per
+ * ordered `(town_id_a, town_id_b)` pair carries A's directed stance toward
+ * B: state ('allied' | 'rival' | 'neutral'), a 0..100 trust score, the last
+ * time something happened on the edge, and a serialised list of recent
+ * RelationshipEvents so the dashboard can render history without a separate
+ * events feed.
+ *
+ * DiplomacyManager owns mutation; the brain's diplomacyLoop reads peers via
+ * TownManager.listTowns() and feeds in interactions.
+ */
+export const relationships = sqliteTable('relationships', {
+  id: text('id').primaryKey(),
+  // Directed edge — A's stance toward B.
+  townIdA: text('town_id_a').references(() => towns.id),
+  townIdB: text('town_id_b').references(() => towns.id),
+  // 'allied' | 'rival' | 'neutral'
+  state: text('state').notNull(),
+  trust: integer('trust').notNull(),
+  lastInteractionAt: integer('last_interaction_at').notNull(),
+  // JSON: Array<{ kind: string; at: number; payload?: unknown }>
+  // Kept compact — DiplomacyManager caps the list length.
+  eventsJson: text('events_json'),
+});

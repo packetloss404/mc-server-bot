@@ -24,7 +24,7 @@ import type { BotManager } from '../bot/BotManager';
 import type { BuildCoordinator } from '../build/BuildCoordinator';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
 import type { SchematicMatcher } from '../build/SchematicMatcher';
-import type { Building, Town } from './Town';
+import type { Building, Town, TownEvent } from './Town';
 import type { PlanItem, TownTier } from './PlanItem';
 import type { StyleDoc } from './StyleDoc';
 import { loadStyle } from './StyleDoc';
@@ -46,7 +46,33 @@ import { PhoenixManager } from './PhoenixManager';
 import { ApprovalManager } from './ApprovalManager';
 import { GreetingDispatcher } from './GreetingDispatcher';
 import type { MayorService } from './MayorService';
+import { TradeRouteManager } from './TradeRouteManager';
+import type { DiplomacyManager } from './DiplomacyManager';
+import type { InteractionKind } from './Relationship';
 import { logger } from '../util/logger';
+
+/**
+ * Phase 7-B — emit a `rival:patrol` signal every N brain ticks for guards in
+ * rivalry-bound towns. Phase 7 just emits the signal; actual guard-behavior
+ * change is out of scope.
+ */
+const RIVAL_PATROL_TICK_INTERVAL = 5;
+
+/**
+ * Phase 7-A — diplomacy loop knobs.
+ *
+ *  - DIPLOMACY_PEER_RADIUS_BLOCKS: only consider peers whose capital lies
+ *    within this horizontal distance of the local town's capital. Keeps the
+ *    cross-town scan bounded for large worlds.
+ *  - DIPLOMACY_BORDER_DISTANCE_BLOCKS: an expansion is a `border_violation`
+ *    when the new child capital is within this many blocks of an existing
+ *    peer's capital. Tightens the noisy-neighbor heuristic.
+ *  - DIPLOMACY_TRIGGER_COOLDOWN_MS: per-(townIdPair, kind) cooldown so the
+ *    diplomacyLoop doesn't re-record the same interaction every tick.
+ */
+const DIPLOMACY_PEER_RADIUS_BLOCKS = 256;
+const DIPLOMACY_BORDER_DISTANCE_BLOCKS = 100;
+const DIPLOMACY_TRIGGER_COOLDOWN_MS = 10 * 60 * 1000;
 
 const TICK_INTERVAL_MS = 60_000;
 
@@ -147,6 +173,33 @@ export class TownBrain {
    */
   private readonly approvalManager: ApprovalManager;
   /**
+   * Phase 7-B — allied-town surplus/shortage matcher. Emits swarm-priority
+   * blackboard tasks for cross-town deliveries when two towns are `allied`
+   * per the diplomacy graph. In-memory only for Phase 7 (no DB persistence).
+   */
+  private readonly tradeRouteManager: TradeRouteManager;
+  /**
+   * Phase 7-A — directed-edge diplomacy graph. Shared with every other
+   * brain via TownManager.getDiplomacyManager() so sustain counters and the
+   * relationship table live in exactly one place.
+   */
+  private readonly diplomacyManager: DiplomacyManager;
+  /**
+   * Phase 7-A — per-(townIdPair, kind) cooldown ledger so the diplomacy
+   * loop doesn't re-record the same trigger every 60s. Keyed by
+   * `${initiatorId}|${peerId}|${kind}`; value is the next eligible epoch ms.
+   * In-memory only — restart conservatively resets every cooldown.
+   */
+  private readonly diplomacyCooldowns: Map<string, number> = new Map();
+  /**
+   * Phase 7-A — high-water mark for the cross-town event scan. The diplomacy
+   * loop walks recent town events (expansion/disaster/decree) to look for
+   * triggers; we track the newest already-processed `occurredAt` so a tick
+   * never re-scans the same event window. Initialised at construction time
+   * (a brain's first tick only sees events from after boot).
+   */
+  private diplomacyEventCursor: number = Date.now();
+  /**
    * Phase 5-B — tier snapshot from the previous tick. Lets the district loop
    * detect village→town transitions without an explicit hook. Initialised
    * lazily on the first tick so a freshly-constructed brain doesn't fire a
@@ -208,6 +261,13 @@ export class TownBrain {
     // replay-on-approve hook.
     this.approvalManager = new ApprovalManager(townManager);
     this.expansionManager.setApprovalManager(this.approvalManager);
+    // Phase 7-B — allied-town trade route manager. Reads the diplomacy graph
+    // (P7-A) at tick time; degrades to a no-op when the diplomacy manager
+    // isn't wired yet.
+    this.tradeRouteManager = new TradeRouteManager(townManager, botManager, blackboard);
+    // Phase 7-A — share the TownManager-owned DiplomacyManager singleton so
+    // the sustain-counter map is consistent across the brain and the API.
+    this.diplomacyManager = townManager.getDiplomacyManager();
   }
 
   /** Exposed so TownManager (and the API) can call assignment outside the tick. */
@@ -238,6 +298,11 @@ export class TownBrain {
   /** Phase 6-B — exposed so the API can list / decide / cast votes on approvals. */
   getApprovalManager(): ApprovalManager {
     return this.approvalManager;
+  }
+
+  /** Phase 7-B — exposed so the API can list this town's open allied trade routes. */
+  getTradeRouteManager(): TradeRouteManager {
+    return this.tradeRouteManager;
   }
 
   /** Begin periodic ticking. Idempotent — a second call is a no-op. */
@@ -336,6 +401,17 @@ export class TownBrain {
     // opened by this tick's expansionLoop participate immediately (heuristic
     // votes get cast on the same tick instead of waiting 60s).
     await this.runLoopSafe('approval', () => this.approvalLoop(town));
+    // Phase 7-A — diplomacyLoop sits AFTER approval (so any newly-founded
+    // child towns from this tick's expansion path are visible to the peer
+    // scan) and BEFORE trade/rival/greeting so those loops see the latest
+    // diplomatic state in the same tick.
+    await this.runLoopSafe('diplomacy', () => this.diplomacyLoop(town));
+    // Phase 7-B — tradeLoop + rivalLoop sit AFTER any diplomacyLoop P7-A
+    // adds and BEFORE the greetingLoop so the trade tasks the brain queues
+    // are already on the blackboard by the time bots are greeted/dispatched.
+    // Both loops degrade to no-ops when the diplomacy graph is missing.
+    await this.runLoopSafe('trade', () => this.tradeLoop(town));
+    await this.runLoopSafe('rival', () => this.rivalLoop(town));
     // Phase 6-A — greetingLoop sits last in the chain so any state the
     // earlier loops mutate (e.g. residents) is already settled when the
     // dispatcher walks the resident list.
@@ -1018,7 +1094,186 @@ export class TownBrain {
   }
 
   // ──────────────────────────────────────────────────────────────────────
-  //  Loop 10 (Phase 6-A): greeting — say hi to the mayor when in range
+  //  Loop 10 (Phase 7-A): diplomacy — scan cross-town events + auto-transition
+  //
+  //  Two responsibilities:
+  //    1. Walk peer towns within DIPLOMACY_PEER_RADIUS_BLOCKS. For each
+  //       peer, scan recent events on BOTH sides since the last cursor and
+  //       fire the Phase-7 trigger checks:
+  //         - expansion:founded landing within DIPLOMACY_BORDER_DISTANCE_BLOCKS
+  //           of a peer capital → border_violation (this town hostile).
+  //         - disaster (kind 'lost_bot') near a peer's bots → suspicion.
+  //         - mayor:decree text that mentions a peer's name → peace_overture.
+  //    2. After triggers settle, call diplomacyManager.applyAutoTransitions
+  //       for this town's outgoing edges so the sustain counter advances.
+  //
+  //  Idempotency: every recordInteraction is gated by a per-(pair, kind)
+  //  cooldown of DIPLOMACY_TRIGGER_COOLDOWN_MS (~10 minutes) so duplicate
+  //  events in the same window don't re-fire the same delta. Cursor avoids
+  //  re-scanning events between ticks.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private diplomacyLoop(town: Town): void {
+    if (!town.capital) return;
+    const peers = this.findDiplomacyPeers(town);
+    if (peers.length === 0) {
+      // Still advance auto-transitions so an admin override can settle even
+      // when no peers are nearby.
+      this.diplomacyManager.applyAutoTransitions(town.id);
+      this.diplomacyEventCursor = Date.now();
+      return;
+    }
+
+    // 1) Trigger checks — gather recent local + peer events ONCE per tick,
+    //    then dispatch per peer. The event window is `(cursor .. now]`.
+    const since = this.diplomacyEventCursor;
+    const now = Date.now();
+    const localEvents = this.townManager.listEvents(town.id, { limit: 200, since });
+
+    for (const peer of peers) {
+      this.runDiplomacyTriggers(town, peer, localEvents);
+    }
+
+    // 2) Auto-transitions for every outgoing edge owned by this town.
+    this.diplomacyManager.applyAutoTransitions(town.id);
+
+    // Advance the cursor at the very end so a thrown trigger doesn't skip
+    // the same event window on the next tick.
+    this.diplomacyEventCursor = now;
+  }
+
+  /**
+   * Find every other active town whose capital lies within
+   * DIPLOMACY_PEER_RADIUS_BLOCKS of `self.capital`. Excludes `self`,
+   * abandoned/dormant towns, and towns with a null capital.
+   */
+  private findDiplomacyPeers(self: Town): Town[] {
+    if (!self.capital) return [];
+    const peers: Town[] = [];
+    for (const candidate of this.townManager.listTowns()) {
+      if (candidate.id === self.id) continue;
+      if (candidate.status !== 'active') continue;
+      if (!candidate.capital) continue;
+      const dx = candidate.capital.x - self.capital.x;
+      const dz = candidate.capital.z - self.capital.z;
+      const distance = Math.sqrt(dx * dx + dz * dz);
+      if (distance <= DIPLOMACY_PEER_RADIUS_BLOCKS) {
+        peers.push(candidate);
+      }
+    }
+    return peers;
+  }
+
+  /** Apply each Phase-7 trigger to (this town, peer) using recent local events. */
+  private runDiplomacyTriggers(
+    town: Town,
+    peer: Town,
+    localEvents: TownEvent[],
+  ): void {
+    if (!peer.capital) return;
+    for (const ev of localEvents) {
+      switch (ev.kind) {
+        case 'expansion:founded': {
+          // Payload shape: { childTownId, childName, childCapital, ... }.
+          // Re-resolve the child town for its real capital so we don't trust
+          // the embedded payload blindly (the child may have moved since).
+          const payload = (ev.payload ?? {}) as {
+            childCapital?: { x: number; y: number; z: number };
+            childTownId?: string;
+          };
+          const childCapital = payload.childCapital ?? null;
+          if (!childCapital) break;
+          const dx = childCapital.x - peer.capital.x;
+          const dz = childCapital.z - peer.capital.z;
+          const distance = Math.sqrt(dx * dx + dz * dz);
+          if (distance <= DIPLOMACY_BORDER_DISTANCE_BLOCKS) {
+            this.fireDiplomacyTrigger(town.id, peer.id, 'border_violation', {
+              eventId: ev.id,
+              childTownId: payload.childTownId ?? null,
+              distance: Math.round(distance),
+              radius: DIPLOMACY_BORDER_DISTANCE_BLOCKS,
+            });
+          }
+          break;
+        }
+        case 'disaster': {
+          // Phoenix records `kind: 'disaster'` events with payload.kind
+          // = 'lost_bot' etc. Suspicion fires when a lost_bot disaster
+          // happens near a peer's footprint — Phase 7 keeps it simple and
+          // uses the peer's capital as the proxy for 'near a peer's bots'.
+          const payload = (ev.payload ?? {}) as { kind?: string };
+          if (payload.kind !== 'lost_bot') break;
+          // Use the radius check from findDiplomacyPeers — we already know
+          // the peer is within DIPLOMACY_PEER_RADIUS_BLOCKS, so a lost_bot
+          // anywhere in this town counts as 'near'.
+          this.fireDiplomacyTrigger(town.id, peer.id, 'suspicion', {
+            eventId: ev.id,
+            disasterKind: payload.kind,
+          });
+          break;
+        }
+        case 'mayor:decree': {
+          // Payload shape: { taskId, text, source: 'mayor_directive' }.
+          const payload = (ev.payload ?? {}) as { text?: string };
+          const text = typeof payload.text === 'string' ? payload.text : '';
+          if (!text) break;
+          if (this.decreeMentionsTown(text, peer.name)) {
+            this.fireDiplomacyTrigger(town.id, peer.id, 'peace_overture', {
+              eventId: ev.id,
+              snippet: text.slice(0, 120),
+            });
+          }
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  /**
+   * Word-boundary case-insensitive substring check so 'Allied with Riverwood'
+   * matches peer name 'Riverwood' but 'Riverwood-East' (a child town) does
+   * not. The regex escape keeps mayor decrees with regex metacharacters in
+   * a peer name from blowing up the brain.
+   */
+  private decreeMentionsTown(text: string, townName: string): boolean {
+    if (!townName) return false;
+    const escaped = townName.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const re = new RegExp(`\\b${escaped}\\b`, 'i');
+    return re.test(text);
+  }
+
+  /**
+   * Apply the (townIdPair, kind) cooldown gate and forward to
+   * DiplomacyManager.recordInteraction. Returns true when the interaction
+   * actually fired this tick (cooldown miss → false).
+   */
+  private fireDiplomacyTrigger(
+    fromTownId: string,
+    toTownId: string,
+    kind: InteractionKind,
+    payload?: unknown,
+  ): boolean {
+    const key = `${fromTownId}|${toTownId}|${kind}`;
+    const now = Date.now();
+    const nextEligible = this.diplomacyCooldowns.get(key) ?? 0;
+    if (now < nextEligible) return false;
+    this.diplomacyCooldowns.set(key, now + DIPLOMACY_TRIGGER_COOLDOWN_MS);
+    try {
+      this.diplomacyManager.recordInteraction(fromTownId, toTownId, kind, payload);
+      return true;
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, fromTownId, toTownId, kind },
+        'TownBrain diplomacy: recordInteraction threw',
+      );
+      return false;
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 11 (Phase 6-A): greeting — say hi to the mayor when in range
   //
   //  The dispatcher reads each resident's WorkerHandle, asks it for the
   //  live player list, and queues a chat IPC when a player is within 16
@@ -1028,5 +1283,100 @@ export class TownBrain {
 
   private async greetingLoop(town: Town): Promise<void> {
     await this.greetingDispatcher.tick(town.id);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 11 (Phase 7-B): trade — allied-town surplus/shortage routes
+  //
+  //  Pulls the diplomacy graph from TownManager (P7-A); for every allied
+  //  peer with a shortage of a resource this town has surplus of, queue a
+  //  swarm-priority blackboard delivery task. The TradeRouteManager owns
+  //  the per-(source, target, resource) cooldown so a route doesn't get
+  //  re-queued on every tick.
+  //
+  //  The actual delivery is left to the existing Voyager loop +
+  //  supply-chain infrastructure. Phase 7 is purely the trigger layer.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private tradeLoop(town: Town): void {
+    this.tradeRouteManager.tick(town.id);
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Loop 12 (Phase 7-B): rival — periodic patrol-ramp signal
+  //
+  //  Every RIVAL_PATROL_TICK_INTERVAL ticks (~5 minutes at 60s cadence)
+  //  walk the diplomacy graph and emit a `rival:patrol` event for each
+  //  rival peer. Phase 7 just emits the signal; actual guard-behavior
+  //  changes are out of scope.
+  //
+  //  The signal carries the rival town id + name so a Phase 8 guard
+  //  policy can scope its patrol up-tempo to that border. The cooldown
+  //  lives on the brain's tickCount so a manual runTick() in tests still
+  //  honors the 5-tick spacing.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private rivalLoop(town: Town): void {
+    if (this.tickCount % RIVAL_PATROL_TICK_INTERVAL !== 0) return;
+    const tm = this.townManager as unknown as {
+      getDiplomacyManager?: () => {
+        listOutgoing?: (
+          townId: string,
+        ) => Array<{ townIdA?: string; townIdB?: string; peerTownId?: string; state: string }>;
+      } | null;
+    };
+    if (typeof tm.getDiplomacyManager !== 'function') return;
+    let dm: ReturnType<NonNullable<typeof tm.getDiplomacyManager>> | null = null;
+    try {
+      dm = tm.getDiplomacyManager() ?? null;
+    } catch {
+      return;
+    }
+    if (!dm || typeof dm.listOutgoing !== 'function') return;
+    let edges: Array<{ townIdA?: string; townIdB?: string; peerTownId?: string; state: string }> = [];
+    try {
+      edges = dm.listOutgoing(town.id) ?? [];
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: town.id },
+        'TownBrain rival: listOutgoing threw',
+      );
+      return;
+    }
+    const rivals = edges.filter((e) => e?.state === 'rival');
+    if (rivals.length === 0) return;
+    for (const edge of rivals) {
+      // P7-A's Relationship shape uses (townIdA, townIdB). Derive the peer
+      // as whichever side isn't this town.
+      const peerTownId =
+        edge.peerTownId ??
+        (edge.townIdA === town.id ? edge.townIdB : edge.townIdA);
+      if (!peerTownId) continue;
+      const peer = this.townManager.getTown(peerTownId);
+      if (!peer) continue;
+      this.townManager.recordEvent({
+        townId: town.id,
+        kind: 'rival:patrol',
+        severity: 'minor',
+        payload: {
+          rivalTownId: peer.id,
+          rivalTownName: peer.name,
+          // Best-effort hint at the border bearing — guards may consume this
+          // later. Null when either capital is missing (legacy rows).
+          bearing:
+            town.capital && peer.capital
+              ? {
+                  dx: peer.capital.x - town.capital.x,
+                  dz: peer.capital.z - town.capital.z,
+                }
+              : null,
+        },
+        highlightScore: 20,
+      });
+      logger.info(
+        { townId: town.id, rivalTownId: peer.id },
+        'TownBrain rival: emitted rival:patrol signal',
+      );
+    }
   }
 }

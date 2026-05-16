@@ -18,7 +18,8 @@ export type FallbackKind =
   | 'journals'
   | 'disasters'
   | 'style_observations'
-  | 'approvals';
+  | 'approvals'
+  | 'relationships';
 
 export interface FallbackEntry {
   kind: FallbackKind;

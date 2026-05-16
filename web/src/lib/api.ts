@@ -1197,6 +1197,39 @@ export const api = {
       `/api/towns/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/decide`,
       { method: 'POST', body: JSON.stringify({ choice, mayorPlayerName }) },
     ),
+
+  // ─── Phase 7 — diplomacy + trade routes ───────────────────────────────
+  //
+  // P7-A owns the relationships endpoints; P7-B owns the trade-routes one.
+  // GETs swallow errors so the cards render an empty state until both
+  // backend pieces ship. setRelationship surfaces errors so the toast
+  // layer can show "not mayor" / "town not found" reasons.
+  listTownRelationships: (id: string) =>
+    fetchJSON<{ relationships: TownRelationshipEdgeDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/relationships`,
+    ).catch(() => ({ relationships: [] as TownRelationshipEdgeDTO[] })),
+  setRelationship: (
+    id: string,
+    peerTownId: string,
+    state: 'allied' | 'rival' | 'neutral',
+    mayorPlayerName: string,
+    reason?: string,
+  ) =>
+    fetchJSON<{ relationship: TownRelationshipEdgeDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/relationships/${encodeURIComponent(peerTownId)}`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ state, mayorPlayerName, reason }),
+      },
+    ),
+  getRelationshipGraph: () =>
+    fetchJSON<{ edges: TownRelationshipGraphEdgeDTO[] }>('/api/town-relationships').catch(
+      () => ({ edges: [] as TownRelationshipGraphEdgeDTO[] }),
+    ),
+  listTradeRoutes: (id: string) =>
+    fetchJSON<{ routes: TradeRouteDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/trade-routes`,
+    ).catch(() => ({ routes: [] as TradeRouteDTO[] })),
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1444,4 +1477,60 @@ export interface DifficultyResponse {
   botChatFrequency: number;
   combatAggressiveness: number;
   helpfulness: number;
+}
+
+// ─── Phase 7 — diplomacy + trade routes ───────────────────────────────────
+//
+// P7-A's contract for the directed relationship edge as returned by
+// /api/towns/:id/relationships. Optional fields (`peerTownName`, `events`)
+// reflect the GET shape; the POST body shape is tighter (state +
+// mayorPlayerName).
+//
+// `events` is the trailing handful of recent diplomacy interactions on the
+// edge — kind + at + payload — used by the graph card's hover tooltip.
+
+export interface TownRelationshipEventDTO {
+  kind: string;
+  at: number;
+  payload?: unknown;
+}
+
+export interface TownRelationshipEdgeDTO {
+  peerTownId: string;
+  peerTownName?: string | null;
+  state: 'allied' | 'rival' | 'neutral';
+  trust: number;
+  lastInteractionAt: number;
+  events?: TownRelationshipEventDTO[];
+}
+
+/**
+ * Undirected (or A→B canonical) edge as returned by the global graph
+ * endpoint. State carries the worse-of-the-two posture so the graph
+ * paints a single colour per pair.
+ */
+export interface TownRelationshipGraphEdgeDTO {
+  townIdA: string;
+  townIdB: string;
+  state: 'allied' | 'rival' | 'neutral';
+  trust: number;
+  lastInteractionAt: number;
+}
+
+/**
+ * In-flight allied-town trade route. Mirrors the TradeRoute interface in
+ * src/town/TradeRouteManager.ts. `taskId` is null when the blackboard
+ * insert failed but the cooldown still got recorded (defensive).
+ */
+export interface TradeRouteDTO {
+  id: string;
+  sourceTownId: string;
+  sourceTownName: string;
+  targetTownId: string;
+  targetTownName: string;
+  resource: string;
+  amount: number;
+  queuedAt: number;
+  expiresAt: number;
+  taskId: string | null;
 }

@@ -24,6 +24,9 @@ import {
   defaultDistrictBounds,
 } from './Town';
 import type { Approval, ApprovalKind, ApprovalStatus, ApprovalVotes } from './Approval';
+import type { Relationship, RelationshipEvent, RelationshipState } from './Relationship';
+import { DiplomacyManager } from './DiplomacyManager';
+import { clampTrust, DEFAULT_TRUST } from './diplomacy';
 import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
 import {
@@ -51,6 +54,7 @@ type EventRow = typeof schema.events.$inferSelect;
 type ChronicleRow = typeof schema.chronicleEntries.$inferSelect;
 type JournalRow = typeof schema.botJournals.$inferSelect;
 type ApprovalRow = typeof schema.approvals.$inferSelect;
+type RelationshipRow = typeof schema.relationships.$inferSelect;
 
 function genId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
@@ -295,6 +299,18 @@ function rowToApproval(row: ApprovalRow): Approval {
   };
 }
 
+function rowToRelationship(row: RelationshipRow): Relationship {
+  const events = safeJsonParse<RelationshipEvent[]>(row.eventsJson ?? null, []);
+  return {
+    townIdA: row.townIdA ?? '',
+    townIdB: row.townIdB ?? '',
+    state: ((row.state as RelationshipState) ?? 'neutral'),
+    trust: typeof row.trust === 'number' ? clampTrust(row.trust) : DEFAULT_TRUST,
+    lastInteractionAt: row.lastInteractionAt ?? 0,
+    events: Array.isArray(events) ? events : [],
+  };
+}
+
 export interface TownManagerOptions {
   /** Override the data directory (defaults to `<cwd>/data`). Useful for tests. */
   dataDir?: string;
@@ -336,6 +352,13 @@ export class TownManager {
    * instance — cooldown state lives on this service, not on each brain.
    */
   private mayorService: MayorService | null = null;
+  /**
+   * Phase 7-A — singleton DiplomacyManager. Same lazy-construction pattern
+   * as MayorService so the per-process sustain-counter map lives in exactly
+   * one place. Shared by every TownBrain's diplomacyLoop + the api.ts
+   * relationship routes.
+   */
+  private diplomacyManager: DiplomacyManager | null = null;
 
   constructor(opts: TownManagerOptions = {}) {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
@@ -532,6 +555,17 @@ export class TownManager {
   getMayorService(): MayorService {
     if (!this.mayorService) this.mayorService = new MayorService(this);
     return this.mayorService;
+  }
+
+  /**
+   * Phase 7-A — lazy singleton accessor for the per-process
+   * DiplomacyManager. Every TownBrain.diplomacyLoop reaches for this so the
+   * sustain-counter map (auto-transition hysteresis) is shared across towns.
+   * The api.ts relationship routes use the same instance.
+   */
+  getDiplomacyManager(): DiplomacyManager {
+    if (!this.diplomacyManager) this.diplomacyManager = new DiplomacyManager(this);
+    return this.diplomacyManager;
   }
 
   /**
@@ -1641,6 +1675,130 @@ export class TownManager {
   }
 
   // ──────────────────────────────────────────────────────────────────────
+  //  Relationships (Phase 7-A — inter-town directed diplomacy edges)
+  //
+  //  One row per ordered (town_id_a, town_id_b) pair. DiplomacyManager calls
+  //  these methods to mutate edges; the api.ts /relationships routes call
+  //  the read-side methods.
+  // ──────────────────────────────────────────────────────────────────────
+
+  /**
+   * Upsert a directed edge. Atomic via SQLite ON CONFLICT — the unique index
+   * is on (town_id_a, town_id_b). Returns true on success, false on
+   * (logged) DB failure routed to the JSONL fallback.
+   *
+   * The fallback row carries the FULL Relationship payload (including the
+   * events array) so a wedged DB doesn't lose history. drainFallback's
+   * replay re-runs the same INSERT ... ON CONFLICT path.
+   */
+  upsertRelationshipEdge(edge: Relationship): boolean {
+    const trust = clampTrust(edge.trust);
+    const eventsJson = JSON.stringify(edge.events ?? []);
+    try {
+      // Look up the existing row to preserve the surrogate id (uniqueness is
+      // on the pair, not the id, so a re-insert would otherwise generate a
+      // new id every tick). Falls through to INSERT when absent.
+      const existing = this.db
+        .select()
+        .from(schema.relationships)
+        .where(
+          and(
+            eq(schema.relationships.townIdA, edge.townIdA),
+            eq(schema.relationships.townIdB, edge.townIdB),
+          ),
+        )
+        .get();
+      if (existing) {
+        this.db
+          .update(schema.relationships)
+          .set({
+            state: edge.state,
+            trust,
+            lastInteractionAt: edge.lastInteractionAt,
+            eventsJson,
+          })
+          .where(eq(schema.relationships.id, existing.id))
+          .run();
+      } else {
+        const id = genId('rel');
+        this.db
+          .insert(schema.relationships)
+          .values({
+            id,
+            townIdA: edge.townIdA,
+            townIdB: edge.townIdB,
+            state: edge.state,
+            trust,
+            lastInteractionAt: edge.lastInteractionAt,
+            eventsJson,
+          })
+          .run();
+      }
+      return true;
+    } catch (err: any) {
+      this.appendFallbackRow('relationships', edge.townIdA, {
+        townIdA: edge.townIdA,
+        townIdB: edge.townIdB,
+        state: edge.state,
+        trust,
+        lastInteractionAt: edge.lastInteractionAt,
+        events: edge.events ?? [],
+      });
+      logger.warn(
+        { err: err?.message, a: edge.townIdA, b: edge.townIdB },
+        'upsertRelationshipEdge: DB write failed; routed to fallback',
+      );
+      return false;
+    }
+  }
+
+  /** Single directed edge `a -> b`, or null when no edge exists. */
+  getRelationshipEdge(a: string, b: string): Relationship | null {
+    try {
+      const row = this.db
+        .select()
+        .from(schema.relationships)
+        .where(
+          and(
+            eq(schema.relationships.townIdA, a),
+            eq(schema.relationships.townIdB, b),
+          ),
+        )
+        .get();
+      return row ? rowToRelationship(row) : null;
+    } catch (err: any) {
+      logger.warn({ err: err?.message, a, b }, 'getRelationshipEdge: read failed');
+      return null;
+    }
+  }
+
+  /** All outgoing edges from a town. Used by the dashboard + diplomacy loop. */
+  listRelationshipsFrom(townId: string): Relationship[] {
+    try {
+      const rows = this.db
+        .select()
+        .from(schema.relationships)
+        .where(eq(schema.relationships.townIdA, townId))
+        .all();
+      return rows.map(rowToRelationship);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, townId }, 'listRelationshipsFrom: read failed');
+      return [];
+    }
+  }
+
+  /** Every edge in the table — used by GET /api/relationships. */
+  listAllRelationships(): Relationship[] {
+    try {
+      const rows = this.db.select().from(schema.relationships).all();
+      return rows.map(rowToRelationship);
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'listAllRelationships: read failed');
+      return [];
+    }
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
   //  Style observations (Phase 4 — feedback path)
   // ──────────────────────────────────────────────────────────────────────
 
@@ -1857,6 +2015,20 @@ export class TownManager {
             votesJson: row.votes == null ? null : JSON.stringify(row.votes),
           })
           .run();
+        return;
+      case 'relationships':
+        // Re-run upsert semantics so a re-played row collapses cleanly into
+        // an existing edge (which may have been updated since the fallback
+        // was written). Skip emitting events on replay — the original
+        // recordInteraction already emitted them on the live path.
+        this.upsertRelationshipEdge({
+          townIdA: row.townIdA ?? entry.townId,
+          townIdB: row.townIdB ?? '',
+          state: (row.state as RelationshipState) ?? 'neutral',
+          trust: typeof row.trust === 'number' ? clampTrust(row.trust) : DEFAULT_TRUST,
+          lastInteractionAt: row.lastInteractionAt ?? Date.now(),
+          events: Array.isArray(row.events) ? (row.events as RelationshipEvent[]) : [],
+        });
         return;
     }
   }

@@ -163,6 +163,64 @@ export const requirePluginAuth: RequestHandler = (
 };
 
 /**
+ * Task #72 — dev-only endpoint gate.
+ *
+ * Returns true when the runtime is in "developer mode": either
+ * `NODE_ENV === 'development'` OR `config.auth.devSecret` is set (via
+ * `setAuthConfig`). When neither signal is present (production-secret-absent
+ * mode), endpoints gated by `requireDev` should reject with 403.
+ *
+ * Intentionally separate from `isPlayerAuthEnforced` — that helper tracks
+ * whether the player-login flow enforces a secret; this one tracks whether
+ * we're permitted to expose dev-only conveniences like `/grant`.
+ */
+export function isDevModeEnabled(): boolean {
+  if (process.env.NODE_ENV === 'development') return true;
+  if (authConfig?.devSecret) return true;
+  return false;
+}
+
+/**
+ * Describe the dev-mode gate for inclusion in 403 responses. Useful so a
+ * caller hitting `/grant` in production can see at a glance why it was
+ * rejected without having to read the source.
+ */
+export function describeDevGate(): {
+  enabled: boolean;
+  nodeEnv: string | undefined;
+  devSecretSet: boolean;
+} {
+  return {
+    enabled: isDevModeEnabled(),
+    nodeEnv: process.env.NODE_ENV,
+    devSecretSet: Boolean(authConfig?.devSecret),
+  };
+}
+
+/**
+ * Middleware: rejects with 403 when neither dev-mode signal is present.
+ * Mirrors the style of `requireDashboardAuth` / `requirePluginAuth`.
+ * The 403 body includes the exact gating logic so the caller knows why.
+ */
+export const requireDev: RequestHandler = (
+  _req: Request,
+  res: Response,
+  next: NextFunction,
+): void => {
+  if (isDevModeEnabled()) {
+    next();
+    return;
+  }
+  res.status(403).json({
+    error: 'dev-mode required',
+    message:
+      "This endpoint is dev-only. Enable it by setting NODE_ENV='development' " +
+      'OR configuring `auth.devSecret` in config.yml.',
+    gate: describeDevGate(),
+  });
+};
+
+/**
  * Build the Set-Cookie header value for the auth cookie. Always httpOnly,
  * samesite=lax, 30d max-age. `Secure` is added when the request looks like
  * it came over HTTPS (so plain-HTTP local dev still works).

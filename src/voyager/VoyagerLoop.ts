@@ -349,15 +349,32 @@ export class VoyagerLoop {
   }
 
   queuePlayerTask(description: string, requestedBy: string): void {
-    // Decompose asynchronously — subtasks get queued when ready
-    this.decomposeAndQueue(description, requestedBy).catch((err) => {
-      logger.warn({ err: err.message, task: description }, 'Decompose failed, queuing raw task');
-      const keywords = description
-        .toLowerCase()
-        .replace(/[^a-z0-9\s]/g, '')
-        .split(/\s+/)
-        .filter((w) => w.length > 2);
-      this.playerTaskQueue.push({ description, keywords, requestedBy });
+    // Followup #70 — push the raw task to the queue *synchronously* so the
+    // priority chain (goalOverrideTask > goalTask > playerTask > blackboardTask
+    // > curriculumAgent.proposeTask) sees it on the very next tick. The previous
+    // implementation fire-and-forgot the LLM decomposition before pushing, so
+    // a slow/failing LLM left `playerTaskQueue` empty for tens of seconds while
+    // the curriculum kept re-proposing its own work, starving player requests.
+    // The raw task carries a stable identity (the object reference itself) we
+    // match on later when decomposition completes and (optionally) refines the
+    // entry into subtasks.
+    const keywords = description
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, '')
+      .split(/\s+/)
+      .filter((w) => w.length > 2);
+    const rawTask: Task = { description, keywords, requestedBy };
+    this.playerTaskQueue.push(rawTask);
+    logger.info(
+      { bot: this.botName, task: description, requestedBy, queueLen: this.playerTaskQueue.length },
+      'Player task queued (raw, awaiting optional decomposition)'
+    );
+
+    // Asynchronously try to decompose into subtasks. If decomposition yields
+    // >1 step *and* the raw task is still in the queue (not yet shifted into
+    // execution), replace it in-place with the ordered subtasks.
+    this.decomposeAndRefine(rawTask, requestedBy).catch((err) => {
+      logger.warn({ err: err.message, task: description }, 'Decompose-refine failed; raw task remains queued');
     });
   }
 
@@ -383,18 +400,42 @@ export class VoyagerLoop {
     logger.info({ bot: this.botName, cleared: count }, 'Player task queue cleared');
   }
 
-  private async decomposeAndQueue(description: string, requestedBy: string): Promise<void> {
-    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, description);
-    for (const task of subtasks) {
-      this.playerTaskQueue.push({ ...task, requestedBy });
+  /**
+   * Async refinement step paired with the synchronous push in `queuePlayerTask`.
+   * Attempts LLM-driven decomposition; if it produces more than one ordered
+   * subtask AND the original raw task is still pending in the queue (i.e. it
+   * hasn't been shifted into execution yet), replaces that single entry in
+   * place with the subtasks. The raw task's queue position is preserved so
+   * batched POSTs stay in order. If the raw task is gone (already executing,
+   * cleared by swarm override, or shifted on a tick), the refinement is a
+   * no-op — the bot is already working on something derived from it.
+   */
+  private async decomposeAndRefine(rawTask: Task, requestedBy: string): Promise<void> {
+    const subtasks = await this.curriculumAgent.decomposeTask(this.bot, rawTask.description);
+    this.blackboardManager?.postMessage(this.botName, 'info', `Queued local task: ${rawTask.description}`);
+
+    if (subtasks.length <= 1) {
+      // Nothing useful to refine; the raw task already represents this step.
+      return;
     }
+
+    const index = this.playerTaskQueue.indexOf(rawTask);
+    if (index === -1) {
+      logger.info(
+        { bot: this.botName, goal: rawTask.description, subtasks: subtasks.map((t) => t.description) },
+        'Decomposition completed but raw task already left queue; skipping refine'
+      );
+      return;
+    }
+
+    const replacements = subtasks.map((task) => ({ ...task, requestedBy }));
+    this.playerTaskQueue.splice(index, 1, ...replacements);
     logger.info({
       bot: this.botName,
-      goal: description,
+      goal: rawTask.description,
       requestedBy,
       subtasks: subtasks.map((t) => t.description),
-    }, subtasks.length > 1 ? 'Player goal decomposed and queued' : 'Player task queued');
-    this.blackboardManager?.postMessage(this.botName, 'info', `Queued local task: ${description}`);
+    }, 'Player goal decomposed and refined in place');
   }
 
   private async decomposeAndSetLongTermGoal(description: string, requestedBy: string): Promise<void> {

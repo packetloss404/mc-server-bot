@@ -46,6 +46,7 @@ import {
   registerAuthRoutes,
   setAuthConfig,
   getSessionPlayerName,
+  isLegacyAuthRequested,
 } from './auth';
 import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
@@ -2552,13 +2553,10 @@ export function createAPIServer(
     // legacy body field (gated on the explicit migration flag).
     const sessionName = getSessionPlayerName(req);
     let claimed: string | null = sessionName;
-    if (!claimed) {
-      const allowLegacy = String((req.query as Record<string, unknown>)?.legacyAuth ?? '') === 'true';
-      if (allowLegacy) {
-        const legacy = ((req.body ?? {}) as { mayorPlayerName?: unknown }).mayorPlayerName;
-        if (typeof legacy === 'string' && legacy.length > 0) {
-          claimed = legacy;
-        }
+    if (!claimed && isLegacyAuthRequested(req)) {
+      const legacy = ((req.body ?? {}) as { mayorPlayerName?: unknown }).mayorPlayerName;
+      if (typeof legacy === 'string' && legacy.length > 0) {
+        claimed = legacy;
       }
     }
 

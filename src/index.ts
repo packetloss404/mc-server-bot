@@ -13,6 +13,7 @@ import { TokenLedger } from './ai/TokenLedger';
 import { LLMSettings } from './ai/LLMSettings';
 import { registerLLMRoutes } from './server/llmRoutes';
 import { setupSocketEvents } from './server/socketEvents';
+import { HighlightStream } from './town/HighlightStream';
 
 function buildModelRouter(config: ReturnType<typeof loadConfig>): { client: LLMClient | null; ledger: TokenLedger } {
   const ledger = new TokenLedger();
@@ -76,8 +77,13 @@ async function main() {
   // Restore previously saved bots
   await botManager.loadSavedBots();
 
+  // Phase 8 — instantiate the streamer's in-memory highlight ring once,
+  // then hand it to the API layer so the town:event emitter + the
+  // /api/highlights routes share the same buffer.
+  const highlightStream = new HighlightStream();
+
   // Start HTTP API server with Socket.IO
-  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator, chronicleScheduler } = createAPIServer(botManager, config, tokenLedger);
+  const { app, httpServer, io, eventLog, buildCoordinator, campaignManager, chainCoordinator, chronicleScheduler } = createAPIServer(botManager, config, tokenLedger, highlightStream);
 
   // Register LLM settings/usage API routes (llmSettings + tokenLedger built above)
   registerLLMRoutes(app, llmSettings, tokenLedger, botManager);

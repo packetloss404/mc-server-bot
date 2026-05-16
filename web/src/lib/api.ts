@@ -1049,6 +1049,14 @@ export const api = {
       { method: 'POST' },
     ),
 
+  // Followup #38 — surface the TownBrain lifecycle status (running/paused
+  // + lastTickAt + tick count) so the dashboard can render a "last tick Xs
+  // ago" widget. Errors swallow so the card just hides on backend hiccups.
+  getBrainStatus: (id: string) =>
+    fetchJSON<{ brain: TownBrainStatusDTO }>(
+      `/api/towns/${encodeURIComponent(id)}/brain`,
+    ).catch(() => null as { brain: TownBrainStatusDTO } | null),
+
   // ─── Town roles & schedules (Phase 3 — parallel backend agent) ───
   //
   // GET endpoints swallow errors so the UI can fall back to a "no role data
@@ -1230,6 +1238,38 @@ export const api = {
     fetchJSON<{ routes: TradeRouteDTO[] }>(
       `/api/towns/${encodeURIComponent(id)}/trade-routes`,
     ).catch(() => ({ routes: [] as TradeRouteDTO[] })),
+
+  // ─── Phase 8 — streaming highlight feeds ────────────────────────────────
+  //
+  // Per-town highlight feed (SQLite, full history) and cross-town "best of
+  // all towns" feed (in-memory ring). Both GETs swallow errors so the
+  // HighlightsCard renders an empty state when the backend hasn't booted.
+  listTownHighlights: (id: string, params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ events: TownEventDTO[] }>(
+      `/api/towns/${encodeURIComponent(id)}/highlights${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ events: [] as TownEventDTO[] }));
+  },
+  listGlobalHighlights: (params?: { limit?: number; since?: number }) => {
+    const q = new URLSearchParams();
+    if (params?.limit !== undefined) q.set('limit', String(params.limit));
+    if (params?.since !== undefined) q.set('since', String(params.since));
+    const qs = q.toString();
+    return fetchJSON<{ highlights: GlobalHighlightDTO[] }>(
+      `/api/highlights${qs ? `?${qs}` : ''}`,
+    ).catch(() => ({ highlights: [] as GlobalHighlightDTO[] }));
+  },
+  getStreamingHealth: () =>
+    fetchJSON<StreamingHealthDTO>('/api/streaming/health').catch(() => ({
+      wsConnected: 0,
+      towns: 0,
+      eventsPerMin: 0,
+      lastEventAt: 0,
+      avgHighlightScore: 0,
+    } as StreamingHealthDTO)),
 };
 
 // ─── Town DTOs (mirror townStore types — kept here so api.ts stays
@@ -1252,6 +1292,21 @@ export interface TownDTO {
   mayorPlayerName?: string | null;
   /** Town Brain frozen — Phase 2. Defaults to false on older payloads. */
   paused?: boolean;
+}
+
+/**
+ * Followup #38 — TownBrain lifecycle snapshot. Mirrors the TownBrainStatus
+ * shape on the backend (src/town/TownBrain.ts) so the BrainStatusCard can
+ * render running/paused + last-tick-ago + tick count without an extra
+ * round-trip.
+ */
+export interface TownBrainStatusDTO {
+  townId: string;
+  running: boolean;
+  paused: boolean;
+  /** Epoch ms of the last completed tick; null when none have run yet. */
+  lastTickAt: number | null;
+  ticks: number;
 }
 
 // Phase 6-A — minimal mirror of the BlackboardTask shape the decree endpoint
@@ -1302,6 +1357,31 @@ export interface TownEventDTO {
   payload: unknown;
   occurredAt: number;
   highlightScore: number;
+}
+
+// ─── Phase 8 — streaming highlight feeds ───────────────────────────────────
+//
+// GlobalHighlightDTO is the cross-town feed payload — it carries the resolved
+// town name so the HighlightsCard can render a "kind chip + town name" row
+// without a second lookup. StreamingHealthDTO mirrors the in-memory rolling
+// counters returned by /api/streaming/health.
+
+export interface GlobalHighlightDTO {
+  townId: string;
+  townName: string;
+  kind: string;
+  severity: string | null;
+  payload: unknown;
+  occurredAt: number;
+  highlightScore: number;
+}
+
+export interface StreamingHealthDTO {
+  wsConnected: number;
+  towns: number;
+  eventsPerMin: number;
+  lastEventAt: number;
+  avgHighlightScore: number;
 }
 
 // ─── Town chronicle (Phase 4-B) ────────────────────────────────────────────

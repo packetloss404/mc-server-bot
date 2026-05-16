@@ -21,6 +21,8 @@ import { CommandCenter } from '../control/CommandCenter';
 import { MissionManager } from '../control/MissionManager';
 import { MarkerStore } from '../control/MarkerStore';
 import { townToDTO } from '../town/TownManager';
+import { HighlightStream } from '../town/HighlightStream';
+import type { TownEvent } from '../town/Town';
 import { ScheduleManager } from '../town/ScheduleManager';
 import { TOWN_ROLES, type TownRole } from '../town/RoleManager';
 import { ChronicleGenerator } from '../town/ChronicleGenerator';
@@ -65,9 +67,15 @@ export interface APIServerResult {
   chainCoordinator: ChainCoordinator;
   chronicleGenerator: ChronicleGenerator;
   chronicleScheduler: ChronicleScheduler;
+  highlightStream: HighlightStream;
 }
 
-export function createAPIServer(botManager: BotManager, config?: Config, tokenLedger?: TokenLedger): APIServerResult {
+export function createAPIServer(
+  botManager: BotManager,
+  config?: Config,
+  tokenLedger?: TokenLedger,
+  highlightStream?: HighlightStream,
+): APIServerResult {
   const app = express();
   const httpServer = http.createServer(app);
 
@@ -196,6 +204,49 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       return origEmit(event as any, ...args as any[]);
     };
   }
+
+  // ── Phase 8 — town:event broadcast hook ──
+  // Wire the in-memory HighlightStream (provided by index.ts, or lazily
+  // instantiated for legacy/test callers) into TownManager so every
+  // recordEvent() fans out over Socket.IO (`town:event`) AND lands in the
+  // streamer's ring buffer. Keeps TownManager free of socket.io / ring
+  // coupling — the callback is the seam.
+  const highlights = highlightStream ?? new HighlightStream();
+  highlights.setTownNameResolver((townId) => {
+    try {
+      return botManager.getTownManager().getTown(townId)?.name ?? null;
+    } catch {
+      return null;
+    }
+  });
+  highlights.setWsConnectedProvider(() => {
+    try {
+      // io.engine.clientsCount is the canonical "currently-connected" count.
+      // Guarded because some test contexts mock io without an engine.
+      return (io as any).engine?.clientsCount ?? 0;
+    } catch {
+      return 0;
+    }
+  });
+  botManager.getTownManager().setEventEmitter((event: TownEvent) => {
+    try {
+      io.emit('town:event', {
+        townId: event.townId,
+        kind: event.kind,
+        severity: event.severity,
+        ts: event.occurredAt,
+        highlightScore: event.highlightScore,
+        payload: event.payload,
+      });
+    } catch (err: any) {
+      logger.warn({ err: err?.message, kind: event.kind }, 'town:event io.emit failed');
+    }
+    try {
+      highlights.record(event);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, kind: event.kind }, 'highlightStream.record failed');
+    }
+  });
 
   // ── Phase 2 Town Brain wiring ──
   // Inject the deps a TownBrain needs and boot a brain per active town. The
@@ -2528,14 +2579,8 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
         mayorTitle,
         mayorPlayerName,
       });
-      io.emit('town:event', {
-        townId: town.id,
-        kind: 'town_founded',
-        severity: 'major',
-        ts: town.foundedAt,
-        highlightScore: 100,
-        payload: { name: town.name, stylePreset },
-      });
+      // town_founded event is recorded inside createTown and fans out via
+      // the unified TownManager.setEventEmitter hook — no manual io.emit.
       res.status(201).json({
         town: townToDTO(town, tm.listResidents(town.id), tm.isTownPaused(town.id)),
       });
@@ -2582,6 +2627,33 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     }
     tm.resumeTown(id);
     res.json({ paused: false });
+  });
+
+  // Followup #38 — surface the brain's lifecycle status so the dashboard
+  // can render a "last tick Xs ago / N ticks / paused" widget without
+  // having to wire a Socket.IO event for it.
+  app.get('/api/towns/:id/brain', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    if (!tm.getTown(id)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const status = tm.getBrainStatus(id);
+    if (!status) {
+      // Town exists but no brain wired (rare: dormant town or boot race).
+      res.json({
+        brain: {
+          townId: id,
+          running: false,
+          paused: false,
+          lastTickAt: null,
+          ticks: 0,
+        },
+      });
+      return;
+    }
+    res.json({ brain: status });
   });
 
   app.delete('/api/towns/:id', (req: Request, res: Response) => {
@@ -2669,6 +2741,58 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       since: Number.isFinite(sinceRaw) ? sinceRaw : undefined,
     });
     res.json({ events });
+  });
+
+  // ─── Phase 8 — streaming feeds ────────────────────────────────────────
+  //
+  // The streamer pipeline consumes these endpoints to build the YouTube
+  // highlights feed:
+  //
+  //  - /api/towns/:id/highlights  per-town, SQLite-backed (full history),
+  //                               ordered by highlight_score DESC, occurredAt
+  //                               DESC via the idx_events_town_highlight
+  //                               index from Phase 1. Default limit 25.
+  //  - /api/highlights            cross-town "best of all towns" feed,
+  //                               in-memory ring (HighlightStream). Default
+  //                               limit 50. Includes town name for the chip.
+  //  - /api/streaming/health      rolling counters (events/min,
+  //                               last-event-at, avg highlight score) and
+  //                               the current Socket.IO connection count.
+
+  app.get('/api/towns/:id/highlights', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    if (!tm.getTown(String(req.params.id))) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '25'), 10);
+    const sinceRaw = req.query.since != null ? Number.parseInt(String(req.query.since), 10) : NaN;
+    const events = tm.listTownHighlights(String(req.params.id), {
+      limit: Number.isFinite(limitRaw) ? limitRaw : undefined,
+      since: Number.isFinite(sinceRaw) ? sinceRaw : undefined,
+    });
+    res.json({ events });
+  });
+
+  app.get('/api/highlights', (req: Request, res: Response) => {
+    const limitRaw = Number.parseInt(String(req.query.limit ?? '50'), 10);
+    const sinceRaw = req.query.since != null ? Number.parseInt(String(req.query.since), 10) : NaN;
+    const limit = Number.isFinite(limitRaw) ? Math.max(1, Math.min(500, limitRaw)) : 50;
+    const since = Number.isFinite(sinceRaw) ? sinceRaw : 0;
+    const items = highlights.topAcrossTowns(limit, since);
+    res.json({ highlights: items });
+  });
+
+  app.get('/api/streaming/health', (_req: Request, res: Response) => {
+    const stats = highlights.getStats();
+    const towns = botManager.getTownManager().listTowns().length;
+    res.json({
+      wsConnected: stats.wsConnected,
+      towns,
+      eventsPerMin: stats.eventsPerMin,
+      lastEventAt: stats.lastEventAt,
+      avgHighlightScore: stats.avgHighlightScore,
+    });
   });
 
   // ─── Phase 4-B Chronicle ──────────────────────────────────────────────
@@ -3015,17 +3139,8 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
       res.status(500).json({ error: result.reason ?? 'Failed to execute expansion' });
       return;
     }
-    io.emit('town:event', {
-      townId: parent.id,
-      kind: 'expansion:founded',
-      severity: 'major',
-      ts: Date.now(),
-      highlightScore: 90,
-      payload: {
-        childTownId: result.childTown.id,
-        childName: result.childTown.name,
-      },
-    });
+    // expansion:founded is recorded inside ExpansionManager.executeProposal
+    // and fans out via the unified TownManager.setEventEmitter hook.
     res.status(201).json({
       proposal,
       executed: true,
@@ -3157,20 +3272,8 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
         res.status(500).json({ error: 'Failed to update relationship' });
         return;
       }
-      io.emit('town:event', {
-        townId: id,
-        kind: 'diplomacy:state_changed',
-        severity: 'major',
-        ts: Date.now(),
-        highlightScore: 70,
-        payload: {
-          fromTownId: id,
-          toTownId: peerId,
-          newState: state,
-          source: 'admin',
-          reason: reason ?? null,
-        },
-      });
+      // diplomacy:state_changed is recorded inside DiplomacyManager.setRelationship
+      // and fans out via the unified TownManager.setEventEmitter hook.
       res.json({ relationship: updated });
     } catch (err: any) {
       logger.warn(
@@ -3296,14 +3399,8 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     }
     try {
       const updated = await approvalManager.mayorDecide(approvalId, choice);
-      io.emit('town:event', {
-        townId: id,
-        kind: choice === 'approved' ? 'approval:approved' : 'approval:denied',
-        severity: 'major',
-        ts: Date.now(),
-        highlightScore: choice === 'approved' ? 70 : 50,
-        payload: { approvalId, kind: approval.kind, mayorPlayerName: mayorPlayerName ?? null },
-      });
+      // approval:approved/denied is recorded inside ApprovalManager.mayorDecide
+      // and fans out via the unified TownManager.setEventEmitter hook.
       res.json({ approval: updated });
     } catch (err: any) {
       logger.warn(
@@ -3357,14 +3454,7 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
         payload: { taskId: task.id, text, source: 'mayor_directive' },
         highlightScore: 60,
       });
-      io.emit('town:event', {
-        townId: town.id,
-        kind: 'mayor:decree',
-        severity: 'major',
-        ts: Date.now(),
-        highlightScore: 60,
-        payload: { taskId: task.id, text },
-      });
+      // The recordEvent above fans out via the unified emitter; no manual emit.
       res.status(201).json({ task });
     } catch (err: any) {
       logger.warn({ err: err?.message, townId: town.id }, 'mayor/decree failed');
@@ -3377,5 +3467,6 @@ export function createAPIServer(botManager: BotManager, config?: Config, tokenLe
     commanderService, commandCenter, missionManager, markerStore, squadManager, roleManager, templateManager, routineManager,
     buildCoordinator, campaignManager, schematicMatcher, chainCoordinator,
     chronicleGenerator, chronicleScheduler,
+    highlightStream: highlights,
   };
 }

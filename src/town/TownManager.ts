@@ -360,6 +360,16 @@ export class TownManager {
    */
   private diplomacyManager: DiplomacyManager | null = null;
 
+  /**
+   * Phase 8 — optional event emitter callback. The API layer injects this
+   * via setEventEmitter() so every successful recordEvent() insert also
+   * fans out over Socket.IO + the in-process HighlightStream. Keeping it as
+   * a callback (rather than importing socket.io / HighlightStream here)
+   * preserves the existing layering: TownManager owns persistence, the API
+   * layer owns transport.
+   */
+  private eventEmitter: ((event: TownEvent) => void) | null = null;
+
   constructor(opts: TownManagerOptions = {}) {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
     this.handle = opts.handle ?? openTownDb(this.dataDir);
@@ -1095,8 +1105,23 @@ export class TownManager {
   // ──────────────────────────────────────────────────────────────────────
 
   /**
+   * Phase 8 — inject the event emitter callback. The API layer wires this at
+   * startup so every recordEvent() also fans out over Socket.IO + the
+   * HighlightStream. Idempotent — calling it twice replaces the previous
+   * callback. Pass `null` to detach.
+   */
+  setEventEmitter(fn: ((event: TownEvent) => void) | null): void {
+    this.eventEmitter = fn;
+  }
+
+  /**
    * Persist an event. Returns the canonical TownEvent regardless of whether
    * the row landed in SQLite or in the JSONL fallback.
+   *
+   * Phase 8 — after persistence (or fallback), fans the event out through
+   * the optional emitter callback so the API layer can broadcast over
+   * Socket.IO and feed the HighlightStream ring. The emitter is best-effort:
+   * a thrown callback never blocks the caller or hides the persisted event.
    */
   recordEvent(input: TownEventInput): TownEvent {
     const id = genId('evt');
@@ -1135,6 +1160,18 @@ export class TownManager {
       });
       logger.warn({ err: err?.message, kind: input.kind, townId: input.townId }, 'Event insert failed; routed to fallback');
     }
+    // Fan out to the API-layer hook (Socket.IO + HighlightStream). Swallow
+    // any error — broadcast failures must never abort the persisted write.
+    if (this.eventEmitter) {
+      try {
+        this.eventEmitter(event);
+      } catch (err: any) {
+        logger.warn(
+          { err: err?.message, kind: event.kind, townId: event.townId },
+          'recordEvent: emitter callback threw',
+        );
+      }
+    }
     return event;
   }
 
@@ -1148,6 +1185,30 @@ export class TownManager {
       .from(schema.events)
       .where(whereExpr)
       .orderBy(desc(schema.events.occurredAt))
+      .limit(limit)
+      .all();
+    return rows.map(rowToEvent);
+  }
+
+  /**
+   * Phase 8 — per-town highlight feed. Reads from SQLite directly so we get
+   * the full event history (not just the in-memory ring) and rides the
+   * `idx_events_town_highlight` index (highlight_score DESC, occurred_at
+   * DESC). Used by /api/towns/:id/highlights for the streamer.
+   */
+  listTownHighlights(
+    townId: string,
+    opts: { limit?: number; since?: number } = {},
+  ): TownEvent[] {
+    const limit = Math.min(Math.max(opts.limit ?? 25, 1), 500);
+    const whereExpr = opts.since != null
+      ? and(eq(schema.events.townId, townId), gt(schema.events.occurredAt, opts.since))
+      : eq(schema.events.townId, townId);
+    const rows = this.db
+      .select()
+      .from(schema.events)
+      .where(whereExpr)
+      .orderBy(desc(schema.events.highlightScore), desc(schema.events.occurredAt))
       .limit(limit)
       .all();
     return rows.map(rowToEvent);

@@ -15,10 +15,13 @@
  * 12000..24000 = night. Dawn/dusk transitions are treated as boundaries
  * (handled implicitly by the tick falling on either side).
  */
+import fs from 'fs';
+import path from 'path';
 import type { TownManager } from './TownManager';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
 import type { Resident } from './Town';
 import type { TownRole } from './RoleManager';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import { logger } from '../util/logger';
 
 export type SchedulePhase = 'day' | 'night';
@@ -164,8 +167,16 @@ export class ScheduleManager {
    * Last-emitted-phase per (townId, role). We only push a new schedule task
    * when the phase flips OR when no matching task currently exists on the
    * board — otherwise the blackboard would grow by N tasks per minute.
+   *
+   * Followup #42 — persisted to `data/towns/<townId>/schedule.json` so a
+   * restart at noon doesn't immediately re-emit the day-phase tasks the
+   * blackboard still has open. Loaded lazily on first encounter per town;
+   * saved synchronously after each `tick()` mutation. Failures are
+   * swallowed + logged.
    */
   private readonly lastEmittedPhase: Map<string, SchedulePhase> = new Map();
+  /** Per-town hydration set so we only load each town's slice once. */
+  private readonly loadedTowns: Set<string> = new Set();
 
   constructor(townManager: TownManager, blackboard: BlackboardManager) {
     this.townManager = townManager;
@@ -178,6 +189,7 @@ export class ScheduleManager {
    * to system clock — better to keep cycling than freeze.
    */
   tick(townId: string, worldTimeTicks: number | null): void {
+    this.hydrateTown(townId);
     const phase = this.phaseFor(worldTimeTicks);
     const residents = this.townManager
       .listResidents(townId)
@@ -193,6 +205,7 @@ export class ScheduleManager {
       rolesPresent.add(role);
     }
 
+    let mutated = false;
     for (const role of rolesPresent) {
       const key = `${townId}::${role}`;
       const last = this.lastEmittedPhase.get(key);
@@ -200,7 +213,9 @@ export class ScheduleManager {
       if (last === phase) continue;
       this.emitForRole(townId, role, phase);
       this.lastEmittedPhase.set(key, phase);
+      mutated = true;
     }
+    if (mutated) this.persistTown(townId);
   }
 
   /** Read-only — the task descriptions for a role/phase pair. */
@@ -245,6 +260,65 @@ export class ScheduleManager {
     // Only the known role strings produce a defined SCHEDULES entry.
     if (SCHEDULES[candidate as TownRole]) return candidate as TownRole;
     return 'idle';
+  }
+
+  /**
+   * Followup #42 — load the persisted lastEmittedPhase slice for one town
+   * once per process. Failures are swallowed; the manager falls back to an
+   * empty in-memory map.
+   */
+  private hydrateTown(townId: string): void {
+    if (this.loadedTowns.has(townId)) return;
+    this.loadedTowns.add(townId);
+    const file = this.scheduleFileFor(townId);
+    if (!file) return;
+    try {
+      if (!fs.existsSync(file)) return;
+      const raw = fs.readFileSync(file, 'utf8');
+      const parsed = JSON.parse(raw) as { lastEmittedPhase?: Record<string, string> };
+      if (!parsed?.lastEmittedPhase || typeof parsed.lastEmittedPhase !== 'object') return;
+      for (const [role, phase] of Object.entries(parsed.lastEmittedPhase)) {
+        if (phase === 'day' || phase === 'night') {
+          this.lastEmittedPhase.set(`${townId}::${role}`, phase);
+        }
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, file },
+        'ScheduleManager: hydrateTown threw; starting empty',
+      );
+    }
+  }
+
+  private persistTown(townId: string): void {
+    const file = this.scheduleFileFor(townId);
+    if (!file) return;
+    const lastEmittedPhase: Record<string, SchedulePhase> = {};
+    const prefix = `${townId}::`;
+    for (const [key, phase] of this.lastEmittedPhase.entries()) {
+      if (!key.startsWith(prefix)) continue;
+      const role = key.slice(prefix.length);
+      lastEmittedPhase[role] = phase;
+    }
+    try {
+      atomicWriteJsonSync(file, { lastEmittedPhase });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId, file },
+        'ScheduleManager: persistTown failed; in-memory state retained',
+      );
+    }
+  }
+
+  private scheduleFileFor(townId: string): string | null {
+    try {
+      const tm = this.townManager as { getDataDir?: () => string };
+      const dataDir = typeof tm.getDataDir === 'function' ? tm.getDataDir() : null;
+      if (!dataDir) return null;
+      return path.join(dataDir, 'towns', townId, 'schedule.json');
+    } catch {
+      return null;
+    }
   }
 
   private emitForRole(townId: string, role: TownRole, phase: SchedulePhase): void {

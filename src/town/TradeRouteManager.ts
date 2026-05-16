@@ -33,32 +33,14 @@ import type { TownManager } from './TownManager';
 import type { BotManager } from '../bot/BotManager';
 import type { BlackboardManager } from '../voyager/BlackboardManager';
 import type { Town, TownTier } from './Town';
+import {
+  CORE_RESOURCE_THRESHOLDS,
+  RESOURCE_KEYWORDS,
+} from './resourceThresholds';
 import { logger } from '../util/logger';
 
 /** Cooldown between re-queues of the same (sourceTownId, targetTownId, resource). */
 const ROUTE_COOLDOWN_MS = 10 * 60 * 1000;
-
-/**
- * Threshold table copied from TownBrain so we can evaluate surplus without
- * importing the brain (would be a circular dep). A resource is "surplus" when
- * the source town has > 2x the threshold for its tier; "shortage" when the
- * peer town has < 1x the threshold.
- *
- * Keep this in sync with TownBrain.CORE_RESOURCE_THRESHOLDS.
- */
-const CORE_RESOURCE_THRESHOLDS: Record<TownTier, Record<string, number>> = {
-  founding: { wood: 32, stone: 16, food: 8, iron: 0 },
-  village: { wood: 128, stone: 64, food: 32, iron: 8 },
-  town: { wood: 384, stone: 256, food: 96, iron: 32 },
-};
-
-/** Same keyword grouping as TownBrain — duplicated to keep this file standalone. */
-const RESOURCE_KEYWORDS: Record<string, RegExp> = {
-  wood: /(_log|_planks|_wood$|^stripped_)/,
-  stone: /(^stone$|^cobblestone$|^andesite$|^granite$|^diorite$|_stone$)/,
-  food: /(bread|wheat|carrot|potato|beetroot|melon|apple|mutton|beef|chicken|cooked|porkchop|fish|cod|salmon|berries)/,
-  iron: /(^iron_ingot$|^iron_ore$|^raw_iron$|^iron_block$)/,
-};
 
 /**
  * One in-flight allied-town trade route. Lives in memory for the process

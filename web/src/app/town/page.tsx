@@ -9,11 +9,13 @@ import { useToast } from '@/components/Toast';
 import { useTownStore, type Town, type TownEvent } from '@/lib/townStore';
 import { TownPicker } from '@/components/town/TownPicker';
 import { TownStatusCard } from '@/components/town/TownStatusCard';
+import { BrainStatusCard } from '@/components/town/BrainStatusCard';
 import { FoundTownModal } from '@/components/town/FoundTownModal';
 import { RoleBreakdownCard } from '@/components/town/RoleBreakdownCard';
 import { ScheduleStripCard } from '@/components/town/ScheduleStripCard';
 import { RoleResidentList } from '@/components/town/RoleResidentList';
 import { ChronicleFeedCard } from '@/components/town/ChronicleFeedCard';
+import { HighlightsCard } from '@/components/town/HighlightsCard';
 import { MemorialPanelCard } from '@/components/town/MemorialPanelCard';
 import { DistrictsCard } from '@/components/town/DistrictsCard';
 import { ChildTownsCard } from '@/components/town/ChildTownsCard';
@@ -157,6 +159,11 @@ export default function TownPage() {
         </div>
       )}
 
+      {/* Phase 8 — cross-town highlights feed (streamer-facing). Pinned at
+          the top of /town so the player and any over-the-shoulder stream
+          viewers immediately see what's stream-worthy across every town. */}
+      <HighlightsCard />
+
       {/* Empty state */}
       {!loading && towns.length === 0 && (
         <EmptyState onFound={() => setFoundModalOpen(true)} />
@@ -272,6 +279,9 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
           hint="Founding preset"
         />
       </div>
+
+      {/* Town Brain status (followup #38) — running/paused, last tick, count. */}
+      <BrainStatusCard townId={town.id} />
 
       {/* Mayor (Phase 6-A) — current mayor + decree form. */}
       <MayorPanelCard town={town} />

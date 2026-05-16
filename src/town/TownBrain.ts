@@ -49,6 +49,12 @@ import type { MayorService } from './MayorService';
 import { TradeRouteManager } from './TradeRouteManager';
 import type { DiplomacyManager } from './DiplomacyManager';
 import type { InteractionKind } from './Relationship';
+import {
+  CORE_RESOURCE_THRESHOLDS,
+  RESOURCE_KEYWORDS,
+  RESOURCE_ROLE,
+} from './resourceThresholds';
+import * as budgetLedger from './budgetLedger';
 import { logger } from '../util/logger';
 
 /**
@@ -75,32 +81,6 @@ const DIPLOMACY_BORDER_DISTANCE_BLOCKS = 100;
 const DIPLOMACY_TRIGGER_COOLDOWN_MS = 10 * 60 * 1000;
 
 const TICK_INTERVAL_MS = 60_000;
-
-/**
- * Phase-2 hardcoded core-resource thresholds. Tier-keyed so a village needs
- * more wood than a founding settlement. Phase 5 makes these dynamic.
- */
-const CORE_RESOURCE_THRESHOLDS: Record<TownTier, Record<string, number>> = {
-  founding: { wood: 32, stone: 16, food: 8, iron: 0 },
-  village: { wood: 128, stone: 64, food: 32, iron: 8 },
-  town: { wood: 384, stone: 256, food: 96, iron: 32 },
-};
-
-/** Keyword groups used to bucket inventory items into core resources. */
-const RESOURCE_KEYWORDS: Record<string, RegExp> = {
-  wood: /(_log|_planks|_wood$|^stripped_)/,
-  stone: /(^stone$|^cobblestone$|^andesite$|^granite$|^diorite$|_stone$)/,
-  food: /(bread|wheat|carrot|potato|beetroot|melon|apple|mutton|beef|chicken|cooked|porkchop|fish|cod|salmon|berries)/,
-  iron: /(^iron_ingot$|^iron_ore$|^raw_iron$|^iron_block$)/,
-};
-
-/** Default suggested role for each resource shortage (Phase 3 hooks roles). */
-const RESOURCE_ROLE: Record<string, string> = {
-  wood: 'lumberjack',
-  stone: 'miner',
-  food: 'farmer',
-  iron: 'blacksmith',
-};
 
 export interface TownBrainStatus {
   townId: string;
@@ -237,6 +217,23 @@ export class TownBrain {
     const schematicsRoot = path.join(process.cwd(), 'schematics');
     this.designCache = new DesignCache(schematicsRoot);
     this.styleObserver = new StyleObserver(townManager, townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'));
+    // Followup #45 — load the persisted design-LLM spend ledger so a brain
+    // restart honours yesterday's cap. Failures inside budgetLedger.load are
+    // swallowed and logged; the brain falls back to an empty ledger.
+    try {
+      const ledger = budgetLedger.load(
+        townManager.getDataDir?.() ?? path.join(process.cwd(), 'data'),
+        townId,
+      );
+      for (const [day, usd] of Object.entries(ledger.designSpendUsdByDay)) {
+        this.dailySpendUsd.set(day, usd);
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId },
+        'TownBrain: failed to load budget ledger; starting empty',
+      );
+    }
     // Phase 5-B — district + self-expansion managers. Both are stateless
     // wrappers around TownManager; constructing them here keeps the tick
     // loop's dependency wiring centralised.
@@ -751,8 +748,11 @@ export class TownBrain {
           styleDoc,
           neighbors,
         });
-        // Update spend ledger.
+        // Update spend ledger (in-memory + persistent file). The save call
+        // is failure-isolated inside budgetLedger so a wedged disk doesn't
+        // crash the design path.
         this.dailySpendUsd.set(budgetKey, spentToday + design.cost.estUsd);
+        this.persistDesignSpend();
         // Cache the plan; record an event with the attempts/cost for telemetry.
         const saved = this.designCache.save(
           { townId: this.townId, kind: item.kind, styleHashInput: hashInput },
@@ -831,6 +831,32 @@ export class TownBrain {
   /** UTC yyyy-mm-dd key for the daily LLM spend ledger. */
   private todayKey(): string {
     return new Date().toISOString().slice(0, 10);
+  }
+
+  /**
+   * Followup #45 — flush the in-memory design-spend map to disk. Reads the
+   * existing chronicle ledger first so we preserve the chronicle generator's
+   * own slice (it owns the `chronicleCostCentsByKey` field). Failures are
+   * swallowed inside budgetLedger.save.
+   */
+  private persistDesignSpend(): void {
+    try {
+      const dataDir = this.townManager.getDataDir?.() ?? path.join(process.cwd(), 'data');
+      const existing = budgetLedger.load(dataDir, this.townId);
+      const designSpendUsdByDay: Record<string, number> = {};
+      for (const [day, usd] of this.dailySpendUsd.entries()) {
+        designSpendUsdByDay[day] = usd;
+      }
+      budgetLedger.save(dataDir, this.townId, {
+        designSpendUsdByDay,
+        chronicleCostCentsByKey: existing.chronicleCostCentsByKey,
+      });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId: this.townId },
+        'TownBrain: persistDesignSpend threw; continuing with in-memory state',
+      );
+    }
   }
 
   /** Pull the per-day USD ceiling out of town.config; null when not set. */

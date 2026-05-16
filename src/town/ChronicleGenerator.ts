@@ -20,6 +20,7 @@ import { logger } from '../util/logger';
 import type { LLMClient } from '../ai/LLMClient';
 import type { TownManager, ChronicleEntry } from './TownManager';
 import type { Town, TownEvent, Resident } from './Town';
+import * as budgetLedger from './budgetLedger';
 
 /** Default per-day budget (USD) for chronicle calls when town config omits it. */
 const DEFAULT_BUDGET_USD = 0.5;
@@ -71,8 +72,15 @@ export class ChronicleGenerator {
   /**
    * Per (townId|dayNumber) accumulated cost. Cleared lazily — the scheduler's
    * once-per-day cadence keeps this map small (~one entry per town per day).
+   *
+   * Followup #45 — also persisted to `data/towns/<townId>/budget.json` so a
+   * restart doesn't reset the budget. Per-town ledgers are loaded lazily on
+   * first access (loadedTowns set) and saved synchronously after each
+   * recordCost so the on-disk view never lags by more than one call.
    */
   private readonly dailyCostCents: Map<string, number> = new Map();
+  /** Per-town hydration set so we only load each town's slice once. */
+  private readonly loadedTowns: Set<string> = new Set();
 
   constructor(
     townManager: TownManager,
@@ -464,17 +472,90 @@ export class ChronicleGenerator {
   private isOverBudget(townId: string, dayNumber: number, town: Town): boolean {
     const budgetUsd = this.budgetFor(town);
     if (budgetUsd <= 0) return false;
+    this.hydrateTownLedger(townId);
     const spentCents = this.dailyCostCents.get(this.budgetKey(townId, dayNumber)) ?? 0;
     return spentCents >= budgetUsd * 100;
   }
 
   private recordCost(townId: string, dayNumber: number, usd: number): void {
+    this.hydrateTownLedger(townId);
     const key = this.budgetKey(townId, dayNumber);
     const next = (this.dailyCostCents.get(key) ?? 0) + usd * 100;
     this.dailyCostCents.set(key, next);
+    this.persistTownLedger(townId);
   }
 
   private budgetKey(townId: string, dayNumber: number): string {
     return `${townId}|${dayNumber}`;
+  }
+
+  /**
+   * Followup #45 — load the persisted chronicle slice for one town once per
+   * process. Failures are swallowed inside budgetLedger.load; the generator
+   * falls back to the in-memory map.
+   */
+  private hydrateTownLedger(townId: string): void {
+    if (this.loadedTowns.has(townId)) return;
+    this.loadedTowns.add(townId);
+    const dataDir = this.dataDirOrNull();
+    if (!dataDir) return;
+    try {
+      const ledger = budgetLedger.load(dataDir, townId);
+      const prefix = `${townId}|`;
+      for (const [key, cents] of Object.entries(ledger.chronicleCostCentsByKey)) {
+        if (!key.startsWith(prefix)) continue;
+        // Only restore the slice for this town; cross-town keys are filtered
+        // out so a corrupted ledger can't leak between towns.
+        this.dailyCostCents.set(key, cents);
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId },
+        'ChronicleGenerator: hydrateTownLedger threw; continuing with empty in-memory state',
+      );
+    }
+  }
+
+  /**
+   * Persist the chronicle slice for one town. Reads the existing file first
+   * so we preserve TownBrain's `designSpendUsdByDay` slice. Failures are
+   * swallowed inside budgetLedger.save.
+   */
+  private persistTownLedger(townId: string): void {
+    const dataDir = this.dataDirOrNull();
+    if (!dataDir) return;
+    try {
+      const existing = budgetLedger.load(dataDir, townId);
+      // Walk our in-memory map and pick out keys for this town.
+      const prefix = `${townId}|`;
+      const chronicleCostCentsByKey: Record<string, number> = {};
+      for (const [key, cents] of this.dailyCostCents.entries()) {
+        if (!key.startsWith(prefix)) continue;
+        chronicleCostCentsByKey[key] = cents;
+      }
+      budgetLedger.save(dataDir, townId, {
+        designSpendUsdByDay: existing.designSpendUsdByDay,
+        chronicleCostCentsByKey,
+      });
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, townId },
+        'ChronicleGenerator: persistTownLedger threw; in-memory state retained',
+      );
+    }
+  }
+
+  /**
+   * Resolve the data dir by asking the TownManager. Returns null when the
+   * town manager doesn't expose getDataDir (older instantiations / tests).
+   */
+  private dataDirOrNull(): string | null {
+    try {
+      const tm = this.townManager as { getDataDir?: () => string };
+      const dir = typeof tm.getDataDir === 'function' ? tm.getDataDir() : null;
+      return dir ?? null;
+    } catch {
+      return null;
+    }
   }
 }

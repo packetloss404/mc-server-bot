@@ -623,16 +623,30 @@ export class TownBrain {
     // capital coords are the seed for the SiteSelector spiral.
     try {
       const residents = this.townManager.listResidents(this.townId);
-      const botNames = residents.map((r) => r.botName);
-      if (botNames.length === 0) {
-        // A town with zero residents still has town plan rows. The build
-        // will be queued for real on a tick where residents exist.
+      // startBuild rejects the whole job if ANY listed bot is disconnected,
+      // so filter to residents whose worker handles report a connected bot.
+      // Without this the auto pipeline jams whenever the login-throttle
+      // cycle has even one resident temporarily offline.
+      const allNames = residents.map((r) => r.botName);
+      const connectedNames: string[] = [];
+      for (const n of allNames) {
+        const handle = this.botManager.getWorker(n) as { isBotConnected?: () => Promise<boolean> } | undefined;
+        if (!handle || typeof handle.isBotConnected !== 'function') continue;
+        try {
+          if (await handle.isBotConnected()) connectedNames.push(n);
+        } catch { /* swallow — treat as disconnected */ }
+      }
+      if (connectedNames.length === 0) {
+        logger.debug(
+          { townId: this.townId, residents: allNames.length },
+          'TownBrain build: no connected residents to start build with; will retry next tick',
+        );
         return;
       }
       const job = await this.buildCoordinator.startBuild(
         resolved.schematicFile,
         { x: town.capital.x, y: town.capital.y, z: town.capital.z },
-        botNames,
+        connectedNames,
         { originMode: 'auto-flat' },
       );
       this.townManager.recordEvent({

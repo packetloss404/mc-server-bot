@@ -12,6 +12,10 @@ export function getSocket(): Socket {
       autoConnect: true,
       reconnection: true,
       reconnectionDelay: 2000,
+      // Cap retry interval at 30s and add 50% jitter so a thundering herd
+      // of reconnecting clients doesn't hammer the server simultaneously.
+      reconnectionDelayMax: 30000,
+      randomizationFactor: 0.5,
       reconnectionAttempts: Infinity,
       // Send the auth cookie on the Socket.IO handshake so cross-origin
       // (Next dev server → API) connections carry the dashboard auth cookie.

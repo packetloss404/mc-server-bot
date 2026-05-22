@@ -36,6 +36,10 @@ export class BotManager {
   private viewerSlots: Map<number, string> = new Map();
   private config: Config;
   private dataPath: string;
+  /** True while loadSavedBots() is iterating; suppresses intermediate saves
+   *  so a crash mid-load can't truncate bots.json down to whatever had
+   *  spawned so far. See saveBots() and loadSavedBots() for context. */
+  private loadingBots = false;
   private llmClient: LLMClient | null;
   private affinityManager: AffinityManager;
   private conversationManager: ConversationManager;
@@ -354,6 +358,13 @@ export class BotManager {
   }
 
   private saveBots(): void {
+    // During the staggered loadSavedBots loop, every spawnBot call triggers
+    // a save. If the process dies (OOM, restart, server kick storm) before
+    // the loop finishes, that partial save permanently truncates bots.json
+    // — bots that hadn't reached spawnBot yet vanish forever. Suppress saves
+    // entirely while loading; loadSavedBots fires one explicit save at the
+    // end. See: 2026-05-22 incident where bots.json eroded from 10 → 2.
+    if (this.loadingBots) return;
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
@@ -388,10 +399,16 @@ export class BotManager {
       return;
     }
 
+    // Set the loading flag so partial-load saves don't truncate bots.json
+    // if the process dies before the staggered loop completes. We flush one
+    // canonical save at the end (or in finally on early failure).
+    this.loadingBots = true;
     try {
       const raw = fs.readFileSync(this.dataPath, 'utf-8');
       const data = JSON.parse(raw) as { bots: SavedBot[] };
 
+      // spawnBot already enforces config.bots.joinStaggerMs between launches
+      // — no additional sleep needed here.
       for (const saved of data.bots) {
         await this.spawnBot(saved.name, saved.personality, saved.spawnLocation, saved.mode);
       }
@@ -399,6 +416,9 @@ export class BotManager {
       logger.info({ count: data.bots.length }, 'Loaded saved bots');
     } catch (err) {
       logger.error({ err }, 'Failed to load saved bots');
+    } finally {
+      this.loadingBots = false;
+      this.saveBotsImmediate();
     }
   }
 }

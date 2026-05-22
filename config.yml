@@ -13,8 +13,8 @@ minecraft:
 bots:
   maxBots: 10
   defaultMode: "codegen"
-  joinStaggerMs: 5000
-  reconnectDelaySec: 5
+  joinStaggerMs: 15000
+  reconnectDelaySec: 30
   maxReconnectAttempts: 10
 
 behavior:

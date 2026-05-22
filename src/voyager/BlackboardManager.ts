@@ -392,6 +392,14 @@ export class BlackboardManager {
             break;
           }
         }
+        // Town-prefix boost: tasks emitted by TownBrain demand/schedule
+        // phases start with "town:<id>" in the description. For residents
+        // we want these to dominate the ranking over curriculum-generated
+        // tasks (Voyager mining/explore quests) that landed on the swarm
+        // board via the same source='swarm' tag. +30 is enough to clear
+        // the typical priority×3 + distance + query-match envelope so
+        // residents always pull town work first when one's available.
+        if (task.description.toLowerCase().startsWith('town:')) score += 30;
       }
     }
     if (botPosition && task.location) {

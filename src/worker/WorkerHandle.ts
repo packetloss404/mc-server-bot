@@ -24,6 +24,19 @@ export interface WorkerBotData {
   workerSlotIndex: number;
 }
 
+/**
+ * Lifecycle of the worker thread, used to gate IPC traffic so concurrent
+ * sendRequest() calls during a crash window fail fast instead of timing out
+ * after 60s against a dead postMessage target.
+ *
+ *   IDLE ───start()──▶ RUNNING ──worker exit──▶ DEAD ──maybeRestart()──▶ RESTARTING
+ *                         │                                                   │
+ *                         └──terminate()──▶ STOPPING ──exit──▶ DEAD            └──start()──▶ RUNNING
+ *
+ * Only RUNNING accepts new requests. Any other state rejects synchronously.
+ */
+export type WorkerState = 'IDLE' | 'RUNNING' | 'STOPPING' | 'DEAD' | 'RESTARTING';
+
 export class WorkerHandle {
   readonly botName: string;
   readonly personality: string;
@@ -36,6 +49,7 @@ export class WorkerHandle {
   private intentionalShutdown = false;
   private crashCount = 0;
   private crashWindowStart = 0;
+  private state: WorkerState = 'IDLE';
 
   // Cached state pushed by the worker
   lastStatus: any = null;
@@ -118,6 +132,7 @@ export class WorkerHandle {
     });
 
     this.ipc = new IPCChannel(this.worker);
+    this.state = 'RUNNING';
     this.setupIPC();
     this.setupWorkerEvents();
 
@@ -282,6 +297,10 @@ export class WorkerHandle {
 
     this.worker.on('exit', (code) => {
       logger.info({ bot: this.botName, code, intentional: this.intentionalShutdown }, 'Worker thread exited');
+      // Flip to DEAD before destroying IPC so any concurrent sendRequest()
+      // that races between the worker dying and us seeing the exit event
+      // will reject through the gate rather than posting to a dead port.
+      this.state = 'DEAD';
       this.ipc?.destroy();
       this.ipc = null;
       this.worker = null;
@@ -303,9 +322,14 @@ export class WorkerHandle {
     if (this.crashCount > 3) {
       logger.error({ bot: this.botName, crashes: this.crashCount }, 'Worker crashed too many times, not restarting');
       this.lastStatus = { ...this.lastStatus, state: 'DISCONNECTED' };
+      // Leave state as DEAD so further requests fail fast — there is no
+      // worker coming back to service them.
       return;
     }
 
+    // Mark RESTARTING during the cooldown window so sendRequest() still
+    // rejects fast instead of timing out while we wait for the restart.
+    this.state = 'RESTARTING';
     const delay = 5000 * this.crashCount;
     logger.warn({ bot: this.botName, crashCount: this.crashCount, delayMs: delay }, 'Scheduling worker restart');
     setTimeout(() => {
@@ -381,10 +405,25 @@ export class WorkerHandle {
     }
   }
 
-  /** Send a request to the worker and await response */
+  /**
+   * Send a request to the worker and await response.
+   *
+   * Gated on `state === 'RUNNING'`: during the (potentially multi-second)
+   * window between worker exit and the next worker becoming ready, we reject
+   * synchronously so callers don't accumulate 60s-timeout promises against a
+   * dead postMessage target. Callers that want to tolerate a restart should
+   * retry on this error after `isAlive()` flips back to true.
+   */
   async sendRequest(type: string, args: any[] = []): Promise<any> {
-    if (!this.ipc) throw new Error('Worker not running');
+    if (this.state !== 'RUNNING' || !this.ipc) {
+      throw new Error(`Worker not running (state=${this.state}, request='${type}')`);
+    }
     return this.ipc.request(type, args);
+  }
+
+  /** Current lifecycle state — exposed primarily for diagnostics/testing. */
+  getState(): WorkerState {
+    return this.state;
   }
 
   // ── Build coordinator helpers (forward to worker via IPC) ──
@@ -521,6 +560,9 @@ export class WorkerHandle {
   async terminate(): Promise<void> {
     this.intentionalShutdown = true;
     if (this.worker) {
+      // Mark STOPPING before posting the disconnect so any in-flight call
+      // sites see a non-RUNNING state and bail out of sendRequest() early.
+      this.state = 'STOPPING';
       this.sendCommand('disconnect');
       // Wait for graceful exit, then force terminate
       await new Promise<void>((resolve) => {
@@ -534,6 +576,7 @@ export class WorkerHandle {
         });
       });
     }
+    this.state = 'DEAD';
     this.ipc?.destroy();
     this.ipc = null;
     this.worker = null;

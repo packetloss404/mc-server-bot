@@ -25,6 +25,27 @@ function genId(prefix: string): string {
   return `${prefix}_${crypto.randomBytes(6).toString('hex')}`;
 }
 
+function arraysEqual<T>(a: T[] | undefined, b: T[] | undefined): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return false;
+  }
+  return true;
+}
+
+function markerFieldsEqual(a: MarkerRecord, b: MarkerRecord): boolean {
+  return (
+    a.name === b.name &&
+    a.kind === b.kind &&
+    a.notes === b.notes &&
+    a.position.x === b.position.x &&
+    a.position.y === b.position.y &&
+    a.position.z === b.position.z &&
+    arraysEqual(a.tags, b.tags)
+  );
+}
+
 export class MarkerStore {
   private markers: Map<string, MarkerRecord> = new Map();
   private zones: Map<string, ZoneRecord> = new Map();
@@ -161,23 +182,33 @@ export class MarkerStore {
   updateMarker(id: string, data: Partial<Omit<MarkerRecord, 'id' | 'createdAt'>>): MarkerRecord | undefined {
     const existing = this.markers.get(id);
     if (!existing) return undefined;
-    const updated: MarkerRecord = { ...existing, ...data, id: existing.id, createdAt: existing.createdAt, updatedAt: Date.now() };
-    this.markers.set(id, updated);
+    const merged: MarkerRecord = { ...existing, ...data, id: existing.id, createdAt: existing.createdAt };
+    // No-op detection: if every field but updatedAt is identical, skip the
+    // write/emit so concurrent identical updates don't spam events.
+    if (markerFieldsEqual(existing, merged)) {
+      return existing;
+    }
+    merged.updatedAt = Date.now();
+    this.markers.set(id, merged);
     this.saveMarkers();
-    this.io.emit(WORLD_EVENTS.MARKER_UPDATED, updated);
-    logger.info({ markerId: id, name: updated.name, kind: updated.kind }, 'Marker updated');
-    return updated;
+    this.io.emit(WORLD_EVENTS.MARKER_UPDATED, merged);
+    logger.info({ markerId: id, name: merged.name, kind: merged.kind }, 'Marker updated');
+    return merged;
   }
 
   deleteMarker(id: string): boolean {
+    // Read-then-delete is atomic in a single-threaded JS event loop, so
+    // only the caller that actually removed the entry from the Map will
+    // see a truthy result and emit. Any concurrent second caller for the
+    // same id observes existed=false and emits nothing.
     const marker = this.markers.get(id);
+    if (!marker) return false;
     const existed = this.markers.delete(id);
-    if (existed) {
-      this.saveMarkers();
-      this.io.emit(WORLD_EVENTS.MARKER_UPDATED, { id, deleted: true });
-      logger.info({ markerId: id, name: marker?.name, kind: marker?.kind }, 'Marker deleted');
-    }
-    return existed;
+    if (!existed) return false;
+    this.saveMarkers();
+    this.io.emit(WORLD_EVENTS.MARKER_UPDATED, { id, deleted: true });
+    logger.info({ markerId: id, name: marker.name, kind: marker.kind }, 'Marker deleted');
+    return true;
   }
 
   // -- Zones --
@@ -211,13 +242,13 @@ export class MarkerStore {
   }
 
   deleteZone(id: string): boolean {
+    if (!this.zones.has(id)) return false;
     const existed = this.zones.delete(id);
-    if (existed) {
-      this.saveZones();
-      this.io.emit(WORLD_EVENTS.ZONE_UPDATED, { id, deleted: true });
-      logger.info({ zoneId: id }, 'Zone deleted');
-    }
-    return existed;
+    if (!existed) return false;
+    this.saveZones();
+    this.io.emit(WORLD_EVENTS.ZONE_UPDATED, { id, deleted: true });
+    logger.info({ zoneId: id }, 'Zone deleted');
+    return true;
   }
 
   // -- Routes --
@@ -251,13 +282,13 @@ export class MarkerStore {
   }
 
   deleteRoute(id: string): boolean {
+    if (!this.routes.has(id)) return false;
     const existed = this.routes.delete(id);
-    if (existed) {
-      this.saveRoutes();
-      this.io.emit(WORLD_EVENTS.ROUTE_UPDATED, { id, deleted: true });
-      logger.info({ routeId: id }, 'Route deleted');
-    }
-    return existed;
+    if (!existed) return false;
+    this.saveRoutes();
+    this.io.emit(WORLD_EVENTS.ROUTE_UPDATED, { id, deleted: true });
+    logger.info({ routeId: id }, 'Route deleted');
+    return true;
   }
 
   // -- Spatial Helpers --

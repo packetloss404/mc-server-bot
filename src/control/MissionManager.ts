@@ -23,6 +23,29 @@ const MISSIONS_FILE = path.join(DATA_DIR, 'missions.json');
 const STALE_THRESHOLD_MS = 30 * 60 * 1000; // 30 minutes
 const DEBOUNCE_MS = 1_000;
 
+/**
+ * Allowed state transitions for missions. Terminal states (completed,
+ * cancelled, failed) have no outgoing transitions. Self-transitions are
+ * permitted as no-ops so idempotent callers do not spam warnings.
+ */
+const MISSION_TRANSITIONS: Record<MissionStatus, ReadonlySet<MissionStatus>> = {
+  draft: new Set<MissionStatus>(['queued', 'running', 'cancelled', 'failed']),
+  // queued may resolve directly to completed/failed if a mission resolves
+  // before it ever transitions through running (e.g. zero-step missions).
+  queued: new Set<MissionStatus>(['running', 'paused', 'cancelled', 'completed', 'failed']),
+  running: new Set<MissionStatus>(['paused', 'completed', 'failed', 'cancelled']),
+  paused: new Set<MissionStatus>(['queued', 'running', 'cancelled', 'completed', 'failed']),
+  completed: new Set<MissionStatus>(),
+  cancelled: new Set<MissionStatus>(),
+  failed: new Set<MissionStatus>(),
+};
+
+function isValidMissionTransition(from: MissionStatus, to: MissionStatus): boolean {
+  if (from === to) return true;
+  const allowed = MISSION_TRANSITIONS[from];
+  return !!allowed && allowed.has(to);
+}
+
 export interface MissionMetrics {
   totalCreated: number;
   totalCompleted: number;
@@ -264,12 +287,20 @@ export class MissionManager {
   updateMissionStatus(
     id: string,
     newStatus: MissionStatus,
-    metadata?: { reason?: string; error?: string }
+    metadata?: { reason?: string; error?: string; force?: boolean }
   ): MissionRecord | undefined {
     const mission = this.missions.get(id);
     if (!mission) return undefined;
 
     const oldStatus = mission.status;
+    if (!metadata?.force && !isValidMissionTransition(oldStatus, newStatus)) {
+      logger.warn(
+        { missionId: id, from: oldStatus, to: newStatus, reason: metadata?.reason },
+        'MissionManager: rejected illegal status transition',
+      );
+      return undefined;
+    }
+
     mission.status = newStatus;
     mission.updatedAt = Date.now();
 
@@ -322,7 +353,13 @@ export class MissionManager {
 
   cancelMission(id: string): MissionRecord | undefined {
     const mission = this.missions.get(id);
-    if (!mission || mission.status === 'completed' || mission.status === 'cancelled') {
+    // Terminal states (completed, cancelled, failed) cannot be cancelled.
+    if (
+      !mission ||
+      mission.status === 'completed' ||
+      mission.status === 'cancelled' ||
+      mission.status === 'failed'
+    ) {
       return undefined;
     }
 
@@ -354,7 +391,9 @@ export class MissionManager {
 
     mission.completedAt = undefined;
     mission.blockedReason = undefined;
-    return this.updateMissionStatus(id, 'queued');
+    // Retry is a deliberate re-open from a terminal state; bypass the
+    // ordinary transition guard which forbids leaving terminal states.
+    return this.updateMissionStatus(id, 'queued', { force: true });
   }
 
   // -- Dependency check --

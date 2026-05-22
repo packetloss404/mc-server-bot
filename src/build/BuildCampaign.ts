@@ -25,7 +25,8 @@ export type CampaignStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'paused';
+  | 'paused'
+  | 'stalled';
 
 export interface CampaignStructure {
   id: string;
@@ -75,6 +76,14 @@ const DEFAULT_MAX_PARALLEL = 1;
 const DEFAULT_SPAWN_PERSONALITY = 'farmer';
 const DEFAULT_BOT_COUNT_HINT = 2;
 const NO_CREW_RETRY_MS = 30_000;
+/**
+ * Cap on consecutive empty-crew retries before we stop polling and mark the
+ * campaign 'stalled'. 20 * 30s ≈ 10 minutes — long enough that a transient
+ * cluster-wide bot outage can clear, short enough that an operator notices
+ * before the day is out. We deliberately don't fail the campaign so the
+ * operator can spawn bots manually and resume.
+ */
+const NO_CREW_MAX_RETRIES = 20;
 const SPAWN_WAIT_MS = 5_000;
 const PERSIST_DEBOUNCE_MS = 2_000;
 
@@ -88,6 +97,13 @@ export class CampaignManager {
   private persistTimer: NodeJS.Timeout | null = null;
   /** Deferred retry timers per campaign (when no idle bots are available). */
   private retryTimers: Map<string, NodeJS.Timeout> = new Map();
+  /**
+   * Consecutive empty-crew retries per campaign. Reset whenever a structure
+   * actually gets dispatched (or the campaign is paused/resumed/cancelled).
+   * Used to enforce NO_CREW_MAX_RETRIES so a botless cluster doesn't spin
+   * forever firing 30s timers.
+   */
+  private noCrewRetryCounts: Map<string, number> = new Map();
   /** Whether the dispatch loop for a campaign is already running. */
   private dispatching: Set<string> = new Set();
   /** Listener for build:completed events that routes outcomes to campaigns. */
@@ -185,7 +201,11 @@ export class CampaignManager {
       const structure = campaign.structures.find((s) => s.buildJobId === job.id);
       if (!structure) continue;
 
-      const success = job.status === 'completed';
+      // 'completed_with_errors' still counts as success for campaign progression
+      // — the build finished, just with some block-verification gaps. The
+      // operator can audit via job.failedBlockCount. Re-running the campaign
+      // structure on a partial result would just queue duplicate work.
+      const success = job.status === 'completed' || job.status === 'completed_with_errors';
       structure.status = success ? 'completed' : (job.status === 'cancelled' ? 'cancelled' : 'failed');
       structure.completedAt = Date.now();
       if (!success && job.error) structure.error = job.error;
@@ -293,6 +313,7 @@ export class CampaignManager {
       clearTimeout(retry);
       this.retryTimers.delete(id);
     }
+    this.noCrewRetryCounts.delete(id);
 
     this.io.emit(CAMPAIGN_EVENTS.CANCELLED, campaign);
     this.eventLog.push({
@@ -333,9 +354,13 @@ export class CampaignManager {
   resumeCampaign(id: string): boolean {
     const campaign = this.campaigns.get(id);
     if (!campaign) return false;
-    if (campaign.status !== 'paused') return false;
+    // Allow resume from both 'paused' (operator-initiated) and 'stalled'
+    // (no-crew auto-halt). Resuming a stalled campaign re-arms the retry
+    // budget so the dispatcher gives the new crew situation a fair shake.
+    if (campaign.status !== 'paused' && campaign.status !== 'stalled') return false;
     campaign.status = 'running';
     campaign.updatedAt = Date.now();
+    this.noCrewRetryCounts.delete(id);
     this.io.emit(CAMPAIGN_EVENTS.RESUMED, campaign);
     this.eventLog.push({
       type: CAMPAIGN_EVENTS.RESUMED,
@@ -352,7 +377,7 @@ export class CampaignManager {
     const campaign = this.campaigns.get(id);
     if (!campaign) return false;
     // If the campaign is still active, first cancel it.
-    if (campaign.status === 'running' || campaign.status === 'paused' || campaign.status === 'pending') {
+    if (campaign.status === 'running' || campaign.status === 'paused' || campaign.status === 'pending' || campaign.status === 'stalled') {
       this.cancelCampaign(id);
     }
     this.campaigns.delete(id);
@@ -426,7 +451,9 @@ export class CampaignManager {
               structure.error = 'Build job missing after restart';
               structure.completedAt = Date.now();
               this.io.emit(CAMPAIGN_EVENTS.STRUCTURE_FAILED, { campaignId: campaign.id, structure });
-            } else if (job.status === 'completed') {
+            } else if (job.status === 'completed' || job.status === 'completed_with_errors') {
+              // Treat partial-but-finished builds as completed on resume — same
+              // logic as the live build:completed listener.
               structure.status = 'completed';
               structure.completedAt = Date.now();
               this.io.emit(CAMPAIGN_EVENTS.STRUCTURE_COMPLETED, { campaignId: campaign.id, structure });
@@ -575,6 +602,9 @@ export class CampaignManager {
         campaign.updatedAt = Date.now();
         for (const name of crew) busyBots.add(name);
         slotsAvailable--;
+        // We made progress — reset the no-crew counter so a later transient
+        // outage gets its full retry budget back.
+        this.noCrewRetryCounts.delete(campaign.id);
 
         this.io.emit(CAMPAIGN_EVENTS.STRUCTURE_STARTED, { campaignId: campaign.id, structure });
         this.eventLog.push({
@@ -616,6 +646,42 @@ export class CampaignManager {
 
   private scheduleRetry(campaignId: string): void {
     if (this.retryTimers.has(campaignId)) return;
+
+    // Bump and check the consecutive empty-crew counter. After
+    // NO_CREW_MAX_RETRIES we stall the campaign instead of scheduling another
+    // 30s timer — an operator needs to intervene (spawn bots, free idle
+    // bots, etc.) before progress is possible. Don't transition to 'failed':
+    // the structures are still pending and resumable.
+    const prev = this.noCrewRetryCounts.get(campaignId) ?? 0;
+    const next = prev + 1;
+    this.noCrewRetryCounts.set(campaignId, next);
+
+    if (next >= NO_CREW_MAX_RETRIES) {
+      const campaign = this.campaigns.get(campaignId);
+      if (campaign && campaign.status === 'running') {
+        campaign.status = 'stalled';
+        campaign.updatedAt = Date.now();
+        // Event name kept inline — CAMPAIGN_EVENTS lives in CommandTypes.ts
+        // which is out of scope for this change. Mirror the existing
+        // 'campaign:<event>' naming convention.
+        const STALLED_EVENT = 'campaign:stalled';
+        this.io.emit(STALLED_EVENT, { campaignId, reason: 'no-crew', retries: next });
+        this.eventLog.push({
+          type: STALLED_EVENT,
+          botName: 'campaign',
+          description: `Campaign ${campaign.name} stalled: no crew available after ${next} retries (~${Math.round(next * NO_CREW_RETRY_MS / 60_000)} min). Resume manually after spawning bots.`,
+          metadata: { campaignId, retries: next, reason: 'no-crew' },
+        });
+        logger.warn(
+          { campaignId, name: campaign.name, retries: next },
+          'Campaign stalled — no crew available after max retries',
+        );
+        this.noCrewRetryCounts.delete(campaignId);
+        this.schedulePersist();
+      }
+      return;
+    }
+
     const timer = setTimeout(() => {
       this.retryTimers.delete(campaignId);
       this.tryDispatch(campaignId);

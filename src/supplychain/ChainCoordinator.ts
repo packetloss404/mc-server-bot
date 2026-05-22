@@ -2,6 +2,7 @@ import { BotManager } from '../bot/BotManager';
 import { Server as SocketIOServer } from 'socket.io';
 import { EventLog } from '../server/EventLog';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
@@ -42,6 +43,15 @@ export interface SupplyChain {
   status: ChainStatus;
   currentStageIndex: number;
   loop: boolean;
+  /**
+   * Upper bound on full passes through `stages` when `loop===true`. Without
+   * this, a loop chain runs forever even when no one is watching, eating
+   * resources and skill-cache slots. Defaults to DEFAULT_MAX_ITERATIONS
+   * (1000) at create time. Ignored when `loop===false`.
+   */
+  maxIterations?: number;
+  /** Completed full passes through the stages list. Bumped on each loop. */
+  iterations?: number;
   createdAt: number;
   updatedAt: number;
 }
@@ -56,6 +66,14 @@ export interface ChainTemplate {
     outputItems?: { item: string; count: number }[];
   }[];
 }
+
+/**
+ * Default cap on full passes through a loop chain. At ~10s/stage and 2-3
+ * stages this is roughly 5-8 hours of work — far past anything a human will
+ * actually wait for, but high enough that legitimate long-running loops
+ * (overnight resource farms, etc.) don't choke on the default.
+ */
+const DEFAULT_MAX_ITERATIONS = 1000;
 
 // ── Built-in templates ──────────────────────────────────────
 
@@ -144,8 +162,9 @@ export class ChainCoordinator {
   private save(): void {
     try {
       const arr = [...this.chains.values()];
-      const dir = path.dirname(this.dataPath);
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      // Use atomicWriteJsonSync (write-to-tmp + rename) so a crash mid-save
+      // can't leave a half-written supply_chains.json behind. The helper
+      // also handles mkdir-if-missing internally.
       atomicWriteJsonSync(this.dataPath, arr);
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to save supply chains');
@@ -174,6 +193,12 @@ export class ChainCoordinator {
     templateId?: string;
     stages?: ChainStage[];
     loop?: boolean;
+    /**
+     * Per-stage maximum iterations when `loop===true`. Defaults to
+     * DEFAULT_MAX_ITERATIONS (1000). Must be a positive integer. Ignored
+     * when `loop===false`.
+     */
+    maxIterations?: number;
     botAssignments?: Record<number, string>;
     chestLocations?: Record<number, { input?: ChestLocation; output?: ChestLocation }>;
   }): SupplyChain {
@@ -213,13 +238,33 @@ export class ChainCoordinator {
       throw new Error('Either templateId or stages must be provided');
     }
 
-    // Validate bot names
-    for (const stage of stages) {
-      if (stage.botName) {
-        const bot = this.botManager.getWorker(stage.botName);
-        if (!bot) {
-          throw new Error(`Bot not found: ${stage.botName}`);
+    // Validate bot assignments at create time. Previously a stage could be
+    // created with an empty botName="" (e.g. when the caller forgot to set
+    // botAssignments[idx]) and the chain would only blow up at first
+    // execution. Now we reject up-front with the bad stage index so the API
+    // caller can fix it immediately.
+    for (let idx = 0; idx < stages.length; idx++) {
+      const stage = stages[idx];
+      if (!stage.botName || stage.botName.trim() === '') {
+        throw new Error(`Stage ${idx} has no bot assigned (botAssignments[${idx}] is missing or empty)`);
+      }
+      const bot = this.botManager.getWorker(stage.botName);
+      if (!bot) {
+        throw new Error(`Stage ${idx} references unknown bot: "${stage.botName}"`);
+      }
+    }
+
+    // Validate maxIterations if loop mode is on. A negative or zero value is
+    // a caller bug — silently coercing it would hide the mistake.
+    let maxIterations: number | undefined;
+    if (opts.loop) {
+      if (opts.maxIterations !== undefined) {
+        if (!Number.isFinite(opts.maxIterations) || !Number.isInteger(opts.maxIterations) || opts.maxIterations <= 0) {
+          throw new Error(`maxIterations must be a positive integer, got: ${opts.maxIterations}`);
         }
+        maxIterations = opts.maxIterations;
+      } else {
+        maxIterations = DEFAULT_MAX_ITERATIONS;
       }
     }
 
@@ -231,6 +276,8 @@ export class ChainCoordinator {
       status: 'idle',
       currentStageIndex: 0,
       loop: opts.loop ?? false,
+      maxIterations,
+      iterations: 0,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
@@ -270,6 +317,7 @@ export class ChainCoordinator {
 
     chain.status = 'running';
     chain.currentStageIndex = 0;
+    chain.iterations = 0;
     chain.updatedAt = Date.now();
     this.save();
 
@@ -492,9 +540,18 @@ export class ChainCoordinator {
       const newFailed = last ? failedTasks.length > last.failed : failedTasks.length > 0;
       this.lastObservedCounts.set(stage.id, { completed: completedTasks.length, failed: failedTasks.length });
 
-      const isCompleted = newCompleted && completedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
-      const isFailed = newFailed && failedTasks.some((t: string) => t.includes(taskDesc) || taskDesc.includes(t));
-      const taskFinished = currentTask === null || (!currentTask.includes(taskDesc) && !taskDesc.includes(currentTask ?? ''));
+      // Exact-equality match on the canonical task description stored at
+      // queue time. The old bidirectional includes() let "Mine 12 cobblestone"
+      // collide with "Mine 12 cobblestone and 4 oak_log" (both pass the
+      // substring check), so a stage could spuriously advance on the wrong
+      // bot's completion event. taskDescriptionMap is already keyed by
+      // stageId, so we have the exact string we sent — use it verbatim.
+      const isCompleted = newCompleted && completedTasks.some((t: string) => t === taskDesc);
+      const isFailed = newFailed && failedTasks.some((t: string) => t === taskDesc);
+      // For "task moved on without finishing" detection we still tolerate
+      // currentTask being null (bot is idle) — that's not a substring match,
+      // it's an absence-of-task signal.
+      const taskFinished = currentTask === null || currentTask !== taskDesc;
 
       if (isCompleted) {
         stage.status = 'completed';
@@ -510,9 +567,32 @@ export class ChainCoordinator {
           'Supply chain stage completed',
         );
 
-        // Check if chain should loop
+        // Check if chain should loop. Bound by maxIterations so a chain with
+        // loop:true eventually self-terminates instead of polling forever.
+        // Without this cap an idle cluster could be running a "make 8 ingots
+        // forever" chain weeks after the operator forgot about it.
         if (chain.currentStageIndex >= chain.stages.length && chain.loop) {
-          logger.info({ id: chain.id, name: chain.name }, 'Supply chain looping');
+          const iterations = (chain.iterations ?? 0) + 1;
+          chain.iterations = iterations;
+          const cap = chain.maxIterations ?? DEFAULT_MAX_ITERATIONS;
+          if (iterations >= cap) {
+            chain.status = 'completed';
+            chain.updatedAt = Date.now();
+            this.save();
+            this.io.emit('chain:completed', { id: chain.id, name: chain.name, reason: 'max-iterations', iterations });
+            this.eventLog.push({
+              type: 'chain:completed',
+              botName: chain.stages.map((s) => s.botName).filter(Boolean).join(', '),
+              description: `Supply chain finished: ${chain.name} reached max iterations (${iterations}/${cap})`,
+              metadata: { id: chain.id, iterations, maxIterations: cap, reason: 'max-iterations' },
+            });
+            logger.info(
+              { id: chain.id, name: chain.name, iterations, maxIterations: cap },
+              'Supply chain hit max iterations — terminating loop',
+            );
+            return;
+          }
+          logger.info({ id: chain.id, name: chain.name, iterations, maxIterations: cap }, 'Supply chain looping');
           for (const s of chain.stages) {
             s.status = 'pending';
             s.startedAt = undefined;

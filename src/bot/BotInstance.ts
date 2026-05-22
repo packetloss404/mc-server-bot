@@ -359,7 +359,7 @@ export class BotInstance {
       logger.warn({ bot: this.name, reason }, 'Bot was kicked');
       this.state = BotState.DISCONNECTED;
       this.stopAmbientBehaviors();
-      this.scheduleReconnect();
+      this.scheduleReconnect(reason);
     });
 
     this.bot.on('end', (reason) => {
@@ -516,7 +516,31 @@ export class BotInstance {
     }, 10000);
   }
 
-  private scheduleReconnect(): void {
+  /**
+   * Vanilla server's anti-flood throttle uses TWO different kick messages:
+   *   1. "You must wait 23 seconds before logging-in again." — specific.
+   *   2. "Connection throttled! Please wait before reconnecting." — generic.
+   * When the kicker tells us exactly how long to wait, honor it. When it
+   * just says "throttled", assume ~30s (the vanilla per-IP cooldown).
+   * Returns null when the reason isn't a throttle kick at all (in which
+   * case we fall through to exponential backoff).
+   */
+  private static parseLoginThrottleHint(reason: unknown): number | null {
+    const text = typeof reason === 'string'
+      ? reason
+      : (() => { try { return JSON.stringify(reason); } catch { return String(reason); } })();
+    const specific = /wait\s+(\d+)\s+seconds?\s+before\s+logg/i.exec(text);
+    if (specific) {
+      const secs = parseInt(specific[1], 10);
+      return Number.isFinite(secs) && secs >= 0 ? secs : null;
+    }
+    if (/Connection\s+throttled/i.test(text)) {
+      return 30; // vanilla default; better to overshoot than reset the window
+    }
+    return null;
+  }
+
+  private scheduleReconnect(kickReason?: unknown): void {
     if (this.destroyed) return;
     if (this.pendingConnectTimeout) {
       logger.debug({ bot: this.name }, 'Reconnect already queued, skipping duplicate schedule');
@@ -527,15 +551,29 @@ export class BotInstance {
       return;
     }
 
-    const baseDelay = Math.min(
-      this.config.bots.reconnectDelaySec * Math.pow(2, this.reconnectAttempts) * 1000,
-      30000
-    );
-    const jitter = baseDelay * (Math.random() * 0.5 - 0.25);
-    const delay = Math.max(0, Math.round(baseDelay + jitter));
+    // If the server told us exactly how long to wait, use that (+ 2s safety
+    // buffer + ±20% jitter so 10 bots don't all retry simultaneously).
+    const throttleSecs = BotInstance.parseLoginThrottleHint(kickReason);
+    let delay: number;
+    if (throttleSecs !== null) {
+      const base = (throttleSecs + 2) * 1000;
+      const jitter = base * (Math.random() * 0.4 - 0.2);
+      delay = Math.max(0, Math.round(base + jitter));
+      logger.info(
+        { bot: this.name, throttleSecs, delay, attempt: this.reconnectAttempts + 1 },
+        'Scheduling reconnect (honoring server throttle hint)',
+      );
+    } else {
+      const baseDelay = Math.min(
+        this.config.bots.reconnectDelaySec * Math.pow(2, this.reconnectAttempts) * 1000,
+        30000,
+      );
+      const jitter = baseDelay * (Math.random() * 0.5 - 0.25);
+      delay = Math.max(0, Math.round(baseDelay + jitter));
+      logger.info({ bot: this.name, delay, attempt: this.reconnectAttempts + 1 }, 'Scheduling reconnect');
+    }
     this.reconnectAttempts++;
 
-    logger.info({ bot: this.name, delay, attempt: this.reconnectAttempts }, 'Scheduling reconnect');
     this.pendingConnectTimeout = setTimeout(() => {
       this.pendingConnectTimeout = null;
       void this.connect();

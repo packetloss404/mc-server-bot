@@ -213,6 +213,27 @@ export class BotManager {
     return count;
   }
 
+  /**
+   * Shutdown path: terminate every worker thread cleanly without deleting
+   * them from the in-memory map. This preserves bots.json across restarts —
+   * the old behavior (calling removeAllBots in the SIGTERM handler) had each
+   * removeBot save an empty bots.json, so the next boot loaded zero bots.
+   * Callers should invoke this AFTER any final saveBotsImmediate flush.
+   */
+  async terminateAllWorkers(): Promise<number> {
+    const handles = [...this.workers.values()];
+    await Promise.all(
+      handles.map(async (h) => {
+        try {
+          await h.terminate();
+        } catch (err) {
+          logger.warn({ bot: h.botName, err: (err as any)?.message }, 'Worker terminate failed during shutdown');
+        }
+      }),
+    );
+    return handles.length;
+  }
+
   /** Flush all pending debounced writes across every data manager. */
   shutdownPersistence(): void {
     this.affinityManager.shutdown();

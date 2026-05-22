@@ -265,8 +265,12 @@ async function main() {
     // Close socket connections
     io.close();
 
-    // Disconnect and remove all bots (also saves bots.json)
-    await botManager.removeAllBots();
+    // Flush bots.json FIRST (so next boot loads the full roster), then
+    // terminate workers without removing them from the map. Calling
+    // removeAllBots() here would empty bots.json by saving after each
+    // removeBot() — that's the bug we fought through the May 22 outage.
+    botManager.flush();
+    await botManager.terminateAllWorkers();
 
     // Close the Town DB connection
     try { botManager.getTownManager().shutdown(); } catch { /* swallow */ }

@@ -68,6 +68,15 @@ export class BotInstance {
   private reconnectAttempts = 0;
   private destroyed = false;
   private pendingConnectTimeout: NodeJS.Timeout | null = null;
+  /** Tracked one-shot timers belonging to handshake/wander phases. Cleared on
+   *  disconnect so timeouts queued mid-handshake can't fire on a dead bot. */
+  private pendingTimers: Set<NodeJS.Timeout> = new Set();
+  /** Cleanup callbacks for transient listeners (auth, class-selection, wander
+   *  goal_reached). Run during disconnect to drop listeners that would otherwise
+   *  outlive the bot object. */
+  private pendingListeners: Array<() => void> = [];
+  /** Counter for sampling the verbose path_update debug log (1 in 50). */
+  private pathUpdateLogCounter = 0;
   private llmClient: LLMClient | null;
   private affinityManager: AffinityManager;
   private conversationManager: ConversationManager;
@@ -309,10 +318,16 @@ export class BotInstance {
     });
 
     this.bot.on('path_update', (result: any) => {
+      // path_update fires many times per second while a path is being computed
+      // and would otherwise drown the debug log. Sample 1-in-50 to keep enough
+      // signal for diagnosis without the per-tick spam.
+      this.pathUpdateLogCounter = (this.pathUpdateLogCounter + 1) % 50;
+      if (this.pathUpdateLogCounter !== 0) return;
       logger.debug({
         bot: this.name,
         status: result?.status || 'unknown',
         nodes: Array.isArray(result?.path) ? result.path.length : 0,
+        sampled: '1/50',
       }, 'Pathfinder updated');
     });
 
@@ -364,10 +379,14 @@ export class BotInstance {
     const bot = this.bot;
     let authDone = false;
 
+    const removeMessageListener = () => {
+      try { bot.removeListener('message', onMessage); } catch { /* already gone */ }
+    };
+
     const finish = () => {
       if (authDone) return;
       authDone = true;
-      bot.removeListener('message', onMessage);
+      removeMessageListener();
       logger.info({ bot: this.name }, 'Auth complete');
       onReady();
     };
@@ -388,24 +407,27 @@ export class BotInstance {
     };
 
     bot.on('message', onMessage);
+    // If disconnect arrives mid-handshake, drop the listener so it doesn't
+    // hang on the bot object's emitter past tear-down.
+    this.trackListener(removeMessageListener);
 
     // Proactively try login after 1s, then register after 3s (in case message events were missed)
-    setTimeout(() => {
-      if (!authDone && bot) {
+    this.trackTimeout(() => {
+      if (!authDone && this.bot) {
         logger.info({ bot: this.name }, 'Proactively trying /login');
-        bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
+        this.bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
       }
     }, 1000);
 
-    setTimeout(() => {
-      if (!authDone && bot) {
+    this.trackTimeout(() => {
+      if (!authDone && this.bot) {
         logger.info({ bot: this.name }, 'Proactively trying /register');
-        bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
+        this.bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
       }
     }, 3000);
 
     // Timeout fallback
-    setTimeout(() => {
+    this.trackTimeout(() => {
       if (!authDone) {
         logger.warn({ bot: this.name }, 'Auth timeout, proceeding anyway');
         finish();
@@ -437,10 +459,14 @@ export class BotInstance {
 
     let classDone = false;
 
+    const removeClassListener = () => {
+      try { bot.removeListener('message', onClassMessage); } catch { /* already gone */ }
+    };
+
     const finish = () => {
       if (classDone) return;
       classDone = true;
-      bot.removeListener('message', onClassMessage);
+      removeClassListener();
       onReady();
     };
 
@@ -455,9 +481,11 @@ export class BotInstance {
     };
 
     bot.on('message', onClassMessage);
+    // Drop the listener on disconnect if the handshake hasn't completed yet.
+    this.trackListener(removeClassListener);
 
     // Wait 2 seconds for DyoClasses to give us the selection items (it delays 5 ticks after join)
-    setTimeout(() => {
+    this.trackTimeout(() => {
       if (classDone || !this.bot) return;
 
       // Check if we have class selection items in hotbar (iron_sword in slot 2 = class selection active)
@@ -473,14 +501,14 @@ export class BotInstance {
       bot.setQuickBarSlot(mapping.slot);
 
       // Small delay then activate the item to trigger PlayerInteractEvent
-      setTimeout(() => {
+      this.trackTimeout(() => {
         if (classDone || !this.bot) return;
         bot.activateItem();
       }, 500);
     }, 2000);
 
     // Timeout fallback — don't block forever
-    setTimeout(() => {
+    this.trackTimeout(() => {
       if (!classDone) {
         logger.warn({ bot: this.name }, 'Class selection timeout, proceeding anyway');
         finish();
@@ -607,13 +635,22 @@ export class BotInstance {
         this.state = BotState.WANDERING;
         this.bot.pathfinder.setGoal(new goals.GoalNear(target.x, target.y, target.z, 2));
 
-        this.bot.once('goal_reached', () => {
+        // .once() removes itself after firing, but if disconnect/reconnect
+        // happens before goal_reached, the closure stays attached and races
+        // with the fresh bot instance's listener set. Track removal so the
+        // disconnect path drops it cleanly.
+        const goalReachedBot = this.bot;
+        const onGoalReached = () => {
           if (this.state === BotState.WANDERING) {
             this.state = BotState.IDLE;
           }
+        };
+        goalReachedBot.once('goal_reached', onGoalReached);
+        this.trackListener(() => {
+          try { goalReachedBot.removeListener('goal_reached', onGoalReached); } catch { /* gone */ }
         });
 
-        setTimeout(() => {
+        this.trackTimeout(() => {
           if (this.state === BotState.WANDERING && this.bot) {
             this.bot.pathfinder.setGoal(null);
             this.state = BotState.IDLE;
@@ -1112,8 +1149,14 @@ export class BotInstance {
         // B2 — place torches at night when threatened
         this.maybePlaceTorchForNight();
       } finally {
-        if (this.survivalInterval !== null && !this.destroyed) {
+        // Re-check `destroyed` AND `bot !== null` here so the finally block
+        // doesn't reschedule when disconnect() set destroyed mid-tick (or when
+        // stopAmbientBehaviors cleared the handle). Previously a tight race
+        // could leave a survival timer ticking on a torn-down instance.
+        if (this.survivalInterval !== null && !this.destroyed && this.bot) {
           this.survivalInterval = setTimeout(tick, nextDelay());
+        } else {
+          this.survivalInterval = null;
         }
       }
     };
@@ -1485,6 +1528,47 @@ export class BotInstance {
     }
   }
 
+  /**
+   * Track a setTimeout so it can be cleared during disconnect. The wrapped
+   * callback also auto-removes itself from the set after firing so the set
+   * doesn't grow unbounded across a long-lived bot lifecycle.
+   */
+  private trackTimeout(fn: () => void, delayMs: number): NodeJS.Timeout {
+    const t: NodeJS.Timeout = setTimeout(() => {
+      this.pendingTimers.delete(t);
+      // Belt-and-braces: if disconnect raced us, skip the callback.
+      if (this.destroyed) return;
+      fn();
+    }, delayMs);
+    this.pendingTimers.add(t);
+    return t;
+  }
+
+  /**
+   * Register a cleanup callback (typically a `bot.removeListener` call) that
+   * will run during disconnect. Each cleanup also runs naturally when the
+   * handshake/wander step finishes, so this is purely the safety net for the
+   * disconnect-mid-handshake case.
+   */
+  private trackListener(cleanup: () => void): void {
+    this.pendingListeners.push(cleanup);
+  }
+
+  /**
+   * Clear every tracked timer and run every tracked listener cleanup. Safe to
+   * call multiple times — both collections are emptied as they're drained.
+   */
+  private clearPendingTimersAndListeners(): void {
+    for (const t of this.pendingTimers) {
+      clearTimeout(t);
+    }
+    this.pendingTimers.clear();
+    const cleanups = this.pendingListeners.splice(0);
+    for (const cleanup of cleanups) {
+      try { cleanup(); } catch { /* listener may already be gone */ }
+    }
+  }
+
   private sendLongChat(text: string): void {
     if (!this.bot) return;
     // Mineflayer automatically splits messages at 256 chars.
@@ -1527,6 +1611,16 @@ export class BotInstance {
 
   async disconnect(): Promise<void> {
     this.destroyed = true;
+    // Cancel any queued reconnect / staggered-connect attempt so its timeout
+    // doesn't fire after we've torn the instance down (otherwise the user sees
+    // a spurious "Connecting to..." attempt on a dead bot).
+    if (this.pendingConnectTimeout) {
+      clearTimeout(this.pendingConnectTimeout);
+      this.pendingConnectTimeout = null;
+    }
+    // Drop any handshake-phase timers/listeners (auth, class-selection, wander
+    // goal_reached) that would otherwise outlive the instance.
+    this.clearPendingTimersAndListeners();
     this.stopAmbientBehaviors();
     this.botComms.unregisterBot(this.name);
 

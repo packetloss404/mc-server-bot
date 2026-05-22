@@ -6,6 +6,13 @@ export interface LLMResponse {
   text: string;
   inputTokens?: number;
   outputTokens?: number;
+  /**
+   * Anthropic prompt-cache stats. Present when the provider returns them in
+   * usage; undefined for providers that don't support caching (Gemini,
+   * MiniMax, Ollama, ...).
+   */
+  cacheCreationInputTokens?: number;
+  cacheReadInputTokens?: number;
 }
 
 export interface LLMClient {

@@ -59,6 +59,8 @@ const MOVEMENT_COMMAND_TYPES: ReadonlySet<CommandType> = new Set([
 
 const COMMAND_TIMEOUT_MS = 60_000;
 const TIMEOUT_CHECK_INTERVAL_MS = 10_000;
+const CLEANUP_INTERVAL_MS = 60 * 60 * 1000; // 1 hour
+const MAX_COMMANDS_IN_MEMORY = 5_000;
 
 export class CommandCenter {
   private commands: Map<string, CommandRecord> = new Map();
@@ -72,6 +74,7 @@ export class CommandCenter {
   private markerStore: MarkerStore | null;
   private roleManager: RoleManager | null = null;
   private timeoutTimer: ReturnType<typeof setInterval> | null = null;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(botManager: BotManager, io: SocketIOServer, markerStore?: MarkerStore) {
@@ -80,6 +83,7 @@ export class CommandCenter {
     this.markerStore = markerStore ?? null;
     this.loadFromDisk();
     this.startTimeoutChecker();
+    this.startCleanupTimer();
   }
 
   setRoleManager(roleManager: RoleManager): void {
@@ -91,7 +95,23 @@ export class CommandCenter {
       clearInterval(this.timeoutTimer);
       this.timeoutTimer = null;
     }
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
     this.flush();
+  }
+
+  /**
+   * Atomically remove a command from every internal index. All deletion
+   * paths must route through this helper to keep the maps coherent.
+   */
+  private deleteCommand(id: string): boolean {
+    const existed = this.commands.delete(id);
+    this.startedAtMs.delete(id);
+    this.completedAtMs.delete(id);
+    this.startedCommands.delete(id);
+    return existed;
   }
 
   // -- ID generation --
@@ -118,6 +138,7 @@ export class CommandCenter {
     };
 
     this.commands.set(command.id, command);
+    this.enforceMemoryCap();
     this.emitStatus(command, COMMAND_EVENTS.QUEUED);
     this.persist();
 
@@ -341,11 +362,7 @@ export class CommandCenter {
     let removed = 0;
     for (const [id, cmd] of this.commands) {
       if (new Date(cmd.createdAt).getTime() < cutoff) {
-        this.commands.delete(id);
-        this.startedAtMs.delete(id);
-        this.completedAtMs.delete(id);
-        this.startedCommands.delete(id);
-        removed++;
+        if (this.deleteCommand(id)) removed++;
       }
     }
     if (this.commands.size > MAX_PERSISTED) {
@@ -355,16 +372,48 @@ export class CommandCenter {
       const keep = new Set(sorted.slice(0, MAX_PERSISTED).map((c) => c.id));
       for (const id of [...this.commands.keys()]) {
         if (!keep.has(id)) {
-          this.commands.delete(id);
-          this.startedAtMs.delete(id);
-          this.completedAtMs.delete(id);
-          this.startedCommands.delete(id);
-          removed++;
+          if (this.deleteCommand(id)) removed++;
         }
       }
     }
     this.persist();
     return removed;
+  }
+
+  /**
+   * Enforce the hard in-memory cap by force-evicting the oldest finished
+   * (succeeded/failed/cancelled) commands. Active commands (queued/started)
+   * are preserved so we never silently drop work in flight.
+   */
+  private enforceMemoryCap(): number {
+    if (this.commands.size <= MAX_COMMANDS_IN_MEMORY) return 0;
+
+    const finished = [...this.commands.values()]
+      .filter((c) => c.status === 'succeeded' || c.status === 'failed' || c.status === 'cancelled')
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+    const overflow = this.commands.size - MAX_COMMANDS_IN_MEMORY;
+    let removed = 0;
+    for (let i = 0; i < finished.length && removed < overflow; i++) {
+      if (this.deleteCommand(finished[i].id)) removed++;
+    }
+    if (removed > 0) {
+      logger.warn(
+        { removed, capacity: MAX_COMMANDS_IN_MEMORY, remaining: this.commands.size },
+        'CommandCenter: hard memory cap exceeded, evicted oldest finished commands',
+      );
+    }
+    return removed;
+  }
+
+  private startCleanupTimer(): void {
+    this.cleanupTimer = setInterval(() => {
+      try {
+        this.cleanup();
+      } catch (err) {
+        logger.error({ err }, 'CommandCenter: periodic cleanup failed');
+      }
+    }, CLEANUP_INTERVAL_MS);
   }
 
   shutdown(): void {
@@ -376,6 +425,10 @@ export class CommandCenter {
     if (this.timeoutTimer) {
       clearInterval(this.timeoutTimer);
       this.timeoutTimer = null;
+    }
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
     }
     this.flush();
   }

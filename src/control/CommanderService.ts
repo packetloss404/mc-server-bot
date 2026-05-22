@@ -884,7 +884,7 @@ export class CommanderService {
       try {
         parsed = JSON.parse(jsonText);
       } catch {
-        logger.warn({ input: trimmedInput, text: response.text.slice(0, 200), latencyMs }, 'Commander: LLM returned invalid JSON');
+        logger.warn({ text: response.text.slice(0, 80), latencyMs }, 'Commander: LLM returned invalid JSON');
         return null; // fall through to regex
       }
 

@@ -24,6 +24,12 @@ export interface TaskAcceptanceVerdict {
 
 const OVERRIDE_EXPIRY_MS = 5 * 60 * 1000;
 const APPROVAL_EXPIRY_MS = 5 * 60 * 1000;
+/**
+ * Hard-stop starvation timeout for pending approval requests. After this
+ * window the request is auto-rejected to keep the approval queue from
+ * growing without bound when no human ever decides.
+ */
+const APPROVAL_STARVATION_MS = 60 * 60 * 1000;
 
 export class RoleManager {
   private assignments: RoleAssignmentRecord[] = [];
@@ -386,6 +392,27 @@ export class RoleManager {
       : this.assignments;
 
     const now = Date.now();
+
+    // Starvation guard: auto-reject pending approval requests that have
+    // been sitting longer than the starvation window. Prevents the
+    // approval queue from growing without bound when no human decides.
+    let starvationChanged = false;
+    for (const request of this.approvalRequests) {
+      if (request.status !== 'pending') continue;
+      if (now - request.createdAt < APPROVAL_STARVATION_MS) continue;
+      request.status = 'rejected';
+      request.decidedAt = now;
+      request.decisionNote = 'expired';
+      starvationChanged = true;
+      logger.warn(
+        { approvalId: request.id, botName: request.botName, ageMs: now - request.createdAt },
+        'RoleManager: pending approval auto-rejected due to starvation timeout',
+      );
+    }
+    if (starvationChanged) {
+      this.emit();
+      this.save();
+    }
 
     for (const assignment of candidates) {
       if (assignment.autonomyLevel === 'manual') continue;

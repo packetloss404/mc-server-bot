@@ -44,6 +44,64 @@ const COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 const PID_COOKIE_NAME = 'pid';
 const PID_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 30; // 30 days
 
+/**
+ * Per-process random fallback used to sign `pid` cookies when no devSecret is
+ * configured. Replaces the previous hardcoded string `'dyobot-session-fallback'`,
+ * which let anyone with the source forge a valid pid cookie. The new key is
+ * regenerated each restart, so unauthenticated single-user local dev still
+ * works but cookies don't survive a process restart (which is the safer
+ * default — set `auth.devSecret` in config.yml for stable sessions).
+ */
+const FALLBACK_SIGNING_KEY = crypto.randomBytes(32).toString('hex');
+
+/**
+ * Constant-time comparison for secret-equality checks. Wraps
+ * `crypto.timingSafeEqual` so length-mismatched inputs don't crash and
+ * undefined operands return false. Use everywhere a `===` would compare
+ * an attacker-controlled string against a server secret.
+ */
+function secretsEqual(a: string | undefined | null, b: string | undefined | null): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const bufA = Buffer.from(a);
+  const bufB = Buffer.from(b);
+  if (bufA.length !== bufB.length) return false;
+  return crypto.timingSafeEqual(bufA, bufB);
+}
+
+// ── Login rate limiter ────────────────────────────────────────────────
+// Per-IP sliding window. Only failed attempts count. Successful logins
+// neither increment nor clear (so a successful login under attack is
+// still counted only against legitimate misuses). 5 failures / 15 min,
+// 429 with Retry-After header above that.
+const LOGIN_RATE_LIMIT_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_RATE_LIMIT_MAX_FAILURES = 5;
+const loginFailures = new Map<string, number[]>();
+
+function loginRateLimitState(ip: string): { allowed: true } | { allowed: false; retryAfterSec: number } {
+  const now = Date.now();
+  const cutoff = now - LOGIN_RATE_LIMIT_WINDOW_MS;
+  const attempts = (loginFailures.get(ip) ?? []).filter((t) => t > cutoff);
+  if (attempts.length === 0) {
+    loginFailures.delete(ip);
+    return { allowed: true };
+  }
+  loginFailures.set(ip, attempts);
+  if (attempts.length >= LOGIN_RATE_LIMIT_MAX_FAILURES) {
+    const oldest = attempts[0];
+    const retryAfterMs = oldest + LOGIN_RATE_LIMIT_WINDOW_MS - now;
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil(retryAfterMs / 1000)) };
+  }
+  return { allowed: true };
+}
+
+function recordLoginFailure(ip: string): void {
+  const now = Date.now();
+  const cutoff = now - LOGIN_RATE_LIMIT_WINDOW_MS;
+  const attempts = (loginFailures.get(ip) ?? []).filter((t) => t > cutoff);
+  attempts.push(now);
+  loginFailures.set(ip, attempts);
+}
+
 function readCookie(req: Request, name: string): string | undefined {
   const header = req.headers.cookie;
   if (!header) return undefined;
@@ -79,9 +137,9 @@ export function isDashboardAuthenticated(req: Request): boolean {
   const secret = process.env.DASHBOARD_AUTH_SECRET;
   if (!secret) return true;
   const bearer = readBearer(req);
-  if (bearer && bearer === secret) return true;
+  if (bearer && secretsEqual(bearer, secret)) return true;
   const cookie = readCookie(req, COOKIE_NAME);
-  if (cookie && cookie === secret) return true;
+  if (cookie && secretsEqual(cookie, secret)) return true;
   return false;
 }
 
@@ -294,9 +352,10 @@ export function isPlayerAuthEnforced(): boolean {
 /** Derive the signing key for the `pid` cookie HMAC. */
 function getSessionSigningKey(): string {
   // Mix in a stable suffix so a leaked dev secret alone can't be used as a
-  // session signing key for other purposes. Acceptable for dev — followup
-  // would migrate to a generated server key persisted on disk.
-  const base = getDevSecret() ?? 'dyobot-session-fallback';
+  // session signing key for other purposes. When no devSecret is configured
+  // we fall back to a per-process random key (FALLBACK_SIGNING_KEY) — the
+  // previous hardcoded literal let anyone with the source forge cookies.
+  const base = getDevSecret() ?? FALLBACK_SIGNING_KEY;
   return `${base}::pid`;
 }
 
@@ -362,16 +421,31 @@ export function getSessionPlayerName(req: Request): string | null {
  */
 export function isLegacyAuthRequested(req: Request): boolean {
   const requested = String((req.query as Record<string, unknown>)?.legacyAuth ?? '') === 'true';
-  if (requested) {
+  if (!requested) return false;
+
+  // Followup #66 — past the sunset date the fallback is dead. Callers must
+  // switch to the cookie-based session flow. We still log so production
+  // can spot late-migrating callers.
+  const sunsetMs = Date.parse(LEGACY_AUTH_SUNSET_DATE);
+  if (Number.isFinite(sunsetMs) && Date.now() > sunsetMs) {
     logger.warn(
       {
         path: req.originalUrl?.split('?')[0] ?? req.path,
         sunsetDate: LEGACY_AUTH_SUNSET_DATE,
       },
-      'auth: legacy ?legacyAuth=true fallback exercised — caller should migrate to /api/auth/login session cookie',
+      'auth: legacy ?legacyAuth=true REJECTED — sunset date has passed; caller must use /api/auth/login session cookie',
     );
+    return false;
   }
-  return requested;
+
+  logger.warn(
+    {
+      path: req.originalUrl?.split('?')[0] ?? req.path,
+      sunsetDate: LEGACY_AUTH_SUNSET_DATE,
+    },
+    'auth: legacy ?legacyAuth=true fallback exercised — caller should migrate to /api/auth/login session cookie',
+  );
+  return true;
 }
 
 function buildPidCookie(req: Request, value: string, clear: boolean): string {
@@ -385,6 +459,19 @@ function buildPidCookie(req: Request, value: string, clear: boolean): string {
  */
 export function registerAuthRoutes(app: import('express').Application): void {
   app.post('/api/auth/login', (req: Request, res: Response): void => {
+    const ip = req.ip || (req.socket.remoteAddress ?? 'unknown');
+
+    // ── Rate limit: 5 failed attempts per IP per 15 min ───────────────
+    const rl = loginRateLimitState(ip);
+    if (!rl.allowed) {
+      res.setHeader('Retry-After', String(rl.retryAfterSec));
+      res.status(429).json({
+        error: 'too many login attempts',
+        retryAfterSec: rl.retryAfterSec,
+      });
+      return;
+    }
+
     const body = (req.body ?? {}) as { secret?: unknown; playerName?: unknown };
     const provided = typeof body.secret === 'string' ? body.secret : undefined;
     const playerName = typeof body.playerName === 'string' ? body.playerName.trim() : '';
@@ -397,7 +484,8 @@ export function registerAuthRoutes(app: import('express').Application): void {
     // ── Dashboard-secret gate (legacy + dashboard auth) ──────────────
     const dashSecret = process.env.DASHBOARD_AUTH_SECRET;
     if (dashSecret) {
-      if (typeof provided !== 'string' || provided !== dashSecret) {
+      if (!secretsEqual(provided, dashSecret)) {
+        recordLoginFailure(ip);
         res.status(401).json({ error: 'invalid secret' });
         return;
       }
@@ -417,7 +505,8 @@ export function registerAuthRoutes(app: import('express').Application): void {
       }
       const devSecret = getDevSecret();
       if (devSecret) {
-        if (typeof provided !== 'string' || provided !== devSecret) {
+        if (!secretsEqual(provided, devSecret)) {
+          recordLoginFailure(ip);
           res.status(401).json({ error: 'invalid secret' });
           return;
         }

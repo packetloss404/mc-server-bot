@@ -281,7 +281,7 @@ export class CommanderService {
     return [...this.drafts];
   }
 
-  saveDraft(data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }): CommanderDraft {
+  saveDraft(data: { input: string; plan?: CommanderPlan; notes?: string; id?: string }): CommanderDraft | null {
     const now = new Date().toISOString();
 
     if (data.id) {
@@ -295,6 +295,13 @@ export class CommanderService {
         logger.info({ draftId: existing.id }, 'Commander draft updated');
         return existing;
       }
+      // Caller supplied an id but no draft with that id exists. Previously
+      // we silently fell through to create a new draft, ignoring the id —
+      // confusing contract that hid a typo'd id behind a 201 response and
+      // made IDOR-style misuse cheap. Now we surface "not found" so the
+      // caller has to explicitly drop the id field to create.
+      logger.warn({ draftId: data.id }, 'Commander saveDraft: id provided but no matching draft');
+      return null;
     }
 
     const draft: CommanderDraft = {

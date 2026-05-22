@@ -52,6 +52,23 @@ import {
 import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
 
+// ── Input validation helpers ─────────────────────────────────────────
+// Bot names become filenames (e.g. `data/<name>.json`) and worker thread
+// names; Minecraft usernames are `[A-Za-z0-9_]{3,16}` so we enforce that.
+const BOT_NAME_RE = /^[A-Za-z0-9_]{3,16}$/;
+function isSafeBotName(name: unknown): name is string {
+  return typeof name === 'string' && BOT_NAME_RE.test(name);
+}
+
+// Filenames used in `path.join(schematicsDir, name)` — reject anything that
+// would escape the directory (path separators, `..`, NUL bytes, etc.).
+function isSafeFilename(name: unknown): name is string {
+  if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
+  if (name.includes('\0') || name.includes('..')) return false;
+  // basename() strips any path components; equality means there were none.
+  return path.basename(name) === name;
+}
+
 /**
  * Minimal worker-handle shape consumed by `createGrantHandler`. Defined
  * structurally so the test suite can stub it without instantiating a real
@@ -359,7 +376,12 @@ export function createAPIServer(
   // chat, inventory, build progress streamed to any anonymous connection).
   const io = new SocketIOServer(httpServer, {
     cors: {
-      origin: true,
+      // Reuse the same origin policy as the REST API: allowlist when
+      // DASHBOARD_AUTH_SECRET is set, reflective only in unauth'd local dev.
+      // Previously `origin: true` reflected any origin even with auth on,
+      // which let attacker-controlled sites subscribe to bot positions,
+      // chat, inventory in real time.
+      origin: corsOrigin,
       methods: ['GET', 'POST'],
       credentials: true,
     },
@@ -610,6 +632,13 @@ export function createAPIServer(
 
     if (!name || !personality) {
       res.status(400).json({ error: 'name and personality are required' });
+      return;
+    }
+    if (!isSafeBotName(name)) {
+      res.status(400).json({
+        error: 'invalid bot name',
+        hint: 'must match /^[A-Za-z0-9_]{3,16}$/ (Minecraft username rules)',
+      });
       return;
     }
 
@@ -1823,6 +1852,10 @@ export function createAPIServer(
       return;
     }
     const draft = commanderService.saveDraft({ input: input.trim(), plan, notes, id });
+    if (!draft) {
+      res.status(404).json({ error: 'Draft not found' });
+      return;
+    }
     res.status(201).json({ draft });
   });
 
@@ -1957,6 +1990,10 @@ export function createAPIServer(
   app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
     try {
       const filename = decodeURIComponent(req.params.filename as string);
+      if (!isSafeFilename(filename)) {
+        res.status(400).json({ error: 'invalid schematic filename' });
+        return;
+      }
       const info = await buildCoordinator.getSchematicInfoAsync(filename);
       if (!info) {
         res.status(404).json({ error: 'Schematic not found' });
@@ -1981,6 +2018,10 @@ export function createAPIServer(
     const originRequired = originMode === 'coords';
     if (!schematicFile || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
       res.status(400).json({ error: 'schematicFile and botNames[] are required' });
+      return;
+    }
+    if (!isSafeFilename(schematicFile)) {
+      res.status(400).json({ error: 'invalid schematicFile' });
       return;
     }
     if (originRequired && !origin) {

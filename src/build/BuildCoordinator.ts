@@ -30,7 +30,7 @@ export interface BuildJob {
   id: string;
   schematicFile: string;
   origin: { x: number; y: number; z: number };
-  status: 'pending' | 'running' | 'gathering' | 'placing' | 'paused' | 'completed' | 'cancelled' | 'failed';
+  status: 'pending' | 'running' | 'gathering' | 'placing' | 'paused' | 'completed' | 'completed_with_errors' | 'cancelled' | 'failed';
   createdAt: number;
   totalBlocks: number;
   placedBlocks: number;
@@ -42,6 +42,18 @@ export interface BuildJob {
    * Populated when `options.autoGather === true`. Empty otherwise.
    */
   gatherPlan?: GatherPlanEntry[];
+  /**
+   * Aggregate count of blocks that failed placement verification across all
+   * assignments. Populated when the build reaches a terminal state so callers
+   * can detect partial builds without re-summing assignment counters.
+   */
+  failedBlockCount?: number;
+  /**
+   * Snapshot of `placedBlocks` taken when `cancelBuild` fires. Lets operators
+   * audit how much of the schematic actually made it into the world before
+   * cancellation. Only set on cancelled jobs.
+   */
+  placedBlocksAtCancel?: number;
 }
 
 /**
@@ -95,6 +107,14 @@ interface SkillChunk {
   /** Original token used for the human description, e.g. "Mine 8 cobblestone". */
   description: string;
 }
+
+/**
+ * Minecraft 1.18+ overworld build-height range. The world below -64 and above
+ * 320 is unbuildable (or doesn't exist), so any origin outside this range is a
+ * caller bug and the build is rejected fast instead of clamping silently.
+ */
+const MIN_BUILD_Y = -64;
+const MAX_BUILD_Y = 320;
 
 /** Upper bound on chunks queued across all bots for a single build. */
 const AUTOGATHER_MAX_CHUNKS = 50;
@@ -437,6 +457,21 @@ export class BuildCoordinator {
 
     if (!fs.existsSync(fullPath)) {
       throw new Error(`Schematic file not found: ${schematicFile}`);
+    }
+
+    // ── Origin Y validation ──
+    // Reject origins outside the Minecraft 1.18+ build-height range up front
+    // instead of letting /setblock fail silently or the bot trip over bedrock
+    // mid-build. We intentionally fail fast rather than clamp — a caller that
+    // asked for y=400 has a bug, not a UX issue.
+    if (
+      !Number.isFinite(origin.y) ||
+      origin.y < MIN_BUILD_Y ||
+      origin.y > MAX_BUILD_Y
+    ) {
+      throw new Error(
+        `Origin Y out of build-height range: ${origin.y} (must be between ${MIN_BUILD_Y} and ${MAX_BUILD_Y})`,
+      );
     }
 
     // Validate bots exist and are connected (via worker IPC)
@@ -857,10 +892,17 @@ export class BuildCoordinator {
 
   cancelBuild(jobId: string): boolean {
     const job = this.jobs.get(jobId);
-    if (!job || job.status === 'completed' || job.status === 'cancelled') return false;
+    if (!job || job.status === 'completed' || job.status === 'completed_with_errors' || job.status === 'cancelled') return false;
 
     this.cancelledJobs.add(jobId);
     job.status = 'cancelled';
+    // Snapshot block-count at cancel time so an operator can audit how much of
+    // the schematic actually made it into the world. We deliberately do NOT
+    // try to roll back placed blocks — that's a separate (out-of-scope)
+    // undo system. Stash on both the job (for /api/builds/:id) and the event
+    // metadata so operators have one number to look at either way.
+    const placedAtCancel = job.placedBlocks;
+    job.placedBlocksAtCancel = placedAtCancel;
     this.schedulePersist();
 
     // Reset bot states
@@ -872,15 +914,18 @@ export class BuildCoordinator {
       }
     }
 
-    this.io.emit('build:cancelled', { jobId });
+    this.io.emit('build:cancelled', { jobId, placedBlocksAtCancel: placedAtCancel, totalBlocks: job.totalBlocks });
     this.eventLog.push({
       type: 'build:cancelled',
       botName: job.assignments.map((a) => a.botName).join(', '),
-      description: `Build cancelled: ${job.schematicFile}`,
-      metadata: { jobId },
+      description: `Build cancelled: ${job.schematicFile} (${placedAtCancel}/${job.totalBlocks} blocks placed)`,
+      metadata: { jobId, placedBlocksAtCancel: placedAtCancel, totalBlocks: job.totalBlocks },
     });
 
-    logger.info({ jobId }, 'Build cancelled');
+    logger.info(
+      { jobId, placedBlocksAtCancel: placedAtCancel, totalBlocks: job.totalBlocks },
+      'Build cancelled — partial placement left in world for operator audit',
+    );
     return true;
   }
 
@@ -1104,7 +1149,17 @@ export class BuildCoordinator {
     // Final status
     if (!this.cancelledJobs.has(jobId)) {
       const allCompleted = assignments.every((a) => a.status === 'completed');
-      job.status = allCompleted ? 'completed' : 'failed';
+      // Sum up failure counters from every bot. If anything failed verification
+      // we report 'completed_with_errors' so dashboards / callers can tell a
+      // partial build apart from a clean one — silent 'completed' would hide
+      // missing-material / out-of-stock failures that left holes in the build.
+      const failedBlockCount = assignments.reduce((sum, a) => sum + (a.failedBlocks ?? 0), 0);
+      job.failedBlockCount = failedBlockCount;
+      if (allCompleted) {
+        job.status = failedBlockCount > 0 ? 'completed_with_errors' : 'completed';
+      } else {
+        job.status = 'failed';
+      }
 
       const hooks = this.jobHooks.get(jobId);
       if (hooks?.onCompleted) {
@@ -1118,12 +1173,12 @@ export class BuildCoordinator {
       this.eventLog.push({
         type: 'build:completed',
         botName: assignments.map((a) => a.botName).join(', '),
-        description: `Build ${job.status}: ${job.schematicFile} (${job.placedBlocks}/${job.totalBlocks} blocks)`,
-        metadata: { jobId, status: job.status },
+        description: `Build ${job.status}: ${job.schematicFile} (${job.placedBlocks}/${job.totalBlocks} blocks, ${failedBlockCount} failed)`,
+        metadata: { jobId, status: job.status, failedBlockCount },
       });
 
       logger.info(
-        { jobId, status: job.status, placed: job.placedBlocks, total: job.totalBlocks },
+        { jobId, status: job.status, placed: job.placedBlocks, total: job.totalBlocks, failedBlockCount },
         'Build finished',
       );
       this.persistJobs();

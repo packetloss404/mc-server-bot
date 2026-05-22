@@ -1,5 +1,44 @@
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+/** Hard cap on every API request — prevents the dashboard from hanging on a
+ *  wedged backend. Anything that legitimately takes longer should stream or
+ *  paginate instead of being one fetch. */
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/**
+ * Minimal logging helper. The web bundle doesn't share the server's logger
+ * module, so we wrap `console` to keep call sites readable and provide a
+ * single seam if we ever wire up a real client logger.
+ */
+export const logger = {
+  error: (...args: unknown[]) => {
+    // eslint-disable-next-line no-console
+    console.error('[api]', ...args);
+  },
+  warn: (...args: unknown[]) => {
+    // eslint-disable-next-line no-console
+    console.warn('[api]', ...args);
+  },
+};
+
+/**
+ * Wrap `fetch` with an AbortController so requests can't hang indefinitely.
+ * Returns the resolved Response or throws (timeout → AbortError, network → TypeError).
+ */
+async function fetchWithTimeout(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number = REQUEST_TIMEOUT_MS,
+): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * Redirect to the login page when a 401 comes back from the backend.
  * Guarded so we only fire it once per page-load and never during the
@@ -16,7 +55,7 @@ function handleUnauthorized(): void {
 }
 
 async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
@@ -26,14 +65,17 @@ async function fetchJSON<T>(path: string, options?: RequestInit): Promise<T> {
     throw new Error('unauthorized');
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json().catch((err) => {
+      logger.warn(`failed to parse error body for ${path}`, err);
+      return {};
+    });
     throw new Error(body.error || `API error: ${res.status}`);
   }
   return res.json();
 }
 
 async function fetchVoid(path: string, options?: RequestInit): Promise<void> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetchWithTimeout(`${API_BASE}${path}`, {
     credentials: 'include',
     ...options,
     headers: { 'Content-Type': 'application/json', ...options?.headers },
@@ -43,8 +85,30 @@ async function fetchVoid(path: string, options?: RequestInit): Promise<void> {
     throw new Error('unauthorized');
   }
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
+    const body = await res.json().catch((err) => {
+      logger.warn(`failed to parse error body for ${path}`, err);
+      return {};
+    });
     throw new Error(body.error || `API error: ${res.status}`);
+  }
+}
+
+/**
+ * Safe wrapper for fetch helpers used in fire-and-forget contexts (effects,
+ * pollers, socket re-fetches). Logs errors to the console so they're visible
+ * during dev/debugging but returns a caller-supplied default so the caller
+ * doesn't have to deal with rejected promises.
+ */
+export async function safeFetch<T>(
+  fetcher: () => Promise<T>,
+  defaultValue: T,
+  context = 'request',
+): Promise<T> {
+  try {
+    return await fetcher();
+  } catch (err) {
+    logger.error(`${context} failed`, err);
+    return defaultValue;
   }
 }
 
@@ -606,12 +670,18 @@ export const api = {
   uploadSchematic: async (file: File) => {
     const form = new FormData();
     form.append('file', file);
-    const res = await fetch(`${API_BASE}/api/schematics/upload`, {
-      method: 'POST',
-      body: form,
-    });
+    // Uploads can be larger than typical JSON requests — give them a generous
+    // timeout while still capping at a finite value so the UI can recover.
+    const res = await fetchWithTimeout(
+      `${API_BASE}/api/schematics/upload`,
+      { method: 'POST', body: form, credentials: 'include' },
+      60_000,
+    );
     if (!res.ok) {
-      const body = await res.json().catch(() => ({} as { error?: string }));
+      const body = await res.json().catch((err) => {
+        logger.warn('failed to parse schematic upload error body', err);
+        return {} as { error?: string };
+      });
       throw new Error(body.error || `Upload failed: ${res.status}`);
     }
     return res.json() as Promise<{ schematic: SchematicInfo }>;

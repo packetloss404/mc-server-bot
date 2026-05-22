@@ -16,7 +16,7 @@ import {
   useMovementTrailStore,
   type DecisionRecord,
 } from '@/lib/store';
-import { api } from '@/lib/api';
+import { api, safeFetch } from '@/lib/api';
 import { setFaviconStatus } from '@/lib/favicon';
 import { toast as showToast, showBanner, dismissBanner } from '@/components/Toast';
 
@@ -30,10 +30,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
   } = useBotStore();
 
   const fetchAll = useCallback(() => {
-    api.getBots().then((data) => setBots(data.bots)).catch(console.error);
-    api.getWorld().then((data) => setWorld(data)).catch(() => {});
-    api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
-    api.listCampaigns().then((d) => useCampaignStore.getState().setCampaigns(d.campaigns)).catch(() => {});
+    safeFetch(() => api.getBots(), { bots: [] }, 'getBots').then((data) => setBots(data.bots));
+    safeFetch(() => api.getWorld(), null as any, 'getWorld').then((data) => { if (data) setWorld(data); });
+    safeFetch(() => api.getPlayers(), { players: [] }, 'getPlayers').then((data) => setPlayers(data.players));
+    safeFetch(() => api.listCampaigns(), { campaigns: [] }, 'listCampaigns').then((d) => useCampaignStore.getState().setCampaigns(d.campaigns));
   }, [setBots, setWorld, setPlayers]);
 
   useEffect(() => {
@@ -43,26 +43,44 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     // Polling is a fallback — sockets already push real-time updates.
     // Long intervals to keep server CPU low; sockets cover the active path.
     const pollInterval = setInterval(() => {
-      api.getBots().then((data) => setBots(data.bots)).catch(() => {});
+      safeFetch(() => api.getBots(), { bots: [] }, 'getBots(poll)').then((data) => setBots(data.bots));
     }, 15000);
 
     const worldInterval = setInterval(() => {
-      api.getWorld().then((data) => setWorld(data)).catch(() => {});
+      safeFetch(() => api.getWorld(), null as any, 'getWorld(poll)').then((data) => { if (data) setWorld(data); });
     }, 60000);
 
     const playerInterval = setInterval(() => {
-      api.getPlayers().then((data) => setPlayers(data.players)).catch(() => {});
+      safeFetch(() => api.getPlayers(), { players: [] }, 'getPlayers(poll)').then((data) => setPlayers(data.players));
     }, 30000);
 
     // Socket.IO
     const socket = getSocket();
 
-    socket.on('connect', () => {
+    // ── Consolidated connect/disconnect listeners ──────────────────────────
+    // Previously these events were bound twice (once for store state, again
+    // for favicon/banner UI). On every reconnect both handlers fired in
+    // duplicate. We now register a single named handler per event that runs
+    // all side-effects in sequence, and pair every `.on` with a `.off` that
+    // references the exact handler so cleanup is precise.
+    const onConnect = () => {
       setConnected(true);
-      // Re-fetch all state on reconnection to avoid stale data
+      // Re-fetch all state on reconnection to avoid stale data.
       fetchAll();
-    });
-    socket.on('disconnect', () => setConnected(false));
+      // Favicon + banner: clear the "lost connection" UI.
+      setFaviconStatus('green');
+      dismissBanner(CONNECTION_BANNER_ID);
+    };
+    const onDisconnect = () => {
+      setConnected(false);
+      setFaviconStatus('red');
+      showBanner('Lost connection to server — retrying...', 'warning', {
+        dismissible: false,
+        id: CONNECTION_BANNER_ID,
+      });
+    };
+    socket.on('connect', onConnect);
+    socket.on('disconnect', onDisconnect);
 
     socket.on('bot:position', (data: { bot: string; x: number; y: number; z: number }) => {
       updatePosition(data.bot, data.x, data.y, data.z);
@@ -162,28 +180,17 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     };
     socket.on('bot:decision', onBotDecision);
 
-    // ── Favicon-as-status + connection banner ──────────────────────────────
+    // ── Favicon-as-status (reconnect attempts) ────────────────────────────
     // Drive favicon from connection state. Set initial color from current
-    // socket state so we don't wait for the next event.
+    // socket state so we don't wait for the next event. The connected/
+    // disconnected transitions are handled by onConnect/onDisconnect above —
+    // only the in-flight reconnect indicator is bound here.
     setFaviconStatus(socket.connected ? 'green' : 'amber');
 
-    const onFaviconConnect = () => {
-      setFaviconStatus('green');
-      dismissBanner(CONNECTION_BANNER_ID);
-    };
-    const onFaviconDisconnect = () => {
-      setFaviconStatus('red');
-      showBanner('Lost connection to server — retrying...', 'warning', {
-        dismissible: false,
-        id: CONNECTION_BANNER_ID,
-      });
-    };
     const onReconnectAttempt = () => {
       setFaviconStatus('amber');
     };
-    socket.on('connect', onFaviconConnect);
-    socket.on('disconnect', onFaviconDisconnect);
-    // socket.io-client emits these on the socket's manager; bind via .io too.
+    // socket.io-client emits these on the socket's manager; bind via .io.
     socket.io.on('reconnect_attempt', onReconnectAttempt);
     socket.io.on('reconnect_error', onReconnectAttempt);
 
@@ -263,12 +270,10 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       clearInterval(worldInterval);
       clearInterval(playerInterval);
       socket.off('bot:died', onBotDied);
-      socket.off('connect', onFaviconConnect);
-      socket.off('disconnect', onFaviconDisconnect);
       socket.io.off('reconnect_attempt', onReconnectAttempt);
       socket.io.off('reconnect_error', onReconnectAttempt);
-      socket.off('connect');
-      socket.off('disconnect');
+      socket.off('connect', onConnect);
+      socket.off('disconnect', onDisconnect);
       socket.off('bot:position');
       socket.off('bot:health');
       socket.off('bot:state');

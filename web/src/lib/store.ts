@@ -49,6 +49,9 @@ interface BotStore {
   setChains: (chains: any[]) => void;
   incrementUnreadChats: () => void;
   resetUnreadChats: () => void;
+  /** Reset transient state. Stores are singletons across navigations, so we
+   *  expose this for tests + future logout/teardown paths. */
+  reset: () => void;
 }
 
 function toBotList(byId: Record<string, BotLiveData>): BotLiveData[] {
@@ -153,6 +156,19 @@ export const useBotStore = create<BotStore>((set) => ({
     set((state) => ({ unreadChats: state.unreadChats + 1 })),
 
   resetUnreadChats: () => set({ unreadChats: 0 }),
+
+  reset: () => set({
+    botsById: {},
+    botList: [],
+    playersById: {},
+    playerList: [],
+    activityFeed: [],
+    connected: false,
+    world: null,
+    unreadChats: 0,
+    activeBuild: null,
+    chains: [],
+  }),
 }));
 
 // ─── Control Store (multi-bot selection & command history) ───
@@ -168,6 +184,7 @@ interface ControlStore {
   setSelection: (botNames: string[]) => void;
   setCommands: (commands: CommandRecord[]) => void;
   upsertCommand: (command: CommandRecord) => void;
+  reset: () => void;
 }
 
 export const useControlStore = create<ControlStore>((set) => ({
@@ -216,6 +233,7 @@ export const useControlStore = create<ControlStore>((set) => ({
           .slice(0, 100),
       };
     }),
+  reset: () => set({ selectedBotIds: new Set(), commandHistory: [] }),
 }));
 
 // ─── Fleet Store (squads) ───
@@ -229,6 +247,7 @@ interface FleetStore {
   upsertSquad: (squad: Squad) => void;
   removeSquad: (id: string) => void;
   selectSquad: (id: string | null) => void;
+  reset: () => void;
 }
 
 export const useFleetStore = create<FleetStore>((set) => ({
@@ -251,6 +270,7 @@ export const useFleetStore = create<FleetStore>((set) => ({
       selectedSquadId: state.selectedSquadId === id ? null : state.selectedSquadId,
     })),
   selectSquad: (id) => set({ selectedSquadId: id }),
+  reset: () => set({ squads: [], selectedSquadId: null }),
 }));
 
 // ─── Role Store (role assignments, overrides, approvals) ───
@@ -264,6 +284,7 @@ interface RoleStore {
   setApprovals: (approvals: RoleApprovalRecord[]) => void;
   upsertAssignment: (assignment: RoleAssignmentRecord) => void;
   removeAssignment: (id: string) => void;
+  reset: () => void;
 }
 
 export const useRoleStore = create<RoleStore>((set) => ({
@@ -286,6 +307,8 @@ export const useRoleStore = create<RoleStore>((set) => ({
     }),
   removeAssignment: (id) =>
     set((s) => ({ assignments: s.assignments.filter((a) => a.id !== id) })),
+
+  reset: () => set({ assignments: [], overrides: {}, approvals: [] }),
 
   getOverrideForBot: (botName: string) => {
     const key = botName.toLowerCase();
@@ -313,6 +336,7 @@ interface WorldStore {
   upsertRoute: (route: Route) => void;
   setRoutes: (routes: Route[]) => void;
   removeRoute: (id: string) => void;
+  reset: () => void;
 }
 
 export const useWorldStore = create<WorldStore>((set) => ({
@@ -361,6 +385,8 @@ export const useWorldStore = create<WorldStore>((set) => ({
   setRoutes: (routes) => set({ routes }),
   removeRoute: (id) =>
     set((state) => ({ routes: state.routes.filter((r) => r.id !== id) })),
+
+  reset: () => set({ markers: [], zones: [], routes: [] }),
 }));
 
 // ─── Routine Store ───
@@ -374,6 +400,7 @@ interface RoutineStore {
   updateRoutine: (routine: Routine) => void;
   removeRoutine: (id: string) => void;
   setRecording: (recording: boolean, draft?: RoutineDraft | null) => void;
+  reset: () => void;
 }
 
 export const useRoutineStore = create<RoutineStore>((set) => ({
@@ -397,6 +424,7 @@ export const useRoutineStore = create<RoutineStore>((set) => ({
   removeRoutine: (id) =>
     set((state) => ({ routines: state.routines.filter((r) => r.id !== id) })),
   setRecording: (recording, draft = null) => set({ recording, draft }),
+  reset: () => set({ routines: [], recording: false, draft: null }),
 }));
 
 // ─── Schematic Placement Store ───
@@ -433,6 +461,7 @@ interface SchematicPlacementStore {
   }) => string;
   removePending: (id: string) => void;
   clearPending: () => void;
+  reset: () => void;
 }
 
 function genPendingId(): string {
@@ -462,6 +491,7 @@ export const useSchematicPlacementStore = create<SchematicPlacementStore>((set, 
   removePending: (id) =>
     set((state) => ({ pending: state.pending.filter((item) => item.id !== id) })),
   clearPending: () => set({ pending: [] }),
+  reset: () => set({ placement: null, placedOrigin: null, pending: [] }),
 }));
 
 // ─── Mission Store ───
@@ -471,6 +501,7 @@ interface MissionStore {
   setMissions: (missions: MissionRecord[]) => void;
   upsertMission: (mission: MissionRecord) => void;
   removeMission: (id: string) => void;
+  reset: () => void;
 }
 
 export const useMissionStore = create<MissionStore>((set) => ({
@@ -489,6 +520,7 @@ export const useMissionStore = create<MissionStore>((set) => ({
     }),
   removeMission: (id) =>
     set((state) => ({ missions: state.missions.filter((m) => m.id !== id) })),
+  reset: () => set({ missions: [] }),
 }));
 
 // ─── Build Store ───
@@ -497,6 +529,7 @@ interface BuildStore {
   builds: BuildRecord[];
   setBuilds: (builds: BuildRecord[]) => void;
   upsertBuild: (build: BuildRecord) => void;
+  reset: () => void;
 }
 
 export const useBuildStore = create<BuildStore>((set) => ({
@@ -513,6 +546,7 @@ export const useBuildStore = create<BuildStore>((set) => ({
       }
       return { builds: [build, ...state.builds].slice(0, 100) };
     }),
+  reset: () => set({ builds: [] }),
 }));
 
 // ─── Campaign Store ───
@@ -522,6 +556,7 @@ interface CampaignState {
   setCampaigns: (campaigns: Campaign[]) => void;
   upsertCampaign: (campaign: Campaign) => void;
   removeCampaign: (id: string) => void;
+  reset: () => void;
 }
 
 export const useCampaignStore = create<CampaignState>((set) => ({
@@ -540,6 +575,7 @@ export const useCampaignStore = create<CampaignState>((set) => ({
     }),
   removeCampaign: (id) =>
     set((state) => ({ campaigns: state.campaigns.filter((c) => c.id !== id) })),
+  reset: () => set({ campaigns: [] }),
 }));
 
 // ─── Decision Store (per-bot decision trace buffer) ───
@@ -584,6 +620,7 @@ interface DecisionStore {
   setDecisions: (botName: string, records: DecisionRecord[]) => void;
   /** Clear the buffer for a bot. */
   clearDecisions: (botName: string) => void;
+  reset: () => void;
 }
 
 const DECISION_BUFFER_CAP = 50;
@@ -633,6 +670,8 @@ export const useDecisionStore = create<DecisionStore>((set) => ({
       delete next[key];
       return { decisionsByBot: next };
     }),
+
+  reset: () => set({ decisionsByBot: {} }),
 }));
 
 // ─── Movement Trail Store ───
@@ -662,6 +701,9 @@ interface MovementTrailStore {
   /** Drop trails for any bot not in `activeBotNames`. Called after the bot
    *  list refetches so disconnected bots don't leak ring buffers forever. */
   pruneToActive: (activeBotNames: string[]) => void;
+  /** Reset transient state — alias for clearAll, exposed for consistency
+   *  across the store API surface. */
+  reset: () => void;
 }
 
 export const useMovementTrailStore = create<MovementTrailStore>((set) => ({
@@ -710,6 +752,8 @@ export const useMovementTrailStore = create<MovementTrailStore>((set) => ({
       }
       return changed ? { trailsByBot: next } : {};
     }),
+
+  reset: () => set({ trailsByBot: {} }),
 }));
 
 // ─── Chain Store ───
@@ -718,6 +762,7 @@ interface ChainStore {
   chains: any[];
   setChains: (chains: any[]) => void;
   upsertChain: (chain: any) => void;
+  reset: () => void;
 }
 
 export const useChainStore = create<ChainStore>((set) => ({
@@ -734,4 +779,5 @@ export const useChainStore = create<ChainStore>((set) => ({
       }
       return { chains: [chain, ...state.chains].slice(0, 100) };
     }),
+  reset: () => set({ chains: [] }),
 }));

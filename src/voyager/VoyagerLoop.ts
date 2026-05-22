@@ -710,6 +710,23 @@ export class VoyagerLoop {
     const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos, botRole ?? undefined)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
+
+    // Town-resident gate: when the bot has a (non-idle) town role and nothing
+    // higher-priority is available, prefer to idle a tick over running the
+    // curriculum agent. Curriculum-proposed tasks tend to be exploratory
+    // Voyager-style mining/exploring quests that pull residents away from
+    // their town. Skipping curriculum here means the next iteration retries
+    // the blackboard, which is what we want for town work.
+    const isResident = !!botRole && botRole.toLowerCase() !== 'idle';
+    const haveHigherPriority = Boolean(goalOverrideTask || goalTask || playerTask || blackboardTask);
+    if (isResident && !haveHigherPriority) {
+      logger.debug(
+        { bot: this.botName, role: botRole },
+        'Resident has no swarm/player task this tick; idling (skipping curriculum fallback)',
+      );
+      return;
+    }
+
     const task = goalOverrideTask
       || goalTask
       || playerTask

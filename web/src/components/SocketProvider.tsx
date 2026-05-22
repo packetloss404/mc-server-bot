@@ -269,6 +269,14 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       clearInterval(pollInterval);
       clearInterval(worldInterval);
       clearInterval(playerInterval);
+      // NOTE: handlers registered with named refs above (onBotDied,
+      // onReconnectAttempt, onConnect, onDisconnect, onBotDecision) are
+      // .off()'d with their refs. All other socket.off('event') calls below
+      // rely on the invariant that each event has exactly one registered
+      // listener in this provider — socket.io removes all listeners for the
+      // event in that form. If a future contributor adds a second listener
+      // for any of these events, both will be removed; in that case, name
+      // the handler and pass it to .off() like the ones at the top here.
       socket.off('bot:died', onBotDied);
       socket.io.off('reconnect_attempt', onReconnectAttempt);
       socket.io.off('reconnect_error', onReconnectAttempt);

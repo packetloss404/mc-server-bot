@@ -2572,7 +2572,7 @@ export function createAPIServer(
     const filters = req.query.status ? { status: String(req.query.status) as any } : undefined;
     res.json({ missions: missionManager.getMissions(filters) });
   });
-  app.post('/api/missions', (req, res) => {
+  app.post('/api/missions', asyncH(async (req, res) => {
     // Validate the body up-front rather than passing whatever the client sent
     // straight into MissionManager.createMission(). The MissionManager doesn't
     // re-validate field shapes, so a malformed body could otherwise produce a
@@ -2674,7 +2674,7 @@ export function createAPIServer(
     } catch (e: any) {
       res.status(400).json({ error: sanitizeErrorMessage(e, 'Failed to create mission') });
     }
-  });
+  }));
   app.get('/api/missions/:id', (req, res) => {
     const m = missionManager.getMission(req.params.id as string);
     if (!m) return res.status(404).json({ error: 'Mission not found' });

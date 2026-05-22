@@ -459,20 +459,23 @@ export class BuildCoordinator {
       throw new Error(`Schematic file not found: ${schematicFile}`);
     }
 
-    // ── Origin Y validation ──
-    // Reject origins outside the Minecraft 1.18+ build-height range up front
-    // instead of letting /setblock fail silently or the bot trip over bedrock
-    // mid-build. We intentionally fail fast rather than clamp — a caller that
-    // asked for y=400 has a bug, not a UX issue.
-    if (
-      !Number.isFinite(origin.y) ||
-      origin.y < MIN_BUILD_Y ||
-      origin.y > MAX_BUILD_Y
-    ) {
-      throw new Error(
-        `Origin Y out of build-height range: ${origin.y} (must be between ${MIN_BUILD_Y} and ${MAX_BUILD_Y})`,
-      );
-    }
+    // ── Origin Y validation (pre-resolveOrigin) ──
+    // Reject obviously bad origins from the caller up front. For 'coords' mode
+    // resolveOrigin returns this as-is, so the check is authoritative; for
+    // 'auto-flat' / 'bot:*' / 'player:*' modes resolveOrigin may produce a
+    // different Y, so we re-check post-resolution below.
+    const assertOriginYInRange = (o: { x: number; y: number; z: number }, phase: string) => {
+      if (
+        !Number.isFinite(o.y) ||
+        o.y < MIN_BUILD_Y ||
+        o.y > MAX_BUILD_Y
+      ) {
+        throw new Error(
+          `Origin Y out of build-height range (${phase}): ${o.y} (must be between ${MIN_BUILD_Y} and ${MAX_BUILD_Y})`,
+        );
+      }
+    };
+    assertOriginYInRange(origin, 'supplied');
 
     // Validate bots exist and are connected (via worker IPC)
     for (const name of botNames) {
@@ -536,6 +539,11 @@ export class BuildCoordinator {
     // Map originMode -> concrete {x, y, z}. The supplied `origin` is the
     // fallback for 'coords' mode and a hint elsewhere (e.g. Y for player mode).
     origin = await this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize);
+    // resolveOrigin can return a Y from bot position, player position, or
+    // auto-flat site selection — none of which are guaranteed to land inside
+    // the build-height range. Re-check after resolution so non-'coords' modes
+    // can't slip past the early gate.
+    assertOriginYInRange(origin, `resolved (${originMode})`);
 
     // ── Underground mode: resample surface and excavate the pit ──
     // Must run AFTER origin resolution (we need the chosen x,z) but BEFORE

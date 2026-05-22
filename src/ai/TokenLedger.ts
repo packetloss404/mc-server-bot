@@ -20,6 +20,10 @@ const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
   'claude-sonnet-4-20250514': { input: 3.0, output: 15.0 },
   'claude-opus-4-20250514': { input: 15.0, output: 75.0 },
   'claude-haiku-3-20240307': { input: 0.25, output: 1.25 },
+  // Anthropic — current models. TODO: verify pricing (placeholder copied from
+  // Sonnet/Opus 4 entries above; refresh once Anthropic publishes the rate card).
+  'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
+  'claude-opus-4-7': { input: 15.0, output: 75.0 },
 };
 
 export class TokenLedger {

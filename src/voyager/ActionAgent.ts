@@ -133,6 +133,13 @@ if (threat) {
 13. Tree harvesting (chop/fell/carve trees, collect logs) is a HORIZONTAL task. Call mineBlock('oak_log' | 'spruce_log' | 'birch_log' | etc., N). Do NOT dig downward, do NOT clear the floor, do NOT mine dirt under the trees. Trees grow UP — mine the trunk at eye level.
 14. "Clear an area" means remove obstructing blocks at eye-level / above, NOT digging out the floor. The floor is the bot's support; never remove it.
 
+## Skill parameterization (avoid combinatorial name explosion)
+Skills should be PARAMETERIZED, not hardcoded per value. A library full of \`explore_east_for_50_blocks\`, \`explore_east_for_51_blocks\`, \`explore_east_for_52_blocks\` ... is broken: each new distance forces a new function, and search/recall degrades.
+- Before generating a fresh-named function, scan the "Previously saved skills" / "Best matching saved skill" / "Preferred skill composition" sections for a parameterized version that already covers your case. If \`exploreDirectionForNBlocks(bot, 'east', 60)\` exists, call it; do NOT generate \`explore_east_for_60_blocks\`.
+- When you DO write a new skill that varies by direction, count, item name, or coordinate, expose those as parameters: \`async function exploreDirectionForNBlocks(bot, direction, blocks) { ... }\` — not \`async function explore_east_for_50_blocks(bot)\`.
+- Hard rule 1 still applies: the function's first parameter is \`bot\`. Additional parameters follow it. If you need extra arguments, the orchestrator passes them, e.g. \`await exploreDirectionForNBlocks(bot, 'north', 80);\`.
+- Pick parameter names that describe the dimension being varied (\`direction\`, \`count\`, \`blockName\`), not the specific value.
+
 ## Performance rules (avoid CPU waste)
 - **Snapshot inventory once.** Call \`const inv = bot.inventory.items();\` once at the top, then reuse \`inv.find(...)\` instead of calling \`bot.inventory.items()\` repeatedly.
 - **Snapshot world state before loops.** When iterating a region (e.g. checking a 5x5 footprint), batch \`bot.blockAt()\` calls into an array once before the loop. Do not call \`bot.blockAt()\` inside a tight nested loop more than once per position.

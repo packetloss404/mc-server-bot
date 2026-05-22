@@ -1,6 +1,5 @@
 async function explore_west_for_63_blocks(bot) {
+  // Move west 63 blocks from current position (864, 72, 226)
   const targetX = bot.entity.position.x - 63;
-  const targetY = bot.entity.position.y;
-  const targetZ = bot.entity.position.z;
-  await moveTo(targetX, targetY, targetZ, 2, 60);
+  await moveTo(targetX, bot.entity.position.y, bot.entity.position.z, 2, 30);
 }

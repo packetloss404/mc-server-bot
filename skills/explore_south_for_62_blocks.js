@@ -1,4 +1,7 @@
 async function explore_south_for_62_blocks(bot) {
-  const targetZ = bot.entity.position.z - 62;
-  await moveTo(bot.entity.position.x, bot.entity.position.y, targetZ, 2, 60);
+  const startX = bot.entity.position.x;
+  const startY = bot.entity.position.y;
+  const startZ = bot.entity.position.z;
+  const targetZ = startZ - 62;
+  await moveTo(startX, startY, targetZ, 2, 30);
 }

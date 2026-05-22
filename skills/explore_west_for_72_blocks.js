@@ -1,3 +1,4 @@
 async function explore_west_for_72_blocks(bot) {
-  await smeltItem('', 'coal', 1);
+  const target = bot.entity.position.offset(-72, 0, 0);
+  await moveTo(target.x, target.y, target.z, 2, 60);
 }

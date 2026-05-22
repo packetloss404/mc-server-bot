@@ -1,6 +1,7 @@
 async function explore_east_for_69_blocks(bot) {
-  const targetX = bot.entity.position.x + 69;
-  await exploreUntil('east', 60000, () => {
-    return bot.entity.position.x >= targetX - 2;
-  });
+  const currentPos = bot.entity.position;
+  const targetX = Math.floor(currentPos.x) + 69;
+  const targetY = Math.floor(currentPos.y);
+  const targetZ = Math.floor(currentPos.z);
+  await moveTo(targetX, targetY, targetZ, 2, 60);
 }

@@ -1,4 +1,4 @@
 async function explore_north_for_69_blocks(bot) {
-  const target = bot.entity.position.offset(0, 0, -69);
-  await moveTo(target.x, target.y, target.z, 3, 60);
+  const targetZ = bot.entity.position.z - 69;
+  await moveTo(bot.entity.position.x, bot.entity.position.y, targetZ, 2, 60);
 }

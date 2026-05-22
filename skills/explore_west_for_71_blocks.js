@@ -1,4 +1,5 @@
 async function explore_west_for_71_blocks(bot) {
-  const target = bot.entity.position.offset(-71, 0, 0);
-  await moveTo(target.x, target.y, target.z, 2, 60);
+  const currentPos = bot.entity.position;
+  const targetX = currentPos.x - 71;
+  await moveTo(targetX, currentPos.y, currentPos.z, 2, 60);
 }

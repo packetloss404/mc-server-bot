@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export interface ReputationEvent {
   botName: string;
@@ -284,7 +285,7 @@ export class BotReputation {
 
   private persist(): void {
     const data: PersistedData = { events: this.events };
-    fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
+    atomicWriteJsonSync(this.filePath, data);
   }
 
   private scheduleSave(): void {

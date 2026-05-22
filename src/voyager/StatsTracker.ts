@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { ExecutionEvent } from './CodeExecutor';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export interface BotStats {
   mined: Record<string, number>;
@@ -112,6 +113,6 @@ export class StatsTracker {
   }
 
   private persist(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.stats, null, 2));
+    atomicWriteJsonSync(this.filePath, this.stats);
   }
 }

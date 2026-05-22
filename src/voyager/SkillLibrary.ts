@@ -1,5 +1,6 @@
 import fs from 'fs';
 import path from 'path';
+import { atomicWriteJsonSync, atomicWriteTextSync } from '../util/atomicWrite';
 import { logger } from '../util/logger';
 import { LLMClient } from '../ai/LLMClient';
 
@@ -185,7 +186,7 @@ export class SkillLibrary {
     const fileName = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.js';
     const filePath = path.join(this.skillsDir, fileName);
 
-    fs.writeFileSync(filePath, code);
+    atomicWriteTextSync(filePath, code);
 
     const existingEntry = existing >= 0 ? this.index[existing] : undefined;
     const embedding = this.embeddingClient?.embed
@@ -354,7 +355,7 @@ export class SkillLibrary {
   }
 
   private saveIndex(): void {
-    fs.writeFileSync(this.indexPath, JSON.stringify(this.index, null, 2));
+    atomicWriteJsonSync(this.indexPath, this.index);
   }
 
   private rebuildIndexStats(): void {

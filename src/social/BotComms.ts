@@ -1,4 +1,7 @@
+import fs from 'fs';
+import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJson } from '../util/atomicWrite';
 
 export interface BotMessage {
   id: string;
@@ -12,20 +15,66 @@ export interface BotMessage {
 
 type MessageListener = (message: BotMessage) => void;
 
+const PERSIST_PATH = path.join(process.cwd(), 'data', 'bot_comms.json');
+const SAVE_DEBOUNCE_MS = 2000;
+
 /**
  * Inter-bot communication system. Singleton shared across all bot instances.
  * Allows bots to send messages to each other, request help, and coordinate.
+ *
+ * Inbox is persisted (debounced, atomic) to `data/bot_comms.json` so pending
+ * help requests / trade offers / alerts survive a process restart. Listeners
+ * are intentionally not persisted — they're rebound when bots respawn.
  */
 export class BotComms {
   private static instance: BotComms | null = null;
   private inbox: Map<string, BotMessage[]> = new Map(); // keyed by recipient bot name
   private listeners: Map<string, MessageListener[]> = new Map(); // keyed by bot name
+  private saveTimer: NodeJS.Timeout | null = null;
+
+  private constructor() {
+    this.load();
+  }
 
   static getInstance(): BotComms {
     if (!BotComms.instance) {
       BotComms.instance = new BotComms();
     }
     return BotComms.instance;
+  }
+
+  private load(): void {
+    try {
+      if (!fs.existsSync(PERSIST_PATH)) return;
+      const raw = fs.readFileSync(PERSIST_PATH, 'utf-8');
+      const parsed = JSON.parse(raw) as { inbox?: Record<string, BotMessage[]> };
+      if (parsed?.inbox && typeof parsed.inbox === 'object') {
+        let totalLoaded = 0;
+        for (const [key, messages] of Object.entries(parsed.inbox)) {
+          if (Array.isArray(messages)) {
+            this.inbox.set(key, messages);
+            totalLoaded += messages.length;
+          }
+        }
+        logger.info({ totalLoaded, recipients: this.inbox.size }, 'BotComms inbox loaded from disk');
+      }
+    } catch (err: any) {
+      // Corrupted file → start fresh; data loss is preferable to crash here
+      // and the file gets rewritten on next save.
+      logger.warn({ err: err?.message, path: PERSIST_PATH }, 'BotComms load failed; starting with empty inbox');
+    }
+  }
+
+  private scheduleSave(): void {
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      const inbox: Record<string, BotMessage[]> = {};
+      for (const [k, v] of this.inbox.entries()) inbox[k] = v;
+      atomicWriteJson(PERSIST_PATH, { inbox }).catch((err) => {
+        logger.warn({ err: err?.message, path: PERSIST_PATH }, 'BotComms save failed');
+      });
+    }, SAVE_DEBOUNCE_MS);
   }
 
   sendMessage(from: string, to: string, content: string, type: BotMessage['type'] = 'chat'): void {
@@ -60,6 +109,7 @@ export class BotComms {
     }
 
     logger.debug({ from: msg.from, to: msg.to, type, content }, 'Bot message sent');
+    this.scheduleSave();
   }
 
   getUnread(botName: string): BotMessage[] {
@@ -72,6 +122,7 @@ export class BotComms {
       msg.read = true;
     }
 
+    if (unread.length > 0) this.scheduleSave();
     return unread;
   }
 
@@ -121,5 +172,6 @@ export class BotComms {
     const key = botName.toLowerCase();
     this.inbox.delete(key);
     this.listeners.delete(key);
+    this.scheduleSave();
   }
 }

@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { Bot } from 'mineflayer';
+import { atomicWriteJson } from '../util/atomicWrite';
 import { LLMClient } from '../ai/LLMClient';
 import { SkillLibrary } from './SkillLibrary';
 import { renderObservation, formatObservation, formatObservationWithWarmup, isContextWarmedUp } from './Observation';
@@ -467,15 +468,22 @@ Propose the next task:`;
   }
 
   private persistTasksNow(): void {
-    const writes: Array<Promise<void>> = [
-      fs.promises.writeFile(this.completedTasksPath, JSON.stringify(this.completedTasks, null, 2)),
-      fs.promises.writeFile(this.failedTasksPath, JSON.stringify(this.failedTasks, null, 2)),
-      fs.promises.writeFile(this.qaCachePath, JSON.stringify(this.qaCache, null, 2)),
-      fs.promises.writeFile(this.qaEmbeddingPath, JSON.stringify(this.qaEmbeddings, null, 2)),
+    // Atomic per-file writes with isolated error handling so a failure on one
+    // file doesn't truncate-corrupt the others or leave silent partial state.
+    // Previously this used bare `fs.promises.writeFile` (non-atomic) inside
+    // `Promise.all().catch()` (single error handler), so one error swallowed
+    // all and partial writes left files in inconsistent states.
+    const writes: Array<{ path: string; data: unknown }> = [
+      { path: this.completedTasksPath, data: this.completedTasks },
+      { path: this.failedTasksPath, data: this.failedTasks },
+      { path: this.qaCachePath, data: this.qaCache },
+      { path: this.qaEmbeddingPath, data: this.qaEmbeddings },
     ];
-    Promise.all(writes).catch((err) => {
-      logger.warn({ err: err?.message }, 'CurriculumAgent persist failed');
-    });
+    for (const w of writes) {
+      atomicWriteJson(w.path, w.data).catch((err) => {
+        logger.warn({ err: err?.message, file: w.path }, 'CurriculumAgent persist: write failed');
+      });
+    }
   }
 
   private async buildCurriculumContext(bot: Bot, personality: string): Promise<string> {

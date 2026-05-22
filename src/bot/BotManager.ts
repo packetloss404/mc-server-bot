@@ -63,7 +63,7 @@ export class BotManager {
     this.affinityManager = new AffinityManager(config.affinity, path.join(process.cwd(), 'data'));
     this.conversationManager = new ConversationManager();
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
-    this.botComms = new BotComms();
+    this.botComms = BotComms.getInstance();
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
     this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data', 'shared_world.json'));
     this.swarmCoordinator = new SwarmCoordinator(this.blackboardManager);

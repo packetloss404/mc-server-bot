@@ -31,6 +31,7 @@ import { buildSeedStyle } from './seedStyle';
 import { writeStyle, styleDocPath, type StyleDoc, type StyleSeed } from './StyleDoc';
 import { logger } from '../util/logger';
 import fs from 'fs';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 /** District-level offset between the founding district and any new ones. */
 const DISTRICT_OFFSET_BLOCKS = 64;
@@ -125,7 +126,7 @@ export class DistrictManager {
       fs.mkdirSync(path.dirname(file), { recursive: true });
       // We reuse writeStyle by passing a temporary doc with a tweaked file
       // location — easiest is to write the JSON directly here.
-      fs.writeFileSync(file, JSON.stringify(seed, null, 2), 'utf8');
+      atomicWriteJsonSync(file, seed);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn(

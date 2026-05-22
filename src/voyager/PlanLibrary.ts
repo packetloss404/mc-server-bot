@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
 import { LLMClient } from '../ai/LLMClient';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export interface PlanStep {
   description: string;
@@ -304,7 +305,7 @@ export class PlanLibrary {
 
   private saveToDisk(): void {
     try {
-      fs.writeFileSync(this.filePath, JSON.stringify(this.templates, null, 2));
+      atomicWriteJsonSync(this.filePath, this.templates);
     } catch (err) {
       logger.error({ err }, 'Failed to save plan templates to disk');
     }

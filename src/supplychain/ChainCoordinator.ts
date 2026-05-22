@@ -5,6 +5,7 @@ import { logger } from '../util/logger';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -145,7 +146,7 @@ export class ChainCoordinator {
       const arr = [...this.chains.values()];
       const dir = path.dirname(this.dataPath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(this.dataPath, JSON.stringify(arr, null, 2), 'utf-8');
+      atomicWriteJsonSync(this.dataPath, arr);
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to save supply chains');
     }

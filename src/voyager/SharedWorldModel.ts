@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -344,7 +345,7 @@ export class SharedWorldModel {
         serverTime: this.serverTime,
         weather: this.weather,
       };
-      fs.writeFileSync(this.filePath, JSON.stringify(data, null, 2));
+      atomicWriteJsonSync(this.filePath, data);
     } catch (err) {
       logger.error({ err }, 'Failed to persist SharedWorldModel');
     }

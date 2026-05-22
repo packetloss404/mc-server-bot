@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export type MemoryType = 'chat' | 'task_complete' | 'task_failure' | 'combat' | 'gift' | 'trade' | 'observation';
 export type EmotionalTrigger = 'task_success' | 'task_failure' | 'positive_chat' | 'negative_chat' | 'combat_win' | 'combat_loss';
@@ -172,7 +173,7 @@ export class SocialMemory {
     const dir = path.dirname(this.savePath);
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
     try {
-      fs.writeFileSync(this.savePath, JSON.stringify(this.store, null, 2));
+      atomicWriteJsonSync(this.savePath, this.store);
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to save social memory');
     }

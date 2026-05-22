@@ -51,6 +51,7 @@ import {
 } from './auth';
 import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
+import { atomicWriteJsonSync, atomicWriteTextSync } from '../util/atomicWrite';
 
 // ── Input validation helpers ─────────────────────────────────────────
 // Bot names become filenames (e.g. `data/<name>.json`) and worker thread
@@ -1325,7 +1326,7 @@ export function createAPIServer(
     }
   };
   const writeSkillIndex = (entries: any[]) => {
-    fs.writeFileSync(skillIndexPath, JSON.stringify(entries, null, 2));
+    atomicWriteJsonSync(skillIndexPath, entries);
     // Invalidate the GET /api/skills cache so the new state is visible.
     skillsCache = null;
   };
@@ -1371,7 +1372,7 @@ export function createAPIServer(
     const fileName: string = entries[idx]?.file || `${skillName}.js`;
     const filePath = path.join(skillsDir, fileName);
     try {
-      fs.writeFileSync(filePath, code);
+      atomicWriteTextSync(filePath, code);
     } catch (err: any) {
       res.status(500).json({ error: `Failed to write skill file: ${err?.message}` });
       return;

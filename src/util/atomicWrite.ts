@@ -33,3 +33,43 @@ export async function atomicWriteJson(filePath: string, data: any): Promise<void
   await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2));
   await fs.promises.rename(tmpPath, filePath);
 }
+
+/**
+ * Atomic write for raw text (e.g. learned skill JavaScript source) — same
+ * tmp+rename pattern as the JSON helpers, but without JSON.stringify so the
+ * caller's exact byte payload lands on disk.
+ */
+export function atomicWriteTextSync(filePath: string, content: string): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, content);
+  fs.renameSync(tmpPath, filePath);
+}
+
+/** Async sibling of {@link atomicWriteTextSync}. */
+export async function atomicWriteText(filePath: string, content: string): Promise<void> {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    await fs.promises.mkdir(dir, { recursive: true });
+  }
+  const tmpPath = filePath + '.tmp';
+  await fs.promises.writeFile(tmpPath, content);
+  await fs.promises.rename(tmpPath, filePath);
+}
+
+/**
+ * Atomic write for binary buffers (e.g. uploaded schematic .schem files).
+ * Same tmp+rename pattern.
+ */
+export function atomicWriteBufferSync(filePath: string, data: Buffer | Uint8Array): void {
+  const dir = path.dirname(filePath);
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true });
+  }
+  const tmpPath = filePath + '.tmp';
+  fs.writeFileSync(tmpPath, data);
+  fs.renameSync(tmpPath, filePath);
+}

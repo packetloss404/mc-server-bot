@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../util/logger';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export interface SkillUsageRecord {
   skillName: string;
@@ -295,7 +296,7 @@ export class SkillAttribution {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(this.filePath, JSON.stringify(this.data, null, 2));
+    atomicWriteJsonSync(this.filePath, this.data);
   }
 
   private scheduleSave(): void {

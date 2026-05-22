@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { ExecutionResult } from './CodeExecutor';
 import { Task } from './CurriculumAgent';
+import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 export interface BlockerRecord {
   task: string;
@@ -104,6 +105,6 @@ export class BlockerMemory {
   }
 
   private persist(): void {
-    fs.writeFileSync(this.filePath, JSON.stringify(this.records, null, 2));
+    atomicWriteJsonSync(this.filePath, this.records);
   }
 }

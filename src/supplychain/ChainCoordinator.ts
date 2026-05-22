@@ -6,7 +6,6 @@ import { atomicWriteJsonSync } from '../util/atomicWrite';
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
-import { atomicWriteJsonSync } from '../util/atomicWrite';
 
 // ── Interfaces ──────────────────────────────────────────────
 

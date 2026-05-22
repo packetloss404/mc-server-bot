@@ -14,6 +14,10 @@ interface SkillEntry {
   embedding?: number[];
   /** ms epoch of last quality update (recordOutcome). Used for time-decay on access. */
   lastQualityUpdate?: number;
+  /** When true, the entry stays on disk but is skipped at load time. Used by
+   *  migration scripts (e.g. tools/consolidate-explore-skills.js) to retire
+   *  obsolete entries without deleting the source file. */
+  deprecated?: boolean;
 }
 
 const QUALITY_DECAY_RATE = 0.999;
@@ -52,7 +56,37 @@ interface CachedEmbedding {
 }
 
 const QUERY_EMBED_TTL_MS = 60 * 60 * 1000; // 1 hour
-const QUERY_EMBED_CACHE_MAX = 256;
+const QUERY_EMBED_CACHE_MAX = 512;
+const CODE_CACHE_MAX = 256;
+const VECTOR_CACHE_MAX = 1024;
+/** Below this hit count the keyword pre-filter is discarded and we fall back
+ *  to a full-corpus scan. Picked empirically: at ≥5 hits the embedding-scored
+ *  shortlist still has room to surface a high-quality match. */
+const KEYWORD_PREFILTER_MIN_HITS = 5;
+/** Tokens shorter than this are too noisy to anchor a name/description hit
+ *  (e.g. "to", "of", "go"). Matches the existing tokenize() floor. */
+const KEYWORD_MIN_LEN = 3;
+
+/**
+ * Bounded LRU access on a Map. Standard "Map insertion order = recency"
+ * trick: read-or-touch deletes and re-sets the key so it lands at the tail;
+ * eviction simply pops from the head until size <= cap.
+ *
+ * Touching is necessary on every successful read; otherwise we degrade to a
+ * FIFO that evicts hot entries the moment they reach the cap.
+ */
+function touchLRU<K, V>(cache: Map<K, V>, key: K, value: V): void {
+  if (cache.has(key)) cache.delete(key);
+  cache.set(key, value);
+}
+
+function evictLRU<K, V>(cache: Map<K, V>, max: number): void {
+  while (cache.size > max) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) break;
+    cache.delete(oldest);
+  }
+}
 
 export class SkillLibrary {
   private skillsDir: string;
@@ -62,12 +96,12 @@ export class SkillLibrary {
   private docFreq: Map<string, number> = new Map();
   private embeddingClient: LLMClient | null;
   private allSkillCodeCache: string | null = null;
-  /** Per-skill source cache. Invalidated on save() of the same name. */
+  /** Per-skill source cache. Invalidated on save() of the same name. LRU-bounded. */
   private codeCache: Map<string, string> = new Map();
-  /** Per-entry TF-IDF sparse vector cache. Wiped when corpus IDF changes. */
+  /** Per-entry TF-IDF sparse vector cache. Wiped when corpus IDF changes. LRU-bounded. */
   private vectorCache: Map<string, SparseVector> = new Map();
   /** Query-string → dense embedding cache. Tasks repeat across ticks, so this
-   *  saves a network round-trip per searchWithScores call. */
+   *  saves a network round-trip per searchWithScores call. LRU-bounded. */
   private queryEmbedCache: Map<string, CachedEmbedding> = new Map();
 
   constructor(skillsDir: string, maxSkills: number, embeddingClient: LLMClient | null = null) {
@@ -109,7 +143,23 @@ export class SkillLibrary {
     }));
     const queryEmbedding = await this.getQueryEmbedding(query);
 
-    const scored = this.index.map((entry) => {
+    // Coarse keyword pre-filter: only score entries that share ≥1 token with
+    // the query name/description/keywords. When the library grew past ~600
+    // skills the per-call cosine-similarity loop became a serialized hot path.
+    // Falling back to a full scan when the prefilter is too narrow keeps
+    // semantic matches that don't share lexical tokens (the embedding pass
+    // still has its chance).
+    const queryTokenSet = new Set<string>();
+    for (const w of queryWords) if (w.length >= KEYWORD_MIN_LEN) queryTokenSet.add(w);
+    let candidates = this.index;
+    if (queryTokenSet.size > 0) {
+      const filtered = this.index.filter((entry) => this.entryMatchesAnyToken(entry, queryTokenSet));
+      if (filtered.length >= KEYWORD_PREFILTER_MIN_HITS) {
+        candidates = filtered;
+      }
+    }
+
+    const scored = candidates.map((entry) => {
       let score = 0;
       const descWords = entry.description.toLowerCase().split(/\s+/);
       const nameWords = entry.name.toLowerCase().split(/[_\s-]+/);
@@ -160,7 +210,11 @@ export class SkillLibrary {
   /** Get skill code by name */
   getCode(name: string): string | null {
     const cached = this.codeCache.get(name);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      // Touch on hit so the entry moves to the LRU tail.
+      touchLRU(this.codeCache, name, cached);
+      return cached;
+    }
 
     const entry = this.index.find((s) => s.name === name);
     if (!entry) return null;
@@ -169,53 +223,59 @@ export class SkillLibrary {
     if (!fs.existsSync(filePath)) return null;
 
     const code = fs.readFileSync(filePath, 'utf-8');
-    this.codeCache.set(name, code);
+    touchLRU(this.codeCache, name, code);
+    evictLRU(this.codeCache, CODE_CACHE_MAX);
     return code;
   }
 
-  /** Save a new skill to the library. `quality` is ignored — computed via Laplace smoothing. */
+  /** Save a new skill to the library. `quality` is ignored — computed via Laplace smoothing.
+   *  Name collisions are versioned (skill_v2, _v3, ...) rather than overwriting the
+   *  existing entry; blind overwrite would silently discard any history attached
+   *  to the previous skill (success/failure counts, embedding, etc.). */
   async save(name: string, description: string, keywords: string[], code: string, _quality = 0.8): Promise<boolean> {
     if (this.index.length >= this.maxSkills) {
       logger.warn({ name }, 'Skill library full, cannot save');
       return false;
     }
 
-    // Overwrite if exists
-    const existing = this.index.findIndex((s) => s.name === name);
-    const fileName = name.replace(/[^a-zA-Z0-9_-]/g, '_') + '.js';
+    // Resolve collision by appending _vN. Note: we intentionally do NOT match
+    // recordOutcome history across versions — a new code body deserves a fresh
+    // quality estimate.
+    let finalName = name;
+    if (this.index.some((s) => s.name === finalName)) {
+      let v = 2;
+      while (this.index.some((s) => s.name === `${name}_v${v}`)) v += 1;
+      finalName = `${name}_v${v}`;
+      logger.warn({ originalName: name, finalName }, 'Skill name collision; versioning new entry');
+    }
+
+    const fileName = finalName.replace(/[^a-zA-Z0-9_-]/g, '_') + '.js';
     const filePath = path.join(this.skillsDir, fileName);
 
     fs.writeFileSync(filePath, code);
 
-    const existingEntry = existing >= 0 ? this.index[existing] : undefined;
     const embedding = this.embeddingClient?.embed
-      ? (await this.embeddingClient.embed([`${name} ${description} ${keywords.join(' ')}`]).catch(() => [] as number[][]))[0]
-      : existingEntry?.embedding;
-    const successCount = existingEntry?.successCount || 0;
-    const failureCount = existingEntry?.failureCount || 0;
+      ? (await this.embeddingClient.embed([`${finalName} ${description} ${keywords.join(' ')}`]).catch(() => [] as number[][]))[0]
+      : undefined;
     const entry: SkillEntry = {
-      name,
+      name: finalName,
       description,
       keywords,
       file: fileName,
-      quality: computeQuality({ successCount, failureCount }),
-      successCount,
-      failureCount,
+      quality: computeQuality({ successCount: 0, failureCount: 0 }),
+      successCount: 0,
+      failureCount: 0,
       embedding,
       lastQualityUpdate: Date.now(),
     };
 
-    if (existing >= 0) {
-      this.index[existing] = entry;
-    } else {
-      this.index.push(entry);
-    }
+    this.index.push(entry);
 
     this.allSkillCodeCache = null; // Invalidate concat cache
-    this.codeCache.delete(name); // Invalidate per-file cache for this skill
+    this.codeCache.delete(finalName); // Invalidate per-file cache for this skill
     this.saveIndex();
     this.rebuildIndexStats();
-    logger.info({ name, keywords }, 'Skill saved to library');
+    logger.info({ name: finalName, keywords }, 'Skill saved to library');
     return true;
   }
 
@@ -266,10 +326,13 @@ export class SkillLibrary {
         const filePath = path.join(this.skillsDir, entry.file);
         if (!fs.existsSync(filePath)) continue;
         code = fs.readFileSync(filePath, 'utf-8');
-        this.codeCache.set(entry.name, code);
+        touchLRU(this.codeCache, entry.name, code);
+      } else {
+        touchLRU(this.codeCache, entry.name, code);
       }
       parts.push(code);
     }
+    evictLRU(this.codeCache, CODE_CACHE_MAX);
     this.allSkillCodeCache = parts.join('\n\n');
     return this.allSkillCodeCache;
   }
@@ -335,7 +398,17 @@ export class SkillLibrary {
     if (fs.existsSync(this.indexPath)) {
       try {
         const raw = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8')) as SkillEntry[];
-        this.index = raw.map((entry) => {
+        // Drop deprecated entries from the active index. They remain on disk
+        // in index.json (we re-read the file rather than the in-memory index
+        // when persisting — see saveIndex) so a migration can be rolled back.
+        // Filtering here makes them invisible to search/getCode/save and stops
+        // them contributing to the TF-IDF corpus.
+        const active = raw.filter((entry) => !entry.deprecated);
+        const skippedCount = raw.length - active.length;
+        if (skippedCount > 0) {
+          logger.info({ skippedCount }, 'Skipped deprecated skill entries on load');
+        }
+        this.index = active.map((entry) => {
           const successCount = entry.successCount ?? 0;
           const failureCount = entry.failureCount ?? 0;
           return {
@@ -354,7 +427,21 @@ export class SkillLibrary {
   }
 
   private saveIndex(): void {
-    fs.writeFileSync(this.indexPath, JSON.stringify(this.index, null, 2));
+    // Preserve deprecated entries on disk: loadIndex() filters them out of the
+    // in-memory index, so writing `this.index` alone would silently wipe them.
+    // Re-read the on-disk file, keep its deprecated rows, and concatenate with
+    // the active index.
+    let deprecated: SkillEntry[] = [];
+    if (fs.existsSync(this.indexPath)) {
+      try {
+        const raw = JSON.parse(fs.readFileSync(this.indexPath, 'utf-8')) as SkillEntry[];
+        deprecated = raw.filter((entry) => entry.deprecated);
+      } catch {
+        deprecated = [];
+      }
+    }
+    const merged = [...this.index, ...deprecated];
+    fs.writeFileSync(this.indexPath, JSON.stringify(merged, null, 2));
   }
 
   private rebuildIndexStats(): void {
@@ -374,13 +461,32 @@ export class SkillLibrary {
     let v = this.vectorCache.get(entry.name);
     if (v === undefined) {
       v = this.buildVector(this.buildSkillDocument(entry));
-      this.vectorCache.set(entry.name, v);
+      touchLRU(this.vectorCache, entry.name, v);
+      evictLRU(this.vectorCache, VECTOR_CACHE_MAX);
+    } else {
+      touchLRU(this.vectorCache, entry.name, v);
     }
     return v;
   }
 
   private buildSkillDocument(entry: SkillEntry): string {
     return `${entry.name} ${entry.description} ${entry.keywords.join(' ')}`.toLowerCase();
+  }
+
+  /** Cheap keyword pre-filter: does any token in `tokens` appear (case-insensitive)
+   *  in the entry's name, description, or keywords? Used to shortlist candidates
+   *  before the expensive embedding/TF-IDF scoring pass. */
+  private entryMatchesAnyToken(entry: SkillEntry, tokens: Set<string>): boolean {
+    const nameTokens = entry.name.toLowerCase().split(/[_\s-]+/);
+    for (const t of nameTokens) if (tokens.has(t)) return true;
+    const descLower = entry.description.toLowerCase();
+    // Word-level membership is too strict for descriptions ("3x3 cobblestone
+    // shelter" shouldn't lose to a query token "shelter" because of split).
+    // Substring is acceptable here — the prefilter only has to be a superset
+    // of the eventual scored hits.
+    for (const t of tokens) if (descLower.includes(t)) return true;
+    for (const k of entry.keywords) if (tokens.has(k.toLowerCase())) return true;
+    return false;
   }
 
   private tokenize(text: string): string[] {
@@ -448,18 +554,21 @@ export class SkillLibrary {
     const now = Date.now();
     const hit = this.queryEmbedCache.get(key);
     if (hit && hit.expires > now) {
+      // Touch on hit so the entry survives further eviction.
+      touchLRU(this.queryEmbedCache, key, hit);
       return hit.vec;
+    }
+    if (hit) {
+      // Stale entry — drop it before re-fetching so we don't keep stale TTLs around.
+      this.queryEmbedCache.delete(key);
     }
 
     try {
       const [vec] = await this.embeddingClient.embed([query]);
       if (!vec) return undefined;
 
-      if (this.queryEmbedCache.size >= QUERY_EMBED_CACHE_MAX) {
-        const oldestKey = this.queryEmbedCache.keys().next().value;
-        if (oldestKey !== undefined) this.queryEmbedCache.delete(oldestKey);
-      }
-      this.queryEmbedCache.set(key, { vec, expires: now + QUERY_EMBED_TTL_MS });
+      touchLRU(this.queryEmbedCache, key, { vec, expires: now + QUERY_EMBED_TTL_MS });
+      evictLRU(this.queryEmbedCache, QUERY_EMBED_CACHE_MAX);
       return vec;
     } catch {
       return undefined;

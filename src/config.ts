@@ -2,6 +2,18 @@ import fs from 'fs';
 import yaml from 'js-yaml';
 import path from 'path';
 
+/**
+ * Config schema — single source of truth for what `config.yml` may contain.
+ *
+ * Any change to this interface MUST be mirrored in `validateConfig()` below so
+ * that misspelled, missing, or mistyped fields surface at startup instead of
+ * propagating as `undefined` through the rest of the codebase.
+ *
+ * DO NOT do `yaml.load(...) as Config` anywhere else — go through
+ * `loadConfig()` (or call `validateConfig()` directly) so the schema check
+ * runs. The cast in `loadConfig()` is the ONLY raw cast permitted; it is
+ * sound because `validateConfig()` returned `ok: true` on the same object.
+ */
 export interface Config {
   api: { port: number; host: string };
   minecraft: { host: string; port: number; version: string; auth: string };
@@ -95,10 +107,345 @@ export interface Config {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Validation
+// ---------------------------------------------------------------------------
+
+type FieldType = 'string' | 'number' | 'boolean' | 'object' | 'array';
+
+interface FieldSpec {
+  key: string;
+  type: FieldType;
+  optional?: boolean;
+}
+
+// Top-level sections expected on Config. Unknown top-level keys are warned
+// about (not rejected) — yaml-level extensions are a common pattern.
+const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
+  'api',
+  'minecraft',
+  'bots',
+  'behavior',
+  'affinity',
+  'instincts',
+  'voyager',
+  'llm',
+  'skills',
+  'ollama',
+  'logging',
+  'auth',
+]);
+
+const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
+  api: {
+    required: true,
+    fields: [
+      { key: 'port', type: 'number' },
+      { key: 'host', type: 'string' },
+    ],
+  },
+  minecraft: {
+    required: true,
+    fields: [
+      { key: 'host', type: 'string' },
+      { key: 'port', type: 'number' },
+      { key: 'version', type: 'string' },
+      { key: 'auth', type: 'string' },
+    ],
+  },
+  bots: {
+    required: true,
+    fields: [
+      { key: 'maxBots', type: 'number' },
+      { key: 'defaultMode', type: 'string' },
+      { key: 'joinStaggerMs', type: 'number' },
+      { key: 'reconnectDelaySec', type: 'number' },
+      { key: 'maxReconnectAttempts', type: 'number' },
+    ],
+  },
+  behavior: {
+    required: true,
+    fields: [
+      { key: 'headTrackingRange', type: 'number' },
+      { key: 'headTrackingTickMs', type: 'number' },
+      { key: 'wanderRadius', type: 'number' },
+      { key: 'wanderIntervalMs', type: 'number' },
+      { key: 'ambientChatMinSec', type: 'number' },
+      { key: 'ambientChatMaxSec', type: 'number' },
+      { key: 'conversationRadius', type: 'number' },
+    ],
+  },
+  affinity: {
+    required: true,
+    fields: [
+      { key: 'default', type: 'number' },
+      { key: 'hitPenalty', type: 'number' },
+      { key: 'chatBonus', type: 'number' },
+      { key: 'giftBonus', type: 'number' },
+      { key: 'negativeSentimentPenalty', type: 'number' },
+      { key: 'hostileThreshold', type: 'number' },
+      { key: 'trustThreshold', type: 'number' },
+    ],
+  },
+  instincts: {
+    required: true,
+    fields: [
+      { key: 'enabled', type: 'boolean' },
+      { key: 'attackCooldownMs', type: 'number' },
+      { key: 'lowHealthThreshold', type: 'number' },
+      { key: 'fleeDistance', type: 'number' },
+      { key: 'fightRange', type: 'number' },
+      { key: 'drowningOxygenThreshold', type: 'number' },
+      { key: 'drowningSurfaceClearOxygen', type: 'number' },
+    ],
+  },
+  voyager: {
+    required: true,
+    fields: [
+      { key: 'enabled', type: 'boolean' },
+      { key: 'taskCooldownMs', type: 'number' },
+      { key: 'maxRetriesPerTask', type: 'number' },
+      { key: 'codeExecutionTimeoutMs', type: 'number' },
+      { key: 'curriculumLLMCalls', type: 'boolean' },
+      { key: 'criticLLMCalls', type: 'boolean' },
+    ],
+  },
+  llm: {
+    required: true,
+    fields: [
+      { key: 'provider', type: 'string' },
+      { key: 'model', type: 'string' },
+      { key: 'temperature', type: 'number' },
+      { key: 'chatMaxTokens', type: 'number' },
+      { key: 'codeGenMaxTokens', type: 'number' },
+      { key: 'maxConcurrentRequests', type: 'number' },
+      { key: 'routes', type: 'object', optional: true },
+      { key: 'providers', type: 'object', optional: true },
+    ],
+  },
+  skills: {
+    required: true,
+    fields: [
+      { key: 'directory', type: 'string' },
+      { key: 'maxSkills', type: 'number' },
+    ],
+  },
+  ollama: {
+    required: false,
+    fields: [
+      { key: 'baseUrl', type: 'string', optional: true },
+      { key: 'chatModel', type: 'string', optional: true },
+      { key: 'codeModel', type: 'string', optional: true },
+      { key: 'timeoutMs', type: 'number', optional: true },
+    ],
+  },
+  logging: {
+    required: true,
+    fields: [{ key: 'level', type: 'string' }],
+  },
+  auth: {
+    required: false,
+    fields: [
+      // devSecret may be string OR null (per Config interface). Handled in
+      // checkSection() with a special-case below.
+      { key: 'devSecret', type: 'string', optional: true },
+    ],
+  },
+};
+
+function typeOf(value: unknown): FieldType | 'null' | 'undefined' {
+  if (value === null) return 'null';
+  if (value === undefined) return 'undefined';
+  if (Array.isArray(value)) return 'array';
+  return typeof value as FieldType;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function checkSection(
+  sectionName: string,
+  sectionValue: unknown,
+  spec: { fields: FieldSpec[] },
+  errors: string[],
+): void {
+  if (!isPlainObject(sectionValue)) {
+    errors.push(`${sectionName}: expected object, got ${typeOf(sectionValue)}`);
+    return;
+  }
+  for (const field of spec.fields) {
+    const fieldPath = `${sectionName}.${field.key}`;
+    const present = Object.prototype.hasOwnProperty.call(sectionValue, field.key);
+    if (!present) {
+      if (!field.optional) {
+        errors.push(`${fieldPath}: missing required field (expected ${field.type})`);
+      }
+      continue;
+    }
+    const v = sectionValue[field.key];
+    // Special-case: auth.devSecret may be string OR null.
+    if (sectionName === 'auth' && field.key === 'devSecret') {
+      if (v !== null && typeof v !== 'string') {
+        errors.push(`${fieldPath}: expected string or null, got ${typeOf(v)}`);
+      }
+      continue;
+    }
+    const actual = typeOf(v);
+    if (actual !== field.type) {
+      errors.push(`${fieldPath}: expected ${field.type}, got ${actual}`);
+    }
+  }
+}
+
+function checkLlmRoutes(routes: unknown, errors: string[]): void {
+  if (!isPlainObject(routes)) {
+    errors.push(`llm.routes: expected object, got ${typeOf(routes)}`);
+    return;
+  }
+  for (const [routeName, route] of Object.entries(routes)) {
+    const base = `llm.routes.${routeName}`;
+    if (!isPlainObject(route)) {
+      errors.push(`${base}: expected object, got ${typeOf(route)}`);
+      continue;
+    }
+    // provider is required on each route entry.
+    if (!Object.prototype.hasOwnProperty.call(route, 'provider')) {
+      errors.push(`${base}.provider: missing required field (expected string)`);
+    } else if (typeof route.provider !== 'string') {
+      errors.push(`${base}.provider: expected string, got ${typeOf(route.provider)}`);
+    }
+    const optionalScalars: Array<[string, FieldType]> = [
+      ['model', 'string'],
+      ['temperature', 'number'],
+      ['maxTokens', 'number'],
+      ['useThinking', 'boolean'],
+    ];
+    for (const [k, t] of optionalScalars) {
+      if (Object.prototype.hasOwnProperty.call(route, k)) {
+        const actual = typeOf(route[k]);
+        if (actual !== t) {
+          errors.push(`${base}.${k}: expected ${t}, got ${actual}`);
+        }
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(route, 'fallback')) {
+      const fb = route.fallback;
+      if (!Array.isArray(fb)) {
+        errors.push(`${base}.fallback: expected array, got ${typeOf(fb)}`);
+      } else {
+        fb.forEach((item, i) => {
+          if (typeof item !== 'string') {
+            errors.push(`${base}.fallback[${i}]: expected string, got ${typeOf(item)}`);
+          }
+        });
+      }
+    }
+  }
+}
+
+function checkLlmProviders(providers: unknown, errors: string[]): void {
+  if (!isPlainObject(providers)) {
+    errors.push(`llm.providers: expected object, got ${typeOf(providers)}`);
+    return;
+  }
+  for (const [providerName, p] of Object.entries(providers)) {
+    const base = `llm.providers.${providerName}`;
+    if (!isPlainObject(p)) {
+      errors.push(`${base}: expected object, got ${typeOf(p)}`);
+      continue;
+    }
+    if (Object.prototype.hasOwnProperty.call(p, 'maxConcurrentRequests')) {
+      const actual = typeOf(p.maxConcurrentRequests);
+      if (actual !== 'number') {
+        errors.push(`${base}.maxConcurrentRequests: expected number, got ${actual}`);
+      }
+    }
+  }
+}
+
+export type ValidateConfigResult =
+  | { ok: true; config: Config; warnings: string[] }
+  | { ok: false; errors: string[]; warnings: string[] };
+
+/**
+ * Validate a raw parsed-YAML value against the Config schema.
+ *
+ * - Required fields: missing OR wrong-type → error (collected, not thrown).
+ * - Optional fields: only checked if present.
+ * - Unknown top-level keys: emit a warning (returned, not thrown) — yaml
+ *   extension keys are a common ops pattern.
+ *
+ * On `ok: true` the returned `config` is the same object reference as `raw`
+ * (just narrowed); on `ok: false`, `errors` contains every problem found.
+ */
+export function validateConfig(raw: unknown): ValidateConfigResult {
+  const errors: string[] = [];
+  const warnings: string[] = [];
+
+  if (!isPlainObject(raw)) {
+    return {
+      ok: false,
+      errors: [`root: expected object, got ${typeOf(raw)}`],
+      warnings,
+    };
+  }
+
+  // Unknown top-level keys → warning only.
+  for (const key of Object.keys(raw)) {
+    if (!KNOWN_TOP_LEVEL_KEYS.has(key)) {
+      warnings.push(`unknown top-level key '${key}' (ignored)`);
+    }
+  }
+
+  for (const [sectionName, spec] of Object.entries(SECTION_SPECS)) {
+    const present = Object.prototype.hasOwnProperty.call(raw, sectionName);
+    if (!present) {
+      if (spec.required) {
+        errors.push(`${sectionName}: missing required section`);
+      }
+      continue;
+    }
+    checkSection(sectionName, raw[sectionName], spec, errors);
+  }
+
+  // Deep checks for llm sub-structures (only when llm itself parsed cleanly
+  // enough to have those keys as objects).
+  const llm = raw.llm;
+  if (isPlainObject(llm)) {
+    if (Object.prototype.hasOwnProperty.call(llm, 'routes') && llm.routes !== undefined) {
+      checkLlmRoutes(llm.routes, errors);
+    }
+    if (Object.prototype.hasOwnProperty.call(llm, 'providers') && llm.providers !== undefined) {
+      checkLlmProviders(llm.providers, errors);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors, warnings };
+  }
+  return { ok: true, config: raw as unknown as Config, warnings };
+}
+
 export function loadConfig(configPath?: string): Config {
   const filePath = configPath || path.join(process.cwd(), 'config.yml');
   const raw = fs.readFileSync(filePath, 'utf-8');
-  return yaml.load(raw) as Config;
+  const parsed = yaml.load(raw);
+  const result = validateConfig(parsed);
+  if (!result.ok) {
+    const joined = result.errors.map((e) => `  - ${e}`).join('\n');
+    throw new Error(
+      `Invalid config (${filePath}): ${result.errors.length} error(s)\n${joined}`,
+    );
+  }
+  if (result.warnings.length > 0) {
+    // Don't take a logger dep here; config loads before logger init.
+    for (const w of result.warnings) {
+      // eslint-disable-next-line no-console
+      console.warn(`[config] ${w}`);
+    }
+  }
+  return result.config;
 }
 
 /**

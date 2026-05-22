@@ -1,4 +1,4 @@
-import express, { Request, Response } from 'express';
+import express, { NextFunction, Request, RequestHandler, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
 import multer from 'multer';
@@ -68,6 +68,41 @@ function isSafeFilename(name: unknown): name is string {
   if (name.includes('\0') || name.includes('..')) return false;
   // basename() strips any path components; equality means there were none.
   return path.basename(name) === name;
+}
+
+/**
+ * Wraps an async Express handler so rejected promises are forwarded to the
+ * error-handling middleware instead of crashing the process. Wraps only the
+ * handlers identified by the API audit as containing un-caught awaits —
+ * notably `POST /api/bots`, `POST /api/swarm`, `POST /api/missions`, and
+ * `POST /api/builds`. Other endpoints that already wrap their work in
+ * try/catch don't need it.
+ */
+const asyncH = (
+  fn: (req: Request, res: Response, next: NextFunction) => unknown | Promise<unknown>,
+): RequestHandler => (req, res, next) =>
+  Promise.resolve(fn(req, res, next)).catch(next);
+
+/**
+ * Strip absolute file paths and stack-trace style noise out of an error
+ * message before sending it back to the client. Without this, validation
+ * failures from deep inside `BuildCoordinator` etc. can leak server filesystem
+ * layout (e.g. `/opt/mc-server-bot/data/...`) into JSON responses. We keep the
+ * leading message — everything before the first absolute path — and replace
+ * the offending segment with `<path>`.
+ */
+function sanitizeErrorMessage(input: unknown, fallback = 'Internal error'): string {
+  const raw = input instanceof Error
+    ? input.message
+    : (typeof input === 'string' ? input : (input != null ? String(input) : ''));
+  if (!raw) return fallback;
+  // Replace any POSIX-style absolute path (and the immediately following
+  // path-like characters) with a placeholder. Conservative: only strips
+  // segments that look like real paths, not arbitrary slashes in text.
+  let cleaned = raw.replace(/\/(?:[\w.@+-]+\/)+[\w.@+-]+/g, '<path>');
+  // Also collapse newlines (occasional stack-trace bleed-through).
+  cleaned = cleaned.split('\n')[0]!.trim();
+  return cleaned || fallback;
 }
 
 /**
@@ -317,7 +352,11 @@ export function createAPIServer(
     credentials: true,
   }));
 
-  app.use(express.json());
+  // Cap JSON bodies at 1mb (Express's default is 100kb). 1mb leaves
+  // headroom for the largest legitimate payload (schematic manifests,
+  // commander plans) without letting a misbehaving client buffer
+  // unbounded bytes into memory.
+  app.use(express.json({ limit: '1mb' }));
 
   // Trust the proxy (X-Forwarded-For) so req.ip reflects the real client.
   // Required for the per-IP rate limiter to be meaningful behind a proxy.
@@ -628,7 +667,7 @@ export function createAPIServer(
   });
 
   // Create bot
-  app.post('/api/bots', async (req: Request, res: Response) => {
+  app.post('/api/bots', asyncH(async (req: Request, res: Response) => {
     const { name, personality, location, mode } = req.body;
 
     if (!name || !personality) {
@@ -654,7 +693,7 @@ export function createAPIServer(
     io.emit('activity', event);
 
     res.status(201).json({ success: true, bot: handle.getCachedStatus() });
-  });
+  }));
 
   // Remove single bot
   app.delete('/api/bots/:name', async (req: Request, res: Response) => {
@@ -697,7 +736,34 @@ export function createAPIServer(
 
   // Event relay endpoints (for Java plugin)
   app.post('/api/events/chat', async (req: Request, res: Response) => {
-    const { playerName, message, nearestBot, playerPosition } = req.body;
+    const { playerName, message, nearestBot, playerPosition } = req.body ?? {};
+
+    // ── Optional-field type guards ──
+    // `nearestBot` must be a non-empty string of reasonable length when
+    // present. The plugin always passes one, but tighten the contract so a
+    // malformed JSON body can't trip botManager.getWorker() with a number.
+    if (nearestBot !== undefined && nearestBot !== null) {
+      if (typeof nearestBot !== 'string' || nearestBot.length === 0 || nearestBot.length > 64) {
+        res.status(400).json({ error: 'nearestBot must be a non-empty string ≤64 chars' });
+        return;
+      }
+    }
+    // `playerPosition` must be `{x, y, z}` of finite numbers when present.
+    // Without this guard, a malformed object would propagate to the
+    // PlayerPositionCache and pollute downstream queries.
+    if (playerPosition !== undefined && playerPosition !== null) {
+      if (
+        typeof playerPosition !== 'object' ||
+        Array.isArray(playerPosition) ||
+        !Number.isFinite((playerPosition as any).x) ||
+        !Number.isFinite((playerPosition as any).y) ||
+        !Number.isFinite((playerPosition as any).z)
+      ) {
+        res.status(400).json({ error: 'playerPosition must be { x, y, z } of finite numbers' });
+        return;
+      }
+    }
+
     const handle = nearestBot ? botManager.getWorker(nearestBot) : null;
 
     // Feed chat into the player intent model regardless of nearest-bot routing —
@@ -1188,20 +1254,35 @@ export function createAPIServer(
     res.json({ relationships: allAffinities });
   });
 
-  // Global skill library — read from disk, cached and invalidated on index mtime
+  // Global skill library — read from disk, cached and invalidated on index mtime.
+  // Caches the fully-parsed payload (array of skill objects + code previews),
+  // not the raw JSON text, so a cache hit can ship straight to res.json
+  // without doing JSON.parse + a fan-out of per-skill code reads. Cache key
+  // is the index.json mtimeMs only; per-skill code preview is captured at
+  // the same moment the index is parsed, so an edit to a single skill file
+  // won't invalidate the cache until the index is rewritten by the skill
+  // library (which the codebase does on every learn/update).
   let skillsCache: { mtimeMs: number; payload: { skills: any[]; count: number } } | null = null;
   app.get('/api/skills', (_req: Request, res: Response) => {
     try {
       const indexPath = path.join(process.cwd(), 'skills', 'index.json');
+      // statSync throws if the file is missing — guard with existsSync so we
+      // can return an empty payload without going through the catch block.
       if (!fs.existsSync(indexPath)) {
         res.json({ skills: [], count: 0 });
         return;
       }
       const indexMtime = fs.statSync(indexPath).mtimeMs;
+      // Cache hit: index hasn't changed since we last built the payload —
+      // skip parsing + per-skill code reads entirely.
       if (skillsCache && skillsCache.mtimeMs === indexMtime) {
         res.json(skillsCache.payload);
         return;
       }
+
+      // Cache miss: re-parse and rebuild. We do this on the same tick so the
+      // cached payload's `code` previews stay consistent with the index it
+      // was derived from.
       const index = JSON.parse(fs.readFileSync(indexPath, 'utf-8'));
       const entries: any[] = Array.isArray(index) ? index : Object.values(index);
       const skills = entries.map((entry: any) => {
@@ -1222,9 +1303,14 @@ export function createAPIServer(
         };
       });
       const payload = { skills, count: skills.length };
+      // Store the parsed array, not the raw text — readers compare by mtime
+      // and ship the payload as-is from here on.
       skillsCache = { mtimeMs: indexMtime, payload };
       res.json(payload);
     } catch {
+      // Don't poison the cache on read/parse failure — leave the previous
+      // good payload (if any) in place so a transient JSON write doesn't
+      // invalidate a healthy cache.
       res.json({ skills: [], count: 0 });
     }
   });
@@ -1535,23 +1621,39 @@ export function createAPIServer(
   });
 
   // Set a swarm directive from dashboard/UI
-  app.post('/api/swarm', async (req: Request, res: Response) => {
-    const { description, requestedBy } = req.body;
-    if (!description) {
-      res.status(400).json({ error: 'description is required' });
+  app.post('/api/swarm', asyncH(async (req: Request, res: Response) => {
+    const { description, requestedBy } = req.body ?? {};
+    // `description` is the core directive — must be a non-empty string and
+    // bounded so a runaway client can't queue a megabyte directive into
+    // the blackboard.
+    if (typeof description !== 'string' || description.trim().length === 0) {
+      res.status(400).json({ error: 'description is required (non-empty string)' });
       return;
     }
-    await botManager.handleSwarmDirective(description, requestedBy || 'dashboard');
+    if (description.length > 2000) {
+      res.status(400).json({ error: 'description must be ≤2000 characters' });
+      return;
+    }
+    // `requestedBy` is optional metadata — short string when present.
+    if (requestedBy !== undefined && requestedBy !== null) {
+      if (typeof requestedBy !== 'string' || requestedBy.length > 64) {
+        res.status(400).json({ error: 'requestedBy must be a string ≤64 chars' });
+        return;
+      }
+    }
+    const source = (typeof requestedBy === 'string' && requestedBy.length > 0) ? requestedBy : 'dashboard';
+
+    await botManager.handleSwarmDirective(description, source);
 
     const event = eventLog.push({
       type: 'swarm:directive',
       botName: 'swarm',
       description: `Swarm directive set: ${description}`,
-      metadata: { requestedBy: requestedBy || 'dashboard' },
+      metadata: { requestedBy: source },
     });
     io.emit('activity', event);
     res.json({ success: true });
-  });
+  }));
 
   // ═══════════════════════════════════════
   // ═══════════════════════════════════════
@@ -2003,7 +2105,8 @@ export function createAPIServer(
       res.json({ schematic: info });
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to fetch schematic');
-      res.status(500).json({ error: err.message });
+      // Don't echo absolute paths back to the client — sanitize before responding.
+      res.status(500).json({ error: sanitizeErrorMessage(err, 'Failed to fetch schematic') });
     }
   });
 
@@ -2013,8 +2116,8 @@ export function createAPIServer(
   });
 
   // Create a new build job
-  app.post('/api/builds', async (req: Request, res: Response) => {
-    const { schematicFile, origin, botNames, options } = req.body;
+  app.post('/api/builds', asyncH(async (req: Request, res: Response) => {
+    const { schematicFile, origin, botNames, options } = req.body ?? {};
     const originMode = options?.originMode ?? 'coords';
     const originRequired = originMode === 'coords';
     if (!schematicFile || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
@@ -2057,9 +2160,12 @@ export function createAPIServer(
       res.status(201).json({ build: job });
     } catch (err: any) {
       logger.error({ err }, 'Failed to start build');
-      res.status(400).json({ error: err.message });
+      // Sanitize so an error originating in BuildCoordinator (which often
+      // includes absolute schematic paths in its messages) doesn't leak the
+      // server's filesystem layout to API callers.
+      res.status(400).json({ error: sanitizeErrorMessage(err, 'Failed to start build') });
     }
-  });
+  }));
 
   // Get a specific build job
   app.get('/api/builds/:id', (req: Request, res: Response) => {
@@ -2467,8 +2573,107 @@ export function createAPIServer(
     res.json({ missions: missionManager.getMissions(filters) });
   });
   app.post('/api/missions', (req, res) => {
-    try { res.status(201).json({ mission: missionManager.createMission(req.body) }); }
-    catch (e: any) { res.status(400).json({ error: e.message }); }
+    // Validate the body up-front rather than passing whatever the client sent
+    // straight into MissionManager.createMission(). The MissionManager doesn't
+    // re-validate field shapes, so a malformed body could otherwise produce a
+    // half-constructed mission record that survives a process restart.
+    const body = (req.body ?? {}) as Record<string, unknown>;
+
+    // ── Required: title (string, non-empty, ≤200 chars) ──
+    if (typeof body.title !== 'string' || body.title.trim().length === 0) {
+      res.status(400).json({ error: 'title is required (non-empty string)' });
+      return;
+    }
+    if (body.title.length > 200) {
+      res.status(400).json({ error: 'title must be ≤200 characters' });
+      return;
+    }
+
+    // ── Required: type (MissionType enum) ──
+    const allowedTypes = new Set([
+      'queue_task', 'gather_items', 'craft_items', 'smelt_batch',
+      'build_schematic', 'supply_chain', 'patrol_zone', 'escort_player',
+      'resupply_builder',
+    ]);
+    if (typeof body.type !== 'string' || !allowedTypes.has(body.type)) {
+      res.status(400).json({ error: `type must be one of: ${[...allowedTypes].join(', ')}` });
+      return;
+    }
+
+    // ── Required: assigneeType + assigneeIds[] ──
+    // Accepts either the canonical { assigneeType, assigneeIds } shape OR
+    // the convenience aliases `assigneeBotNames` (→ bot) and `squadId` (→
+    // squad). The latter mirror what callers naturally type at the curl
+    // prompt without forcing a refactor in the dashboard.
+    let assigneeType: 'bot' | 'squad' | undefined;
+    let assigneeIds: string[] | undefined;
+    if (Array.isArray(body.assigneeBotNames) && body.assigneeBotNames.length > 0) {
+      if (!body.assigneeBotNames.every((n) => typeof n === 'string' && n.length > 0)) {
+        res.status(400).json({ error: 'assigneeBotNames must be an array of non-empty strings' });
+        return;
+      }
+      assigneeType = 'bot';
+      assigneeIds = body.assigneeBotNames as string[];
+    } else if (typeof body.squadId === 'string' && body.squadId.length > 0) {
+      assigneeType = 'squad';
+      assigneeIds = [body.squadId];
+    } else if (body.assigneeType === 'bot' || body.assigneeType === 'squad') {
+      if (!Array.isArray(body.assigneeIds) || body.assigneeIds.length === 0 ||
+          !body.assigneeIds.every((n) => typeof n === 'string' && n.length > 0)) {
+        res.status(400).json({ error: 'assigneeIds must be a non-empty array of strings' });
+        return;
+      }
+      assigneeType = body.assigneeType;
+      assigneeIds = body.assigneeIds as string[];
+    } else {
+      res.status(400).json({
+        error: 'either assigneeBotNames: string[] OR squadId: string OR (assigneeType + assigneeIds) is required',
+      });
+      return;
+    }
+
+    // ── Optional fields with shape checks ──
+    if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 2000)) {
+      res.status(400).json({ error: 'description must be a string ≤2000 chars' });
+      return;
+    }
+    const allowedPriorities = new Set(['low', 'normal', 'high', 'urgent']);
+    if (body.priority !== undefined && (typeof body.priority !== 'string' || !allowedPriorities.has(body.priority))) {
+      res.status(400).json({ error: 'priority must be one of: low, normal, high, urgent' });
+      return;
+    }
+    const allowedSources = new Set(['dashboard', 'map', 'role', 'routine', 'commander']);
+    if (body.source !== undefined && (typeof body.source !== 'string' || !allowedSources.has(body.source))) {
+      res.status(400).json({ error: 'source must be one of: dashboard, map, role, routine, commander' });
+      return;
+    }
+    if (body.steps !== undefined && !Array.isArray(body.steps)) {
+      res.status(400).json({ error: 'steps must be an array' });
+      return;
+    }
+    if (body.linkedCommandIds !== undefined && (!Array.isArray(body.linkedCommandIds) ||
+        !body.linkedCommandIds.every((s) => typeof s === 'string'))) {
+      res.status(400).json({ error: 'linkedCommandIds must be an array of strings' });
+      return;
+    }
+
+    const params: any = {
+      type: body.type,
+      title: body.title,
+      assigneeType,
+      assigneeIds,
+      description: body.description,
+      priority: body.priority,
+      source: body.source,
+      steps: body.steps,
+      linkedCommandIds: body.linkedCommandIds,
+    };
+
+    try {
+      res.status(201).json({ mission: missionManager.createMission(params) });
+    } catch (e: any) {
+      res.status(400).json({ error: sanitizeErrorMessage(e, 'Failed to create mission') });
+    }
   });
   app.get('/api/missions/:id', (req, res) => {
     const m = missionManager.getMission(req.params.id as string);
@@ -3913,6 +4118,32 @@ export function createAPIServer(
       logger.warn({ err: err?.message, townId: town.id }, 'mayor/decree failed');
       res.status(500).json({ error: err?.message ?? 'Failed to queue decree' });
     }
+  });
+
+  // ── Tail error-handling middleware ──
+  // Catches anything `asyncH` (and any other handler that calls `next(err)`)
+  // forwards. Logs the full error server-side, returns a sanitized message
+  // to the client. Without this, an un-caught rejection from an async route
+  // would crash the worker / leak a stack trace through Express's default
+  // handler. Express identifies error-handling middleware by its 4-arg
+  // signature, so the unused `_next` is required.
+  // Special case: a body that exceeds `express.json({ limit: '1mb' })`
+  // throws a PayloadTooLargeError with `err.type === 'entity.too.large'` —
+  // return 413 in that case so the client gets the right hint.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
+    if (res.headersSent) {
+      // Express will close the connection; just bail out of the handler.
+      return;
+    }
+    const status = typeof err?.statusCode === 'number' ? err.statusCode
+      : (typeof err?.status === 'number' ? err.status : 500);
+    logger.error({ err: err?.message, stack: err?.stack }, 'API request failed');
+    if (err?.type === 'entity.too.large') {
+      res.status(413).json({ error: 'Request body too large (limit 1mb)' });
+      return;
+    }
+    res.status(status).json({ error: sanitizeErrorMessage(err, 'Internal server error') });
   });
 
   return {

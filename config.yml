@@ -77,3 +77,18 @@ logging:
 #     followup; today this is a single shared key.
 auth:
   devSecret: null
+
+# Impersonation detection — defends against another client logging in under a
+# bot's username (which kicks the real bot via duplicate-login). On detection
+# the bot quarantines itself (stops reconnecting) and an alert is raised on the
+# dashboard, the log, and — if configured — in-game chat and a webhook.
+#   impersonationDetection: master switch (default ON).
+#   broadcastInGame: have a connected bot warn in Minecraft chat (visible to
+#     the attacker by design).
+#   quarantineReleaseSec: reserved; 0 = manual release only
+#     (POST /api/bots/:name/quarantine/release).
+# Webhook URL is set via the IMPERSONATION_ALERT_WEBHOOK env var, not here.
+security:
+  impersonationDetection: true
+  broadcastInGame: true
+  quarantineReleaseSec: 0

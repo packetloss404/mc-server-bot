@@ -136,6 +136,18 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     };
     socket.on('bot:died', onBotDied);
 
+    // ── Security: impersonation alert ──────────────────────────────────────
+    // Someone logged in under a bot's username; the server has quarantined the
+    // bot. Surface a persistent error toast so the operator sees it live.
+    const onSecurityAlert = (incident: { botName?: string; signal?: string; reason?: string } | null) => {
+      if (!incident || !incident.botName) return;
+      showToast(
+        `Impersonation detected: someone is using ${incident.botName}'s name (${incident.signal ?? 'unknown'}). Bot quarantined.`,
+        'error',
+      );
+    };
+    socket.on('security:alert', onSecurityAlert);
+
     // (player:position is handled by the single listener registered above with
     // the server's `{ player, x, y, z }` payload shape.)
 
@@ -278,6 +290,7 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       // for any of these events, both will be removed; in that case, name
       // the handler and pass it to .off() like the ones at the top here.
       socket.off('bot:died', onBotDied);
+      socket.off('security:alert', onSecurityAlert);
       socket.io.off('reconnect_attempt', onReconnectAttempt);
       socket.io.off('reconnect_error', onReconnectAttempt);
       socket.off('connect', onConnect);

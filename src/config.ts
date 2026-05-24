@@ -105,6 +105,23 @@ export interface Config {
   auth?: {
     devSecret?: string | null;
   };
+  /**
+   * Impersonation detection — defends against another client logging in under
+   * a bot's username (a duplicate-login kick boots the real bot). When a
+   * duplicate-login kick is detected the bot quarantines itself (stops
+   * reconnecting) and an alert is raised. See src/security/ImpersonationMonitor
+   * and BotInstance.parseDuplicateLoginKick. The outbound webhook URL is read
+   * from the IMPERSONATION_ALERT_WEBHOOK env var (not config), matching the
+   * DASHBOARD_AUTH_SECRET / PLUGIN_AUTH_TOKEN convention.
+   */
+  security?: {
+    /** Master switch. Detection/quarantine is on unless explicitly false. */
+    impersonationDetection: boolean;
+    /** Have a connected bot announce the impersonation in Minecraft chat. */
+    broadcastInGame: boolean;
+    /** Reserved: auto-release quarantine after N seconds (0 = manual only). */
+    quarantineReleaseSec: number;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +151,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'ollama',
   'logging',
   'auth',
+  'security',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -249,6 +267,14 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
       // devSecret may be string OR null (per Config interface). Handled in
       // checkSection() with a special-case below.
       { key: 'devSecret', type: 'string', optional: true },
+    ],
+  },
+  security: {
+    required: false,
+    fields: [
+      { key: 'impersonationDetection', type: 'boolean', optional: true },
+      { key: 'broadcastInGame', type: 'boolean', optional: true },
+      { key: 'quarantineReleaseSec', type: 'number', optional: true },
     ],
   },
 };

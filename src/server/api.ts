@@ -734,6 +734,32 @@ export function createAPIServer(
     res.json({ success: true, mode });
   });
 
+  // ── Security: impersonation detection ──
+
+  // List recent impersonation incidents (newest first).
+  app.get('/api/security/impersonation', (_req: Request, res: Response) => {
+    res.json({ incidents: botManager.getImpersonationMonitor().list() });
+  });
+
+  // Release an impersonation quarantine so the bot reconnects. Operator action,
+  // to be used once the impostor is gone (kicked/banned or online-mode enabled).
+  app.post('/api/bots/:name/quarantine/release', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const handle = botManager.getWorker(name);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    handle.releaseQuarantine();
+    const event = eventLog.push({
+      type: 'security:quarantine-released',
+      botName: name,
+      description: `${name} quarantine released — reconnecting`,
+    });
+    io.emit('activity', event);
+    res.json({ success: true });
+  });
+
   // Event relay endpoints (for Java plugin)
   app.post('/api/events/chat', async (req: Request, res: Response) => {
     const { playerName, message, nearestBot, playerPosition } = req.body ?? {};

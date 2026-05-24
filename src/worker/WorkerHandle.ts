@@ -62,6 +62,9 @@ export class WorkerHandle {
   private onTrace?: (record: TraceRecord) => void;
   private onReputationEvent?: (event: any) => void;
   private onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
+  private onPlayerJoined?: (playerName: string) => void;
+  private onPlayerLeft?: (playerName: string) => void;
+  private onImpersonation?: (info: { botName: string; reason: string; signal: string }) => void;
 
   // Shared managers for IPC routing
   private llmClient: LLMClient | null;
@@ -247,6 +250,32 @@ export class WorkerHandle {
       if (this.onDeath) {
         try { this.onDeath(data); }
         catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'Death event handler error'); }
+      }
+      return;
+    }
+
+    // Impersonation (duplicate-login kick) forwarding from worker.
+    if (type === 'security.impersonation') {
+      if (this.onImpersonation) {
+        try { this.onImpersonation(data); }
+        catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'Impersonation event handler error'); }
+      }
+      return;
+    }
+
+    // Player join/leave forwarding from worker (one event per bot that saw it;
+    // BotManager dedupes across the fleet and filters out our own bot names).
+    if (type === 'player.joined') {
+      if (this.onPlayerJoined && data?.playerName) {
+        try { this.onPlayerJoined(data.playerName); }
+        catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'PlayerJoined handler error'); }
+      }
+      return;
+    }
+    if (type === 'player.left') {
+      if (this.onPlayerLeft && data?.playerName) {
+        try { this.onPlayerLeft(data.playerName); }
+        catch (err: any) { logger.error({ bot: this.botName, err: err.message }, 'PlayerLeft handler error'); }
       }
       return;
     }
@@ -438,6 +467,11 @@ export class WorkerHandle {
     this.sendCommand('setBotState', { state });
   }
 
+  /** Clear an impersonation quarantine and reconnect the bot. */
+  releaseQuarantine(): void {
+    this.sendCommand('releaseQuarantine', {});
+  }
+
   pauseVoyager(reason?: string): void {
     this.sendCommand('pauseVoyager', { reason });
   }
@@ -551,6 +585,20 @@ export class WorkerHandle {
   /** Register a callback for death events from the worker. */
   setDeathListener(fn: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void): void {
     this.onDeath = fn;
+  }
+
+  /** Register a callback for impersonation (duplicate-login) events from the worker. */
+  setImpersonationListener(fn: (info: { botName: string; reason: string; signal: string }) => void): void {
+    this.onImpersonation = fn;
+  }
+
+  /** Register callbacks for player join/leave events seen by this worker's bot. */
+  setPlayerPresenceListeners(
+    onJoin: (playerName: string) => void,
+    onLeave: (playerName: string) => void,
+  ): void {
+    this.onPlayerJoined = onJoin;
+    this.onPlayerLeft = onLeave;
   }
 
   isAlive(): boolean {

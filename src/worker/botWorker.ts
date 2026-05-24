@@ -144,6 +144,15 @@ const instance = new BotInstance({
   onDeath: (event) => {
     ipc.notify('bot.died', event);
   },
+  onPlayerJoined: (playerName) => {
+    ipc.notify('player.joined', { playerName });
+  },
+  onPlayerLeft: (playerName) => {
+    ipc.notify('player.left', { playerName });
+  },
+  onImpersonation: (info) => {
+    ipc.notify('security.impersonation', info);
+  },
 });
 
 // Handle commands from main thread
@@ -151,6 +160,9 @@ ipc.onCommand((type, cmdData) => {
   switch (type) {
     case 'disconnect':
       instance.disconnect().then(() => process.exit(0));
+      break;
+    case 'releaseQuarantine':
+      instance.releaseQuarantine();
       break;
     case 'setMode':
       instance.setMode(cmdData.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE);

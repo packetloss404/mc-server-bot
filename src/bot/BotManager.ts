@@ -22,6 +22,7 @@ import { BotReputation } from '../voyager/BotReputation';
 import { PlayerPresenceTracker } from './PlayerPresenceTracker';
 import { PlayerPositionCache } from '../control/PlayerPositionCache';
 import { TownManager } from '../town/TownManager';
+import { ImpersonationMonitor, ImpersonationIncident, ImpersonationInput } from '../security/ImpersonationMonitor';
 
 interface SavedBot {
   name: string;
@@ -55,10 +56,20 @@ export class BotManager {
   private playerPresenceTracker: PlayerPresenceTracker;
   private playerPositionCache: PlayerPositionCache;
   private townManager: TownManager;
+  private impersonationMonitor: ImpersonationMonitor;
+  /** Set by the server layer (index.ts) to surface impersonation incidents on
+   *  the dashboard activity feed + a Socket.IO alert. Optional so BotManager
+   *  works headless in tests. */
+  onImpersonationAlert?: (incident: ImpersonationIncident) => void;
   private watchdogInterval: NodeJS.Timeout | null = null;
   private nextStaggerAt = 0;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
   private spawnListeners: Array<(handle: WorkerHandle) => void> = [];
+  /** Fleet-wide dedup for playerJoined/playerLeft events. Every bot sees the
+   *  same join packet, so without this we'd log N times (once per online bot).
+   *  Key is `${event}:${lowerName}`; value is the last-fire timestamp. */
+  private playerEventLastFireAt: Map<string, number> = new Map();
+  private static readonly PLAYER_EVENT_DEDUP_MS = 5_000;
 
   constructor(config: Config, llmClient: LLMClient | null) {
     this.config = config;
@@ -78,6 +89,7 @@ export class BotManager {
     this.playerPresenceTracker = new PlayerPresenceTracker(this.difficultyBalancer);
     this.playerPositionCache = new PlayerPositionCache();
     this.townManager = new TownManager();
+    this.impersonationMonitor = new ImpersonationMonitor();
   }
 
   async spawnBot(
@@ -146,6 +158,18 @@ export class BotManager {
       this.botReputation.recordEvent(event);
     });
 
+    // Real-player presence tracking. The worker forwards every playerJoined/Left
+    // its bot sees; we drop anything matching one of our bot names and dedupe
+    // across the fleet so only the first sighting in a 5s window logs.
+    handle.setPlayerPresenceListeners(
+      (playerName) => this.handleFleetPlayerEvent('join', playerName),
+      (playerName) => this.handleFleetPlayerEvent('leave', playerName),
+    );
+
+    // Impersonation: the worker reports when its bot was kicked by a
+    // duplicate-login (someone logged in under this bot's name).
+    handle.setImpersonationListener((info) => this.handleImpersonation(info));
+
     this.workers.set(key, handle);
 
     for (const listener of this.spawnListeners) {
@@ -200,6 +224,120 @@ export class BotManager {
       }
     }
     throw new Error('No free prismarine-viewer slots available');
+  }
+
+  /**
+   * Receives playerJoined/playerLeft from any worker. Drops events for our own
+   * bots (they show up in every bot's tab list) and dedupes across the fleet
+   * so one real-player join produces one log line, not one per bot.
+   */
+  private handleFleetPlayerEvent(event: 'join' | 'leave', playerName: string): void {
+    if (!playerName) return;
+    const lower = playerName.toLowerCase();
+    const ownWorker = this.workers.get(lower);
+    if (ownWorker) {
+      // Normally a roster name in the tab list is just our own bot. But if OUR
+      // bot of that name is offline (we were kicked / quarantined) and a player
+      // with that name is online, that's an impostor wearing our identity —
+      // corroborating the duplicate-login signal (or catching a server whose
+      // kick message we didn't pattern-match). Only fire on join; offline =
+      // cached state DISCONNECTED/QUARANTINED, so a healthy bot won't trip it.
+      const detectionEnabled = this.config.security?.impersonationDetection !== false;
+      const state = ownWorker.getCachedStatus()?.state;
+      if (event === 'join' && detectionEnabled && (state === 'QUARANTINED' || state === 'DISCONNECTED')) {
+        this.handleImpersonation({
+          botName: ownWorker.botName,
+          reason: `Roster name '${ownWorker.botName}' seen online while our bot is ${state}`,
+          signal: 'ghost-name',
+        });
+      }
+      return; // either way, don't treat a bot name as a real-player presence
+    }
+
+    const dedupKey = `${event}:${lower}`;
+    const now = Date.now();
+    const last = this.playerEventLastFireAt.get(dedupKey) ?? 0;
+    if (now - last < BotManager.PLAYER_EVENT_DEDUP_MS) return;
+    this.playerEventLastFireAt.set(dedupKey, now);
+
+    if (event === 'join') {
+      logger.info({ player: playerName }, 'Real player joined server');
+      try { this.playerPresenceTracker.recordJoin(playerName); }
+      catch (err: any) { logger.warn({ player: playerName, err: err?.message }, 'recordJoin failed'); }
+    } else {
+      logger.info({ player: playerName }, 'Real player left server');
+      try { this.playerPresenceTracker.recordLeave(playerName); }
+      catch (err: any) { logger.warn({ player: playerName, err: err?.message }, 'recordLeave failed'); }
+    }
+  }
+
+  /**
+   * Central response to an impersonation signal. Dedupes via
+   * ImpersonationMonitor, logs, and on a NEW incident fans out the three alert
+   * channels: dashboard+log (via onImpersonationAlert → EventLog/Socket.IO),
+   * in-game chat broadcast (config-gated), and an outbound webhook (env-gated).
+   * The affected bot has already quarantined itself in its worker; this is the
+   * operator-facing alerting + fleet response.
+   */
+  handleImpersonation(info: { botName: string; reason: string; signal: string }): void {
+    // `signal` crosses the worker→main IPC boundary as a plain string; narrow
+    // it back to the union (anything unexpected is treated as duplicate-login).
+    const signal: ImpersonationInput['signal'] = info.signal === 'ghost-name' ? 'ghost-name' : 'duplicate-login';
+    const { isNew, incident } = this.impersonationMonitor.record({ botName: info.botName, reason: info.reason, signal });
+    logger.warn(
+      { bot: info.botName, signal: info.signal, count: incident.count, reason: info.reason },
+      'Impersonation detected',
+    );
+
+    // Always surface to the dashboard/log channel (it dedupes visually by bot).
+    try { this.onImpersonationAlert?.(incident); }
+    catch (err: any) { logger.warn({ bot: info.botName, err: err?.message }, 'onImpersonationAlert hook failed'); }
+
+    if (!isNew) return; // noisy channels only fire on a fresh incident
+
+    // In-game chat broadcast (config-gated). Pick any currently-connected bot
+    // to announce it. Note: this is visible to the attacker by design choice.
+    if (this.config.security?.broadcastInGame) {
+      const messenger = this.getAllWorkers().find((w) => {
+        const s = w.getCachedStatus()?.state;
+        return s && s !== 'QUARANTINED' && s !== 'DISCONNECTED' && s !== 'SPAWNING';
+      });
+      if (messenger) {
+        try { messenger.chat(`[security] Impersonation detected: someone is using ${info.botName}'s name.`); }
+        catch (err: any) { logger.debug({ err: err?.message }, 'in-game impersonation broadcast failed'); }
+      }
+    }
+
+    // Outbound webhook (Discord-compatible), env-gated, fire-and-forget.
+    void this.postImpersonationWebhook(incident);
+  }
+
+  /**
+   * POST the incident to IMPERSONATION_ALERT_WEBHOOK if set. Discord-compatible
+   * `{ content }` payload; failures are swallowed so alerting never blocks or
+   * crashes detection.
+   */
+  private async postImpersonationWebhook(incident: ImpersonationIncident): Promise<void> {
+    const url = process.env.IMPERSONATION_ALERT_WEBHOOK;
+    if (!url) return;
+    const content =
+      `🚨 **Impersonation detected** on the Minecraft server\n` +
+      `Bot: \`${incident.botName}\` — signal: \`${incident.signal}\`\n` +
+      `Reason: ${incident.reason}\n` +
+      `The bot has been quarantined (auto-reconnect disabled).`;
+    try {
+      await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content }),
+      });
+    } catch (err: any) {
+      logger.warn({ bot: incident.botName, err: err?.message }, 'Impersonation webhook POST failed');
+    }
+  }
+
+  getImpersonationMonitor(): ImpersonationMonitor {
+    return this.impersonationMonitor;
   }
 
   async removeAllBots(): Promise<number> {

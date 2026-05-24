@@ -91,6 +91,19 @@ async function main() {
   // Set up real-time Socket.IO event broadcasting
   setupSocketEvents(botManager, io, eventLog);
 
+  // Surface impersonation incidents on the dashboard activity feed + a
+  // dedicated `security:alert` socket event (for a prominent toast/banner).
+  botManager.onImpersonationAlert = (incident) => {
+    const entry = eventLog.push({
+      type: 'security:impersonation',
+      botName: incident.botName,
+      description: `Impersonation detected: '${incident.botName}' (${incident.signal})${incident.count > 1 ? ` ×${incident.count}` : ''}`,
+      metadata: incident,
+    });
+    io.emit('security:alert', incident);
+    io.emit('activity', entry);
+  };
+
   // Broadcast every LLM call so the dashboard's waterfall timeline can render
   // live. Survives /api/llm/reload via LLMSettings re-applying the listener.
   llmSettings.setCallListener((event) => {

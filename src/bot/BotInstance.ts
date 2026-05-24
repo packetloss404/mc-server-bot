@@ -49,6 +49,9 @@ export interface BotOptions {
   onReputationEvent?: (event: any) => void;
   onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
   onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
+  onPlayerJoined?: (playerName: string) => void;
+  onPlayerLeft?: (playerName: string) => void;
+  onImpersonation?: (info: { botName: string; reason: string; signal: 'duplicate-login' }) => void;
 }
 
 export class BotInstance {
@@ -88,6 +91,24 @@ export class BotInstance {
   private onReputationEvent?: (event: any) => void;
   private onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
   private onDeath?: (event: { botName: string; position: { x: number; y: number; z: number } | null }) => void;
+  private onPlayerJoined?: (playerName: string) => void;
+  private onPlayerLeft?: (playerName: string) => void;
+  private onImpersonation?: (info: { botName: string; reason: string; signal: 'duplicate-login' }) => void;
+  /** Set true once a duplicate-login kick is attributed to impersonation.
+   *  While true, scheduleReconnect() is a no-op so we don't feed a login
+   *  tug-of-war with the impostor. Cleared only by releaseQuarantine(). */
+  private quarantined = false;
+  /** Wall-clock of the most recent connect() that reached createBot. Used to
+   *  suppress false-positive impersonation detection: when WE reconnect, the
+   *  new session can trigger a duplicate_login kick on a lingering old
+   *  server-side session — that's our own doing, not an attacker. */
+  private lastConnectInitiatedAt = 0;
+  /** False until the bot's first 'spawn' event on the current connection. Gates
+   *  the playerJoined forwarder so the initial player_info population (which
+   *  arrives during login, before we're in-world) doesn't fire spurious joins.
+   *  Reset to false at the start of every connect() so reconnects behave the
+   *  same way as a fresh start. */
+  private hasSpawnedOnceThisConnection = false;
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
   private botComms: BotComms;
@@ -135,6 +156,9 @@ export class BotInstance {
     this.onReputationEvent = options.onReputationEvent;
     this.onVoyagerLoopCreated = options.onVoyagerLoopCreated;
     this.onDeath = options.onDeath;
+    this.onPlayerJoined = options.onPlayerJoined;
+    this.onPlayerLeft = options.onPlayerLeft;
+    this.onImpersonation = options.onImpersonation;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = BotComms.getInstance();
     this.botComms.registerBot(this.name);
@@ -172,6 +196,8 @@ export class BotInstance {
     // The chat listener guard is per-bot-object — reset so the new bot
     // actually gets a chat listener on spawn.
     this.chatListenerBound = false;
+    this.hasSpawnedOnceThisConnection = false;
+    this.lastConnectInitiatedAt = Date.now();
 
     this.bot = mineflayer.createBot({
       host: this.config.minecraft.host,
@@ -186,7 +212,26 @@ export class BotInstance {
     this.bot.loadPlugin(pathfinder);
     this.bot.loadPlugin(collectBlock);
 
+    // Forward player join/leave to the main thread. The gate skips the initial
+    // player_info population that arrives during login (before 'spawn' fires);
+    // BotManager dedupes across the fleet and filters out our own bot names.
+    this.bot.on('playerJoined', (player: any) => {
+      if (!this.hasSpawnedOnceThisConnection) return;
+      const name = player?.username;
+      if (!name || name === this.name) return;
+      try { this.onPlayerJoined?.(name); }
+      catch (err: any) { logger.warn({ bot: this.name, err: err?.message }, 'onPlayerJoined callback failed'); }
+    });
+    this.bot.on('playerLeft', (player: any) => {
+      if (!this.hasSpawnedOnceThisConnection) return;
+      const name = player?.username;
+      if (!name || name === this.name) return;
+      try { this.onPlayerLeft?.(name); }
+      catch (err: any) { logger.warn({ bot: this.name, err: err?.message }, 'onPlayerLeft callback failed'); }
+    });
+
     this.bot.on('spawn', () => {
+      this.hasSpawnedOnceThisConnection = true;
       logger.info({
         bot: this.name,
         position: this.bot?.entity?.position ? {
@@ -357,8 +402,27 @@ export class BotInstance {
 
     this.bot.on('kicked', (reason) => {
       logger.warn({ bot: this.name, reason }, 'Bot was kicked');
-      this.state = BotState.DISCONNECTED;
       this.stopAmbientBehaviors();
+
+      // Impersonation: a duplicate-login kick means another client logged in
+      // under our username. Guard against a false positive from our OWN
+      // reconnect kicking a lingering old session (within ~10s of connect()).
+      const detectionEnabled = this.config.security?.impersonationDetection !== false;
+      const selfReconnectWindow = Date.now() - this.lastConnectInitiatedAt < 10_000;
+      if (detectionEnabled && !selfReconnectWindow && BotInstance.parseDuplicateLoginKick(reason)) {
+        const normalized = BotInstance.normalizeKickReason(reason);
+        logger.error({ bot: this.name, reason: normalized }, 'Impersonation detected: duplicate-login kick — quarantining bot (not reconnecting)');
+        this.quarantined = true;
+        this.state = BotState.QUARANTINED;
+        try {
+          this.onImpersonation?.({ botName: this.name, reason: normalized, signal: 'duplicate-login' });
+        } catch (err: any) {
+          logger.warn({ bot: this.name, err: err?.message }, 'onImpersonation callback failed');
+        }
+        return; // deliberately do NOT scheduleReconnect
+      }
+
+      this.state = BotState.DISCONNECTED;
       this.scheduleReconnect(reason);
     });
 
@@ -525,10 +589,33 @@ export class BotInstance {
    * Returns null when the reason isn't a throttle kick at all (in which
    * case we fall through to exponential backoff).
    */
-  private static parseLoginThrottleHint(reason: unknown): number | null {
-    const text = typeof reason === 'string'
+  /**
+   * Flatten a mineflayer kick `reason` to a string we can pattern-match.
+   * The reason may be a plain string, a JSON string, or a chat-component
+   * object (`{ text, translate, extra: [...] }`), so we stringify the
+   * non-string case and let the regexes hit either raw text or the
+   * `translate` key (e.g. "multiplayer.disconnect.duplicate_login").
+   */
+  static normalizeKickReason(reason: unknown): string {
+    return typeof reason === 'string'
       ? reason
       : (() => { try { return JSON.stringify(reason); } catch { return String(reason); } })();
+  }
+
+  /**
+   * True when the kick is a duplicate-login boot — i.e. another client logged
+   * in under this bot's username and the server kicked us. Vanilla sends the
+   * `multiplayer.disconnect.duplicate_login` translation key ("You logged in
+   * from another location"); some servers send the plain English text. This is
+   * the primary impersonation signal.
+   */
+  static parseDuplicateLoginKick(reason: unknown): boolean {
+    const text = BotInstance.normalizeKickReason(reason);
+    return /duplicate_login|logged in from another( location)?|you logged in from another/i.test(text);
+  }
+
+  private static parseLoginThrottleHint(reason: unknown): number | null {
+    const text = BotInstance.normalizeKickReason(reason);
     const specific = /wait\s+(\d+)\s+seconds?\s+before\s+logg/i.exec(text);
     if (specific) {
       const secs = parseInt(specific[1], 10);
@@ -542,6 +629,10 @@ export class BotInstance {
 
   private scheduleReconnect(kickReason?: unknown): void {
     if (this.destroyed) return;
+    if (this.quarantined) {
+      logger.warn({ bot: this.name }, 'Reconnect suppressed: bot is quarantined (impersonation). Release via API to reconnect.');
+      return;
+    }
     if (this.pendingConnectTimeout) {
       logger.debug({ bot: this.name }, 'Reconnect already queued, skipping duplicate schedule');
       return;
@@ -578,6 +669,25 @@ export class BotInstance {
       this.pendingConnectTimeout = null;
       void this.connect();
     }, delay);
+  }
+
+  /**
+   * Clear an impersonation quarantine and reconnect. Invoked by an operator
+   * (POST /api/bots/:name/quarantine/release) once the impostor is gone —
+   * e.g. after kicking/banning them or enabling server-side online-mode.
+   */
+  releaseQuarantine(): void {
+    if (!this.quarantined) return;
+    logger.info({ bot: this.name }, 'Quarantine released — reconnecting');
+    this.quarantined = false;
+    this.reconnectAttempts = 0;
+    this.state = BotState.SPAWNING;
+    void this.connect(true);
+  }
+
+  /** Whether this bot is currently quarantined for impersonation. */
+  isQuarantined(): boolean {
+    return this.quarantined;
   }
 
   private reserveConnectSlot(): number {

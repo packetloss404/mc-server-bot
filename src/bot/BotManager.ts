@@ -22,6 +22,7 @@ import { BotReputation } from '../voyager/BotReputation';
 import { PlayerPresenceTracker } from './PlayerPresenceTracker';
 import { PlayerPositionCache } from '../control/PlayerPositionCache';
 import { TownManager } from '../town/TownManager';
+import { RuleStore, TownRule } from '../town/RuleStore';
 import { ImpersonationMonitor, ImpersonationIncident, ImpersonationInput } from '../security/ImpersonationMonitor';
 
 interface SavedBot {
@@ -56,6 +57,10 @@ export class BotManager {
   private playerPresenceTracker: PlayerPresenceTracker;
   private playerPositionCache: PlayerPositionCache;
   private townManager: TownManager;
+  /** Project Sid P2-A — standing mayor rules. Populated by the decree handler
+   *  when `config.governance.enabled`; consulted by BlackboardManager scoring
+   *  (also gated on the flag). */
+  private ruleStore: RuleStore;
   private impersonationMonitor: ImpersonationMonitor;
   /** Set by the server layer (index.ts) to surface impersonation incidents on
    *  the dashboard activity feed + a Socket.IO alert. Optional so BotManager
@@ -89,7 +94,51 @@ export class BotManager {
     this.playerPresenceTracker = new PlayerPresenceTracker(this.difficultyBalancer);
     this.playerPositionCache = new PlayerPositionCache();
     this.townManager = new TownManager();
+    this.ruleStore = new RuleStore(path.join(process.cwd(), 'data'));
     this.impersonationMonitor = new ImpersonationMonitor();
+
+    // Project Sid P2-A — wire the standing-rule resolver into BlackboardManager
+    // the same way the role resolver is injected (a per-bot closure that walks
+    // towns/residents). Gated entirely on `config.governance.enabled`: when the
+    // flag is off the resolver returns [] for every bot, so scoreTaskEnhanced
+    // applies no rule boost and scores are identical to today.
+    this.blackboardManager.setActiveRulesForBotResolver(
+      (botName: string): TownRule[] => this.resolveActiveRulesForBot(botName),
+    );
+  }
+
+  /** Project Sid P2-A — accessor for the standing-rule store (used by the
+   *  mayor/decree handler and GET /api/towns/:id/rules). */
+  getRuleStore(): RuleStore { return this.ruleStore; }
+
+  /** Accessor for the runtime config (used by town-level governance wiring
+   *  to read the `governance.enabled` flag). */
+  getConfig(): Config { return this.config; }
+
+  /**
+   * Project Sid P2-B — resolve a bot's ACTIVE town rules across the worker
+   * boundary. Mirrors the role resolver: walks every town (small N) for a
+   * resident row whose botName matches and returns that town's active rules.
+   * Gated entirely on `config.governance.enabled`: when the flag is off this
+   * returns [] for every bot, so VoyagerLoop injects no rule text into any
+   * prompt and there's zero token cost. Returns [] for non-resident bots and
+   * on any TownManager error (rule injection is additive).
+   */
+  private resolveActiveRulesForBot(botName: string): TownRule[] {
+    if (!this.config.governance?.enabled) return [];
+    try {
+      const towns = this.townManager.listTowns();
+      for (const town of towns) {
+        const residents = this.townManager.listResidents(town.id);
+        const hit = residents.find(
+          (r) => r.botName.toLowerCase() === botName.toLowerCase(),
+        );
+        if (hit) return this.ruleStore.getActiveRules(town.id);
+      }
+    } catch {
+      /* swallow — rule injection is additive */
+    }
+    return [];
   }
 
   async spawnBot(
@@ -151,6 +200,11 @@ export class BotManager {
         }
         return null;
       },
+      // Project Sid P2-B — resolver so VoyagerLoop can fetch this bot's
+      // active town rules across the worker boundary and inject them into
+      // the resident task-proposal prompt. Gated on governance.enabled
+      // (returns [] when off ⇒ no token cost). WorkerHandle caches for 60s.
+      (botName: string): TownRule[] => this.resolveActiveRulesForBot(botName),
     );
 
     // Wire reputation listener immediately so it's ready before the worker sends events

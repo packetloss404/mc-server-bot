@@ -92,3 +92,13 @@ security:
   impersonationDetection: true
   broadcastInGame: true
   quarantineReleaseSec: 0
+
+# Project Sid P2 — "Governance that bites". When enabled, a mayor decree is
+# ALSO persisted as a standing TownRule (data/town_rules.json) and
+# BlackboardManager boosts tasks whose text/keywords match an active rule for
+# the bot's town, so decrees keep shaping behavior instead of being one-shot.
+#   enabled: master switch (default OFF — behavior-changing). When false,
+#     decrees keep their legacy one-shot-task behavior and task scores are
+#     identical to today (the rule store is never consulted).
+governance:
+  enabled: false

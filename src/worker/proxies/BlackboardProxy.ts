@@ -1,4 +1,5 @@
 import { IPCChannel } from '../IPCChannel';
+import type { TownRule } from '../../town/RuleStore';
 
 /**
  * Proxy for BlackboardManager that runs in a worker thread.
@@ -41,6 +42,17 @@ export class BlackboardProxy {
    */
   async getBotRole(botName: string): Promise<string | null> {
     return this.ipc.request('blackboard.getBotRole', [botName]);
+  }
+
+  /**
+   * Project Sid P2-B — fetch a bot's ACTIVE town rules across the IPC
+   * boundary. Returns [] when the bot isn't a resident, the worker can't
+   * reach TownManager, OR `config.governance.enabled` is off (the main-thread
+   * resolver gates on the flag). Result is cached on WorkerHandle for 60s to
+   * keep the resident task-proposal path cheap.
+   */
+  async getActiveRulesForBot(botName: string): Promise<TownRule[]> {
+    return this.ipc.request('town.getActiveRulesForBot', [botName]).then((r: any) => (r ?? []) as TownRule[]);
   }
 
   async completeTask(taskDescription: string, botName: string): Promise<void> {

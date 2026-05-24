@@ -122,6 +122,22 @@ export interface Config {
     /** Reserved: auto-release quarantine after N seconds (0 = manual only). */
     quarantineReleaseSec: number;
   };
+  /**
+   * Project Sid P2 — "Governance that bites".
+   *
+   * When `governance.enabled` is true, a mayor decree is ALSO persisted as a
+   * standing TownRule (via RuleStore) instead of being a purely one-shot
+   * blackboard task, and `BlackboardManager.scoreTaskEnhanced` boosts tasks
+   * whose text/keywords match an active rule for the bot's town.
+   *
+   * Default OFF (behavior-changing). When disabled, decrees keep their legacy
+   * one-shot-task behavior and task scoring is byte-for-byte identical to
+   * today — the rule store is never consulted.
+   */
+  governance?: {
+    /** Master switch for P2 standing-rule behavior. Default false. */
+    enabled: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -152,6 +168,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'logging',
   'auth',
   'security',
+  'governance',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -276,6 +293,10 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
       { key: 'broadcastInGame', type: 'boolean', optional: true },
       { key: 'quarantineReleaseSec', type: 'number', optional: true },
     ],
+  },
+  governance: {
+    required: false,
+    fields: [{ key: 'enabled', type: 'boolean', optional: true }],
   },
 };
 

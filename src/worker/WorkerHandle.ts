@@ -9,6 +9,7 @@ import { SharedWorldModel } from '../voyager/SharedWorldModel';
 import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
 import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
+import type { TownRule } from '../town/RuleStore';
 import { logger } from '../util/logger';
 
 export interface WorkerBotData {
@@ -84,6 +85,15 @@ export class WorkerHandle {
   private resolveBotRole: ((botName: string) => string | null) | null = null;
   private botRoleCache: { value: string | null; expiresAt: number } | null = null;
   private static readonly ROLE_CACHE_TTL_MS = 60_000;
+  /**
+   * Project Sid P2-B — resolver for a bot's ACTIVE town rules. Wired by
+   * BotManager from the RuleStore/TownManager; returns [] when the bot isn't
+   * a resident OR `config.governance.enabled` is off. Cached for 60s (same as
+   * the role cache) to keep the resident task-proposal path cheap.
+   */
+  private resolveActiveRules: ((botName: string) => TownRule[]) | null = null;
+  private activeRulesCache: { value: TownRule[]; expiresAt: number } | null = null;
+  private static readonly RULES_CACHE_TTL_MS = 60_000;
 
   constructor(
     data: WorkerBotData,
@@ -96,6 +106,7 @@ export class WorkerHandle {
     difficultyBalancer: DifficultyBalancer | null = null,
     playerIntentModel: PlayerIntentModel | null = null,
     resolveBotRole: ((botName: string) => string | null) | null = null,
+    resolveActiveRules: ((botName: string) => TownRule[]) | null = null,
   ) {
     this.botName = data.botName;
     this.personality = data.personality;
@@ -111,6 +122,7 @@ export class WorkerHandle {
     this.playerIntentModel = playerIntentModel;
     this.onSwarmDirective = onSwarmDirective;
     this.resolveBotRole = resolveBotRole;
+    this.resolveActiveRules = resolveActiveRules;
 
     // Provide a basic cached status while worker boots
     this.lastStatus = {
@@ -178,6 +190,7 @@ export class WorkerHandle {
     if (type === 'blackboard.addTask') return this.blackboardManager.addTask(args[0], args[1], args[2]);
     if (type === 'blackboard.claimBestTask') return this.blackboardManager.claimBestTask(args[0], args[1], args[2], args[3], args[4]);
     if (type === 'blackboard.getBotRole') return this.getCachedBotRole(args[0]);
+    if (type === 'town.getActiveRulesForBot') return this.getCachedActiveRules(args[0]);
     if (type === 'blackboard.getState') return this.blackboardManager.getState();
     if (type === 'blackboard.getRecentMessages') return this.blackboardManager.getRecentMessages(args[0]);
     if (type === 'blackboard.getSwarmGoal') return this.blackboardManager.getSwarmGoal();
@@ -398,6 +411,30 @@ export class WorkerHandle {
     }
     if (!this.resolveBotRole) return null;
     try { return this.resolveBotRole(target); } catch { return null; }
+  }
+
+  /**
+   * Project Sid P2-B — resolve this bot's active town rules, cached for 60s.
+   * Mirrors getCachedBotRole: the cache is keyed implicitly by this.botName
+   * (one WorkerHandle per bot). Returns [] when no resolver is wired or the
+   * resolver throws, so a missing/disabled governance flag is a clean no-op.
+   */
+  private getCachedActiveRules(botName: string): TownRule[] {
+    const target = botName ?? this.botName;
+    if (target === this.botName) {
+      const now = Date.now();
+      if (this.activeRulesCache && this.activeRulesCache.expiresAt > now) {
+        return this.activeRulesCache.value;
+      }
+      let value: TownRule[] = [];
+      if (this.resolveActiveRules) {
+        try { value = this.resolveActiveRules(target) ?? []; } catch { value = []; }
+      }
+      this.activeRulesCache = { value, expiresAt: now + WorkerHandle.RULES_CACHE_TTL_MS };
+      return value;
+    }
+    if (!this.resolveActiveRules) return [];
+    try { return this.resolveActiveRules(target) ?? []; } catch { return []; }
   }
 
   /** Send a command to the worker */

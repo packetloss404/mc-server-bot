@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import { Task } from './CurriculumAgent';
 import { LongTermGoal } from './LongTermGoal';
+import type { TownRule } from '../town/RuleStore';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
 
@@ -88,11 +89,29 @@ export class BlackboardManager {
   private filePath: string;
   private state: BlackboardState;
   private _saveTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Project Sid P2-A — resolver for the active standing rules of a bot's town.
+   * Wired by BotManager the same way the bot-role resolver is (a closure that
+   * walks towns/residents). When unset (tests, or governance disabled — the
+   * BotManager closure returns [] when the flag is off) scoreTaskEnhanced
+   * applies no rule boost, so scores match the pre-P2 behavior exactly.
+   */
+  private getActiveRulesForBot: ((botName: string) => TownRule[]) | null = null;
 
   constructor(dataDir: string) {
     this.filePath = path.join(dataDir, 'blackboard.json');
     if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
     this.state = this.load();
+  }
+
+  /**
+   * Inject the standing-rule resolver (Project Sid P2-A). Mirrors how the
+   * bot-role lookup is wired in: BotManager owns the RuleStore + TownManager
+   * and passes a per-bot closure. Gating lives in that closure (returns [] when
+   * `config.governance.enabled` is false), so callers here never need the flag.
+   */
+  setActiveRulesForBotResolver(resolver: (botName: string) => TownRule[]): void {
+    this.getActiveRulesForBot = resolver;
   }
 
   setSwarmGoal(rawRequest: string, requestedBy: string, tasks: Task[]): BlackboardGoal {
@@ -181,7 +200,7 @@ export class BlackboardManager {
     if (candidates.length === 0) return null;
     const lowered = query?.toLowerCase() || '';
     const ranked = candidates.sort((a, b) =>
-      this.scoreTaskEnhanced(b, lowered, personality, botPosition, role) - this.scoreTaskEnhanced(a, lowered, personality, botPosition, role)
+      this.scoreTaskEnhanced(b, lowered, personality, botPosition, role, botName) - this.scoreTaskEnhanced(a, lowered, personality, botPosition, role, botName)
       || a.createdAt - b.createdAt
     );
     const task = ranked[0];
@@ -364,6 +383,7 @@ export class BlackboardManager {
     personality?: string,
     botPosition?: { x: number; y: number; z: number },
     role?: string,
+    botName?: string,
   ): number {
     let score = this.scoreTask(task, query);
     const priorityBonus: Record<TaskPriority, number> = { low: 0, normal: 3, high: 9, critical: 15 };
@@ -400,6 +420,38 @@ export class BlackboardManager {
         // the typical priority×3 + distance + query-match envelope so
         // residents always pull town work first when one's available.
         if (task.description.toLowerCase().startsWith('town:')) score += 30;
+      }
+    }
+    // Project Sid P2-A — standing-rule bias. When governance is enabled the
+    // injected resolver returns the bot's town's active rules (it returns []
+    // when the flag is off OR the bot isn't a resident OR no resolver is
+    // wired), so this whole block is a no-op in the disabled case and scores
+    // match the pre-P2 behavior. Each rule whose keywords match the task adds
+    // a boost scaled by the rule's priority — a follow→amend→re-follow nudge,
+    // not a hard override (kept below the town: +30 dominance).
+    if (botName && this.getActiveRulesForBot) {
+      let rules: TownRule[] = [];
+      try { rules = this.getActiveRulesForBot(botName) ?? []; } catch { rules = []; }
+      if (rules.length > 0) {
+        const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
+        const taskKeywords = task.keywords.map((k) => (typeof k === 'string' ? k.toLowerCase() : ''));
+        for (const rule of rules) {
+          if (!rule.active || !Array.isArray(rule.keywords) || rule.keywords.length === 0) continue;
+          // A rule matches when one of its keywords equals a task keyword or
+          // appears as a WHOLE WORD in the task text. Word-boundary matching
+          // avoids false positives where a short keyword is a substring of an
+          // unrelated word (e.g. rule 'ore' matching 'explore', 'war'→'warden').
+          const matched = rule.keywords.some((kw) => {
+            if (!kw) return false;
+            if (taskKeywords.includes(kw)) return true;
+            const escaped = kw.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            return new RegExp(`\\b${escaped}\\b`).test(text);
+          });
+          if (matched) {
+            const weight = typeof rule.priority === 'number' && rule.priority > 0 ? rule.priority : 1;
+            score += 8 * weight;
+          }
+        }
       }
     }
     if (botPosition && task.location) {

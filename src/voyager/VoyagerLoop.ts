@@ -30,6 +30,7 @@ import { TradeNegotiator } from './TradeNegotiator';
 import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
 import { DependencyResolver, FlatStep } from './DependencyResolver';
 import { SharedWorldModel } from './SharedWorldModel';
+import { formatRulesForPrompt, type TownRule } from '../town/RuleStore';
 
 const AIR_BLOCKS: ReadonlySet<string> = new Set(['air', 'cave_air', 'void_air']);
 
@@ -718,6 +719,26 @@ export class VoyagerLoop {
     // their town. Skipping curriculum here means the next iteration retries
     // the blackboard, which is what we want for town work.
     const isResident = !!botRole && botRole.toLowerCase() !== 'idle';
+
+    // Project Sid P2-B — inject the town's standing rules into the resident's
+    // task-proposal prompt (Sid's one-line enforcement model). Gated on
+    // governance.enabled AND residency: when the flag is off or the bot isn't
+    // a resident, formatRulesForPrompt returns '' and we never even fetch the
+    // rules (no IPC, no token cost). The fetch mirrors getBotRole — a
+    // BlackboardProxy round-trip cached for 60s on WorkerHandle.
+    let rulesContext = '';
+    if (this.config.governance?.enabled && isResident) {
+      try {
+        const bp = this.blackboardManager as unknown as { getActiveRulesForBot?: (n: string) => Promise<TownRule[]> } | null;
+        if (bp?.getActiveRulesForBot) {
+          const rules = (await bp.getActiveRulesForBot(this.botName)) ?? [];
+          rulesContext = formatRulesForPrompt(rules, true, true);
+        }
+      } catch {
+        /* swallow — rule injection is additive */
+      }
+    }
+
     const haveHigherPriority = Boolean(goalOverrideTask || goalTask || playerTask || blackboardTask);
     if (isResident && !haveHigherPriority) {
       logger.debug(
@@ -734,7 +755,8 @@ export class VoyagerLoop {
       || await this.curriculumAgent.proposeTask(
       this.bot,
       this.personality,
-      this.skillLibrary
+      this.skillLibrary,
+      rulesContext || undefined,
     );
 
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);

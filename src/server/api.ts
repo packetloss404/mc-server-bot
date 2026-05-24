@@ -29,6 +29,7 @@ import { loadObservedRole, inferObservedRole, type BotActionStats } from '../tow
 import { computeCivilizationMetrics } from '../town/CivilizationMetrics';
 import { ChronicleGenerator } from '../town/ChronicleGenerator';
 import { ChronicleScheduler } from '../town/ChronicleScheduler';
+import type { TownRule } from '../town/RuleStore';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -3517,6 +3518,24 @@ export function createAPIServer(
     res.json({ decrees });
   });
 
+  // ─── Project Sid P2-A — standing town rules ───────────────────────────
+  //
+  // GET /api/towns/:id/rules — active standing rules persisted by the
+  // mayor/decree handler when `governance.enabled`. Returns [] when the flag
+  // is off (no rules are ever written in that case) or the town has none.
+  // Newest-first. The rule store is JSON-backed (data/town_rules.json), keyed
+  // by townId — independent of the town SQLite schema.
+  app.get('/api/towns/:id/rules', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    if (!tm.getTown(townId)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const rules = botManager.getRuleStore().getActiveRules(townId);
+    res.json({ rules });
+  });
+
   // ─── Phase 5-A Disasters + Memorial Park ──────────────────────────────
   // GET /api/towns/:id/disasters?limit=N — list disaster rows newest-first.
   // Defaults to limit=50 so a long-running town doesn't dump the whole
@@ -4225,18 +4244,90 @@ export function createAPIServer(
         undefined,
         'high',
       );
+      // Project Sid P2-A — when governance is enabled, ALSO persist a standing
+      // rule so the decree keeps biasing resident task selection (not just the
+      // one-shot task above). Flag-gated: when disabled, behavior is exactly
+      // the legacy one-shot decree and no rule is written.
+      let rule: TownRule | undefined;
+      const governanceEnabled = config?.governance?.enabled === true;
+      if (governanceEnabled) {
+        rule = botManager.getRuleStore().addRule(town.id, text);
+      }
       tm.recordEvent({
         townId: town.id,
         kind: 'mayor:decree',
         severity: 'major',
-        payload: { taskId: task.id, text, source: 'mayor_directive' },
+        payload: {
+          taskId: task.id,
+          text,
+          source: 'mayor_directive',
+          ...(rule ? { ruleId: rule.id } : {}),
+        },
         highlightScore: 60,
       });
       // The recordEvent above fans out via the unified emitter; no manual emit.
-      res.status(201).json({ task });
+      res.status(201).json({ task, ...(rule ? { rule } : {}) });
     } catch (err: any) {
       logger.warn({ err: err?.message, townId: town.id }, 'mayor/decree failed');
       res.status(500).json({ error: err?.message ?? 'Failed to queue decree' });
+    }
+  });
+
+  // ─── Project Sid P2-C — Bot-initiated decrees ─────────────────────────
+  //
+  // POST /api/towns/:id/propose-rule — a bot (or a town-level trigger) PROPOSES
+  // a standing rule through the existing approval/vote workflow rather than the
+  // mayor minting it directly. Body: { text: string, proposedBy?: string }.
+  // Unlike mayor/decree this is NOT mayor-gated: any bot may propose; the
+  // residents vote (or the mayor decides) and ApprovalManager resolves the row.
+  // On 'approved', DecreeManager writes the rule via the RuleStore.
+  //
+  // Flag-gated: when `governance.enabled` is off the brain never constructs a
+  // DecreeManager (getDecreeManager() returns null) and this route 409s, so
+  // the path is a complete no-op by default.
+  app.post('/api/towns/:id/propose-rule', async (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const townId = String(req.params.id);
+    const town = tm.getTown(townId);
+    if (!town) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    if (config?.governance?.enabled !== true) {
+      res.status(409).json({ error: 'governance is disabled' });
+      return;
+    }
+    const brain = tm.getTownBrain(townId);
+    if (!brain) {
+      res.status(409).json({ error: 'Town brain not wired yet' });
+      return;
+    }
+    const decreeManager = brain.getDecreeManager();
+    if (!decreeManager) {
+      res.status(409).json({ error: 'governance is disabled' });
+      return;
+    }
+    const body = (req.body ?? {}) as { text?: unknown; proposedBy?: unknown };
+    const text = typeof body.text === 'string' ? body.text.trim() : '';
+    if (!text) {
+      res.status(400).json({ error: 'text is required' });
+      return;
+    }
+    if (text.length > 1000) {
+      res.status(400).json({ error: 'text must be 1000 characters or fewer' });
+      return;
+    }
+    const proposedBy = typeof body.proposedBy === 'string' ? body.proposedBy : undefined;
+    try {
+      const approvalId = await decreeManager.proposeDecree({ townId: town.id, text, proposedBy });
+      if (!approvalId) {
+        res.status(500).json({ error: 'Failed to open decree approval' });
+        return;
+      }
+      res.status(201).json({ approvalId, townId: town.id, text, proposedBy });
+    } catch (err: any) {
+      logger.warn({ err: err?.message, townId: town.id }, 'propose-rule failed');
+      res.status(500).json({ error: err?.message ?? 'Failed to propose rule' });
     }
   });
 

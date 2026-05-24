@@ -44,6 +44,7 @@ import { DistrictManager } from './DistrictManager';
 import { ExpansionManager } from './ExpansionManager';
 import { PhoenixManager } from './PhoenixManager';
 import { ApprovalManager } from './ApprovalManager';
+import { DecreeManager } from './DecreeManager';
 import { GreetingDispatcher } from './GreetingDispatcher';
 import type { MayorService } from './MayorService';
 import { TradeRouteManager } from './TradeRouteManager';
@@ -153,6 +154,13 @@ export class TownBrain {
    */
   private readonly approvalManager: ApprovalManager;
   /**
+   * Project Sid P2-C — bot-initiated decree producer. Only constructed when
+   * `config.governance.enabled`; null otherwise (the proposal path is a
+   * complete no-op when governance is off). Turns an approved `decree`
+   * approval into a live standing rule via the BotManager-owned RuleStore.
+   */
+  private readonly decreeManager: DecreeManager | null;
+  /**
    * Phase 7-B — allied-town surplus/shortage matcher. Emits swarm-priority
    * blackboard tasks for cross-town deliveries when two towns are `allied`
    * per the diplomacy graph. In-memory only for Phase 7 (no DB persistence).
@@ -260,6 +268,13 @@ export class TownBrain {
     // replay-on-approve hook.
     this.approvalManager = new ApprovalManager(townManager);
     this.expansionManager.setApprovalManager(this.approvalManager);
+    // Project Sid P2-C — bot-initiated decrees. Only wired when the
+    // governance flag is on; when off, decreeManager stays null so no
+    // decree approvals are ever produced (complete no-op). On approval the
+    // manager writes a standing rule via the BotManager-owned RuleStore.
+    this.decreeManager = botManager.getConfig().governance?.enabled
+      ? new DecreeManager(townManager, botManager.getRuleStore(), this.approvalManager)
+      : null;
     // Phase 7-B — allied-town trade route manager. Reads the diplomacy graph
     // (P7-A) at tick time; degrades to a no-op when the diplomacy manager
     // isn't wired yet.
@@ -297,6 +312,12 @@ export class TownBrain {
   /** Phase 6-B — exposed so the API can list / decide / cast votes on approvals. */
   getApprovalManager(): ApprovalManager {
     return this.approvalManager;
+  }
+
+  /** Project Sid P2-C — exposed so the API can file bot-initiated decree
+   *  proposals. Null when `config.governance.enabled` is off. */
+  getDecreeManager(): DecreeManager | null {
+    return this.decreeManager;
   }
 
   /** Phase 7-B — exposed so the API can list this town's open allied trade routes. */

@@ -31,8 +31,38 @@ import { analyzeFailure, RecoveryHint } from './ErrorRecovery';
 import { DependencyResolver, FlatStep } from './DependencyResolver';
 import { SharedWorldModel } from './SharedWorldModel';
 import { formatRulesForPrompt, type TownRule } from '../town/RuleStore';
+import { formatCultureForPrompt } from '../social/CultureManager';
+import { analyzeSentiment } from '../ai/prompts/chat';
 
 const AIR_BLOCKS: ReadonlySet<string> = new Set(['air', 'cave_air', 'void_air']);
+
+/**
+ * Minimal surface VoyagerLoop needs from AffinityManager (real or proxied via
+ * AffinityProxy). Write methods are fire-and-forget; isHostile awaits an IPC
+ * round-trip. The 2nd argument keys by arbitrary name string, so a peer bot
+ * name works exactly like a player name — no affinity schema change (P3-A).
+ */
+export interface AffinityLike {
+  onPositiveChat(botName: string, name: string): void;
+  onNegativeSentiment(botName: string, name: string): void;
+  isHostile(botName: string, name: string): boolean | Promise<boolean>;
+  getAllForBot(botName: string): Record<string, number> | Promise<Record<string, number>>;
+}
+
+/**
+ * Minimal surface VoyagerLoop needs from CultureManager (real or proxied via
+ * CultureProxy). Reads await an IPC round-trip; writes are fire-and-forget. The
+ * registry is authoritative in the main thread, so adoption/observation done in
+ * one worker is visible to every other worker (P3-B). Only wired + consulted
+ * when `config.social.culture` is true — null/no-op otherwise.
+ */
+export interface CultureLike {
+  matchMeme(text: string): { id: string; label: string; keywords: string[]; strength: number } | null | Promise<{ id: string; label: string; keywords: string[]; strength: number } | null>;
+  getAdoptedMemes(botName: string): Array<{ id: string; label: string; keywords: string[]; strength: number }> | Promise<Array<{ id: string; label: string; keywords: string[]; strength: number }>>;
+  adopt(memeId: string, botName: string, townId?: string): void;
+  observeChat(text: string): void;
+  addMeme(label: string, keywords: string[], originBot?: string): void;
+}
 
 /** Minimal surface VoyagerLoop needs from DifficultyBalancer (real or proxied). */
 export interface DifficultyBalancerLike {
@@ -98,6 +128,11 @@ export class VoyagerLoop {
   private activeBlackboardTask: BlackboardTask | null = null;
   private socialMemory: SocialMemory | null = null;
   private botComms: BotComms | null = null;
+  private affinityManager: AffinityLike | null = null;
+  private cultureManager: CultureLike | null = null;
+  /** P3-B — meme ids this bot already adopted, to suppress re-adoption /
+   *  re-broadcast loops (a meme message-storm) within a connection. */
+  private adoptedMemeIds: Set<string> = new Set();
   private decisionTrace: DecisionTrace;
   private goalGenerator: GoalGenerator | null = null;
   private threatAssessor: ThreatAssessor | null = null;
@@ -302,6 +337,41 @@ export class VoyagerLoop {
 
   setBotComms(comms: BotComms): void {
     this.botComms = comms;
+  }
+
+  /**
+   * Wire the affinity manager (proxy in worker threads) so the brain-tick
+   * message drain can write bot→peer affinity edges (P3-A). Only consulted
+   * when `config.social.botAffinity` is true.
+   */
+  setAffinityManager(affinity: AffinityLike): void {
+    this.affinityManager = affinity;
+  }
+
+  /**
+   * Wire the cultural-meme registry (proxy in worker threads) so the brain-tick
+   * message drain can adopt memes from trusted peers and the task-proposal
+   * prompt can be biased by adopted memes (P3-B). Only consulted when
+   * `config.social.culture` is true; the worker only wires it when the flag is
+   * on, so it stays null (a no-op) otherwise.
+   */
+  setCultureManager(culture: CultureLike): void {
+    this.cultureManager = culture;
+  }
+
+  /** Exposed for the ambient-chat hook (P3-B): this bot's adopted-meme labels,
+   *  strongest first, or [] when culture is off / nothing adopted. */
+  async getAdoptedMemeLabels(limit = 3): Promise<string[]> {
+    if (!this.config.social?.culture || !this.cultureManager) return [];
+    try {
+      const memes = await this.cultureManager.getAdoptedMemes(this.botName);
+      return memes
+        .sort((a, b) => (b.strength ?? 0) - (a.strength ?? 0))
+        .slice(0, Math.max(0, limit))
+        .map((m) => m.label);
+    } catch {
+      return [];
+    }
   }
 
   /** Returns a short summary of what the bot is currently doing, for chat context. */
@@ -516,7 +586,7 @@ export class VoyagerLoop {
     if (this.botComms) {
       const unread = this.botComms.getUnread(this.botName);
       for (const msg of unread.slice(0, 3)) {
-        this.processBotMessage(msg);
+        await this.processBotMessage(msg);
       }
     }
 
@@ -739,6 +809,22 @@ export class VoyagerLoop {
       }
     }
 
+    // Project Sid P3-B — bias the bot's task selection toward the memes it has
+    // ADOPTED (the anti-gimmick hook: culture must change behavior, not just
+    // chat). Mirrors the P2-B rules line. Gated entirely on
+    // `config.social.culture`: formatCultureForPrompt returns '' when off, and
+    // getAdoptedMemeLabels short-circuits without any IPC, so it's byte-for-byte
+    // identical to today and costs zero tokens when the flag is off.
+    let cultureContext = '';
+    if (this.config.social?.culture && this.cultureManager) {
+      try {
+        const memes = await this.cultureManager.getAdoptedMemes(this.botName);
+        cultureContext = formatCultureForPrompt(memes, true);
+      } catch {
+        /* swallow — meme injection is additive */
+      }
+    }
+
     const haveHigherPriority = Boolean(goalOverrideTask || goalTask || playerTask || blackboardTask);
     if (isResident && !haveHigherPriority) {
       logger.debug(
@@ -757,6 +843,7 @@ export class VoyagerLoop {
       this.personality,
       this.skillLibrary,
       rulesContext || undefined,
+      cultureContext || undefined,
     );
 
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);
@@ -1512,12 +1599,164 @@ export class VoyagerLoop {
     return raw;
   }
 
-  private processBotMessage(msg: { from: string; type: string; content: string }): void {
+  /**
+   * Derive a CHEAP bot→peer sentiment from an inter-bot message and nudge the
+   * directed affinity edge. NO LLM call: the message *kind* carries most of the
+   * signal (a request for help / resources / a trade offer is a friendly social
+   * overture; an alert/threat is negative), and for free-form social/chat we
+   * reuse the existing keyword-based `analyzeSentiment` (also non-LLM). Gated
+   * entirely behind `config.social.botAffinity` — a no-op when disabled.
+   */
+  private updateBotAffinity(msg: { from: string; type: string; content: string }): void {
+    if (!this.config.social?.botAffinity || !this.affinityManager) return;
+    if (!msg.from || msg.from.toLowerCase() === this.botName.toLowerCase()) return;
+
+    let sentiment: 'POSITIVE' | 'NEGATIVE' | 'NEUTRAL';
+    switch (msg.type) {
+      case 'help_request':
+      case 'request':
+      case 'trade_offer':
+        // Reaching out for help / resources / a trade is a friendly overture.
+        sentiment = 'POSITIVE';
+        break;
+      case 'alert':
+        // Alerts are about world danger, not the peer. A warning like "creeper
+        // will kill us, leave!" must not lower the warner's standing, so stay
+        // neutral rather than keyword-scanning (which would read "kill"/"leave"
+        // as negative and penalize a helpful peer).
+        sentiment = 'NEUTRAL';
+        break;
+      default:
+        // chat / social / inform / broadcast / status — free-form, scan it.
+        sentiment = analyzeSentiment(msg.content);
+        break;
+    }
+
+    if (sentiment === 'POSITIVE') {
+      this.affinityManager.onPositiveChat(this.botName, msg.from);
+    } else if (sentiment === 'NEGATIVE') {
+      this.affinityManager.onNegativeSentiment(this.botName, msg.from);
+    }
+    // NEUTRAL → leave the edge unchanged (matches player-chat handling).
+  }
+
+  /**
+   * P3-A behavioral gate. When `social.botAffinity` is on, returns true if the
+   * peer's bot→peer affinity is below the configured hostile threshold — used
+   * to deprioritize helping / sharing resources with a disliked peer (reuses
+   * the same `isHostile` pattern as player-directed task refusal). Always
+   * false (no gating) when the flag is off or no affinity manager is wired.
+   */
+  private async isPeerDisliked(peer: string): Promise<boolean> {
+    if (!this.config.social?.botAffinity || !this.affinityManager) return false;
+    try {
+      return await this.affinityManager.isHostile(this.botName, peer);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * P3-B — true when this bot TRUSTS a peer (bot→peer affinity at/above the
+   * configured trust threshold). Adoption only happens from trusted peers, so a
+   * meme spreads along strong social ties (the Sid diffusion result). Returns
+   * false (no adoption) when bot affinity is off or the edge can't be read.
+   */
+  private async isPeerTrusted(peer: string): Promise<boolean> {
+    // Trust rides on bot→bot affinity edges, which only exist when P3-A is on —
+    // so culture adoption explicitly depends on social.botAffinity being enabled.
+    if (!this.config.social?.botAffinity || !this.affinityManager) return false;
+    try {
+      const scores = await this.affinityManager.getAllForBot(this.botName);
+      const score = scores[peer.toLowerCase()];
+      if (typeof score !== 'number') return false;
+      return score >= (this.config.affinity?.trustThreshold ?? 70);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * P3-B cultural-meme spread. CHEAP and no-LLM: feed the message into the
+   * emergence tally, then keyword-scan it against the registry. If it carries a
+   * known meme keyword AND the sender is a peer this bot TRUSTS (high bot→bot
+   * affinity, P3-A), adopt the meme — record it in SocialMemory + CultureManager
+   * and re-broadcast it via the dormant BotComms.broadcast() so the belief keeps
+   * diffusing outward (proximity/peer-scoped). Entirely gated on
+   * `config.social.culture`; a complete no-op when the flag is off (the worker
+   * doesn't even wire a CultureProxy in that case).
+   */
+  private async maybeAdoptMeme(msg: { from: string; type: string; content: string }): Promise<void> {
+    if (!this.config.social?.culture || !this.cultureManager) return;
+    if (!msg.from || msg.from.toLowerCase() === this.botName.toLowerCase()) return;
+
+    // Emergence: count keyword frequency from observed inter-bot chatter so
+    // recurring phrases can be promoted into memes by the registry (no LLM).
+    this.cultureManager.observeChat(msg.content);
+
+    let meme: { id: string; label: string } | null = null;
+    try {
+      meme = await this.cultureManager.matchMeme(msg.content);
+    } catch {
+      meme = null;
+    }
+    if (!meme) return;
+
+    // Novelty gate: if we already hold this belief, do NOT re-adopt/re-broadcast.
+    // Without this, two mutually-trusting bots ping-pong "I believe in X" every
+    // cycle (a meme message-storm) and pile duplicate SocialMemory entries.
+    if (this.adoptedMemeIds.has(meme.id)) return;
+
+    // Adoption gate: only from a TRUSTED peer (high bot→bot affinity).
+    if (!(await this.isPeerTrusted(msg.from))) return;
+
+    this.adoptedMemeIds.add(meme.id);
+    this.cultureManager.adopt(meme.id, this.botName);
+    this.socialMemory?.addMemory(
+      this.botName,
+      'observation',
+      msg.from,
+      `Took to heart the idea "${meme.label}" from ${msg.from}`,
+      0.2,
+    );
+    logger.info({ bot: this.botName, from: msg.from, meme: meme.label }, 'Adopted meme from trusted peer (culture)');
+
+    // Propagation: re-broadcast the belief so it keeps spreading along the
+    // social graph. NOTE: BotComms is currently a per-worker singleton, so this
+    // broadcast does NOT yet deliver to other bots' workers — cross-worker
+    // meme diffusion needs a main-thread message relay (mirror CultureProxy).
+    // Tracked for the final senior-engineer review; the registry/adoption/
+    // measurement side IS cross-worker (via CultureProxy) and works today.
+    try {
+      this.botComms?.broadcast(this.botName, `I believe in ${meme.label}.`, 'chat');
+    } catch {
+      /* swallow — propagation is best-effort */
+    }
+  }
+
+  private async processBotMessage(msg: { from: string; type: string; content: string }): Promise<void> {
     const content = msg.content;
     const keywords = content.toLowerCase().replace(/[^a-z0-9\s]/g, '').split(/\s+/).filter((w) => w.length > 2);
 
+    // P3-A: write a directed bot→peer affinity edge from this interaction
+    // (flag-gated, cheap/no-LLM). Done before the kind-specific handling so the
+    // edge reflects every message we actually process.
+    this.updateBotAffinity(msg);
+
+    // P3-B: cheap, no-LLM cultural-meme observation + adoption-from-trusted-peer.
+    // Gated on config.social.culture (no-op when off). Done after the affinity
+    // edge is updated so adoption sees this message's freshest trust signal.
+    await this.maybeAdoptMeme(msg);
+
     switch (msg.type) {
       case 'help_request':
+        // P3-A behavioral hook: deprioritize helping a disliked peer. When the
+        // flag is off this is always false, so the help task queues as before.
+        if (await this.isPeerDisliked(msg.from)) {
+          logger.info({ bot: this.botName, from: msg.from }, 'Declining help request from disliked peer (bot affinity)');
+          this.socialMemory?.addMemory(this.botName, 'observation', msg.from, `Ignored help request from disliked peer: ${content}`, -0.1);
+          break;
+        }
         logger.info({ bot: this.botName, from: msg.from, content }, 'Help request received from bot');
         this.playerTaskQueue.push({ description: content, keywords });
         this.socialMemory?.addMemory(this.botName, 'observation', msg.from, `Help request: ${content}`, 0.3);
@@ -1529,6 +1768,13 @@ export class VoyagerLoop {
         break;
       case 'request': {
         logger.info({ bot: this.botName, from: msg.from, content }, 'Resource request from bot');
+        // P3-A behavioral hook: refuse to share resources with a disliked peer.
+        if (await this.isPeerDisliked(msg.from)) {
+          logger.info({ bot: this.botName, from: msg.from }, 'Refusing resource share to disliked peer (bot affinity)');
+          this.botComms?.sendMessage(this.botName, msg.from, `I'd rather not share with you right now.`, 'chat');
+          this.socialMemory?.addMemory(this.botName, 'trade', msg.from, `Refused resource request from disliked peer: ${content}`, -0.1);
+          break;
+        }
         const requestedItem = keywords.find((w) => this.bot.inventory.items().some((i) => i.name.includes(w)));
         if (requestedItem) {
           this.playerTaskQueue.push({ description: `Give ${requestedItem} to ${msg.from}`, keywords: ['give', requestedItem, msg.from] });

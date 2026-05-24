@@ -22,7 +22,7 @@ import { TradeNegotiator } from '../voyager/TradeNegotiator';
 import { analyzeSentiment, parseCommand, extractTask } from '../ai/prompts/chat';
 import { followPlayer } from '../actions/followPlayer';
 import { buildSchematic, listSchematics } from '../actions/buildSchematic';
-import { VoyagerLoop } from '../voyager/VoyagerLoop';
+import { VoyagerLoop, AffinityLike } from '../voyager/VoyagerLoop';
 import { StatsTracker } from '../voyager/StatsTracker';
 import { renderObservation } from '../voyager/Observation';
 import { PERSONALITIES } from '../personality/PersonalityType';
@@ -45,6 +45,9 @@ export interface BotOptions {
   sharedWorldModel?: SharedWorldModel;
   difficultyBalancer?: any;
   playerIntentModel?: any;
+  /** Project Sid P3-B — cross-worker meme registry proxy. Null/undefined when
+   *  `config.social.culture` is off, so culture is a complete no-op. */
+  cultureManager?: any;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
   onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
@@ -112,6 +115,9 @@ export class BotInstance {
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
   private botComms: BotComms;
+  /** Project Sid P3-B — CultureProxy (or null when `config.social.culture` is
+   *  off). Used to wire the meme layer into VoyagerLoop + bias ambient chat. */
+  private cultureManager: any | null = null;
   private voyagerLoop: VoyagerLoop | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
   private survivalInterval: NodeJS.Timeout | null = null;
@@ -152,6 +158,7 @@ export class BotInstance {
     this.sharedWorldModel = options.sharedWorldModel ?? null;
     this.difficultyBalancer = options.difficultyBalancer ?? null;
     this.playerIntentModel = options.playerIntentModel ?? null;
+    this.cultureManager = options.cultureManager ?? null;
     this.onSwarmDirective = options.onSwarmDirective;
     this.onReputationEvent = options.onReputationEvent;
     this.onVoyagerLoopCreated = options.onVoyagerLoopCreated;
@@ -970,6 +977,39 @@ export class BotInstance {
     }
   }
 
+  /**
+   * P3-A: a compact summary of this bot's strongest feelings toward PEER BOTS
+   * (not players), for the chat system prompt's social context. Returns an
+   * empty string when `config.social.botAffinity` is off so the prompt is
+   * byte-for-byte identical to today. Peer bots are identified via the
+   * BotComms roster, so player affinities are never leaked into this block.
+   */
+  private async buildBotRelationshipContext(): Promise<string> {
+    if (!this.config.social?.botAffinity) return '';
+    try {
+      const knownBots = new Set(this.botComms.getKnownBots());
+      const self = this.name.toLowerCase();
+      const all = await this.affinityManager.getAllForBot(this.name);
+      const peers = Object.entries(all)
+        .filter(([name]) => name.toLowerCase() !== self && knownBots.has(name.toLowerCase()))
+        .sort((a, b) => b[1] - a[1]);
+      if (peers.length === 0) return '';
+
+      const hostileThreshold = this.config.affinity.hostileThreshold;
+      const lines = peers.slice(0, 5).map(([name, score]) => {
+        let tier: string;
+        if (score < hostileThreshold) tier = 'you dislike them';
+        else if (score >= 70) tier = 'you trust them';
+        else if (score >= 50) tier = 'on good terms';
+        else tier = 'wary of them';
+        return `- ${name}: ${tier} (${Math.round(score)}/100)`;
+      });
+      return `Your standing with other townsfolk:\n${lines.join('\n')}`;
+    } catch {
+      return '';
+    }
+  }
+
   private async handleChat(playerName: string, message: string): Promise<void> {
     if (!this.bot || !this.llmClient) return;
 
@@ -1000,7 +1040,14 @@ export class BotInstance {
       const internalState = this.voyagerLoop?.getInternalState();
 
       // Build social context from memory for LLM prompt
-      const socialContext = this.socialMemory.buildMemoryContext(this.name, playerName);
+      let socialContext = this.socialMemory.buildMemoryContext(this.name, playerName);
+      // P3-A: append the bot's top peer-bot relationships (only when enabled).
+      const botRelationships = await this.buildBotRelationshipContext();
+      if (botRelationships) {
+        socialContext = socialContext
+          ? `${socialContext}\n\n${botRelationships}`
+          : botRelationships;
+      }
       const systemPrompt = buildSystemPrompt(this.name, this.personality, affinity, isCodegen, internalState, socialContext);
 
       // Build conversation history (current message appended by buildContentsArray)
@@ -1102,7 +1149,14 @@ export class BotInstance {
           const player = this.bot.players[nearestPlayer];
           const heldItem = player?.entity?.heldItem?.name || '';
 
-          const prompt = buildAmbientContext(this.name, nearestPlayer, timeOfDay, isRaining, heldItem);
+          // Project Sid P3-B — bias ambient chatter toward adopted memes. The
+          // helper returns [] when culture is off / nothing's adopted, so the
+          // prompt is byte-for-byte identical to before in that case.
+          let beliefs: string[] = [];
+          if (this.config.social?.culture && this.voyagerLoop) {
+            try { beliefs = await this.voyagerLoop.getAdoptedMemeLabels(3); } catch { beliefs = []; }
+          }
+          const prompt = buildAmbientContext(this.name, nearestPlayer, timeOfDay, isRaining, heldItem, beliefs);
           const systemPrompt = buildSystemPrompt(
             this.name,
             this.personality,
@@ -1140,6 +1194,15 @@ export class BotInstance {
     }
     this.voyagerLoop.setSocialMemory(this.socialMemory);
     this.voyagerLoop.setBotComms(this.botComms);
+    // P3-A: lets the brain-tick message drain write bot→peer affinity edges and
+    // gate help/resource sharing (only acts when config.social.botAffinity is on).
+    this.voyagerLoop.setAffinityManager(this.affinityManager as unknown as AffinityLike);
+    // P3-B: wire the cultural-meme registry so the message drain can adopt memes
+    // from trusted peers and the task-proposal prompt is biased by them. Only
+    // present when config.social.culture is on (botWorker builds the proxy then).
+    if (this.cultureManager) {
+      this.voyagerLoop.setCultureManager(this.cultureManager);
+    }
     if (this.difficultyBalancer) {
       this.voyagerLoop.setDifficultyBalancer(this.difficultyBalancer);
     }

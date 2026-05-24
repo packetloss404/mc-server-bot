@@ -102,3 +102,25 @@ security:
 #     identical to today (the rule store is never consulted).
 governance:
   enabled: false
+
+# Project Sid P3 — "Culture & social spread".
+#   botAffinity: master switch for bot->bot affinity edges (P3-A). When ON,
+#     bots derive a CHEAP, non-LLM sentiment from each inter-bot message they
+#     process (message kind + keyword scan) and nudge a directed bot->peer
+#     affinity edge via the existing affinity store. Top bot-relationships are
+#     surfaced in the chat prompt, and a disliked peer (below the affinity
+#     hostile threshold) is deprioritized for help/resource sharing. Default
+#     OFF — when false, inter-bot messages behave exactly as before with no
+#     affinity edges and no added LLM cost.
+#   culture: master switch for the P3-B cultural-meme layer (CultureManager).
+#     When ON, memes EMERGE from recurring inter-bot chatter (cheap keyword
+#     frequency, no LLM), a bot ADOPTS a meme it hears from a TRUSTED peer
+#     (bot->bot affinity at/above affinity.trustThreshold), and adopted memes
+#     BIAS BEHAVIOR — they flavor ambient chat AND are injected into the bot's
+#     task/goal prompt (so culture changes what bots do, not just what they
+#     say). Memes propagate via BotComms.broadcast(). See GET /api/culture for
+#     per-town meme curves. Default OFF — when false the worker never wires the
+#     culture proxy, so there is zero behavior change and zero added LLM cost.
+social:
+  botAffinity: false
+  culture: false

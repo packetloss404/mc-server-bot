@@ -11,6 +11,7 @@ import { ConversationProxy } from './proxies/ConversationProxy';
 import { SharedWorldProxy } from './proxies/SharedWorldProxy';
 import { DifficultyBalancerProxy } from './proxies/DifficultyBalancerProxy';
 import { PlayerIntentModelProxy } from './proxies/PlayerIntentModelProxy';
+import { CultureProxy } from './proxies/CultureProxy';
 import { logger } from '../util/logger';
 
 interface WorkerData {
@@ -110,6 +111,9 @@ const conversationProxy = new ConversationProxy(ipc);
 const sharedWorldProxy = new SharedWorldProxy(ipc);
 const difficultyBalancerProxy = new DifficultyBalancerProxy(ipc);
 const playerIntentModelProxy = new PlayerIntentModelProxy(ipc);
+// Project Sid P3-B — only wire the culture proxy when the meme layer is on, so
+// the flag-off path has zero culture IPC traffic and is a complete no-op.
+const cultureProxy = config.social?.culture ? new CultureProxy(ipc) : null;
 
 const botMode = data.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
@@ -126,6 +130,7 @@ const instance = new BotInstance({
   sharedWorldModel: sharedWorldProxy as any,
   difficultyBalancer: difficultyBalancerProxy as any,
   playerIntentModel: playerIntentModelProxy as any,
+  cultureManager: cultureProxy as any,
   onSwarmDirective: (description, requestedBy) => {
     ipc.notify('swarm.directive', { description, requestedBy });
   },

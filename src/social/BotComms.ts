@@ -159,6 +159,18 @@ export class BotComms {
     }
   }
 
+  /**
+   * Names (lowercased) of all bots the comms layer knows about — the union of
+   * registered inboxes and listeners. Used by P3-A to distinguish peer bots
+   * from players when surfacing bot→bot affinity in the chat prompt.
+   */
+  getKnownBots(): string[] {
+    const names = new Set<string>();
+    for (const k of this.inbox.keys()) names.add(k);
+    for (const k of this.listeners.keys()) names.add(k);
+    return [...names];
+  }
+
   /** Initialize inbox for a bot (call on spawn) */
   registerBot(botName: string): void {
     const key = botName.toLowerCase();

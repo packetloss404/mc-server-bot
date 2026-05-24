@@ -1316,6 +1316,18 @@ export function createAPIServer(
     res.json({ relationships: allAffinities });
   });
 
+  // Project Sid P3-B — cultural-meme layer snapshot. Mirrors Sid's per-town
+  // meme curves: the meme registry (label, strength, adoption count) plus
+  // per-town keyword/adoption counts. The registry stays empty unless
+  // `config.social.culture` is on and bots have started adopting memes, so this
+  // safely returns `{ enabled, memes: [], towns: {}, totalAdoptions: 0 }` when
+  // the flag is off.
+  app.get('/api/culture', (_req: Request, res: Response) => {
+    const enabled = !!botManager.getConfig().social?.culture;
+    const summary = botManager.getCultureManager().getSummary();
+    res.json({ enabled, ...summary });
+  });
+
   // Global skill library — read from disk, cached and invalidated on index mtime.
   // Caches the fully-parsed payload (array of skill objects + code previews),
   // not the raw JSON text, so a cache hit can ship straight to res.json

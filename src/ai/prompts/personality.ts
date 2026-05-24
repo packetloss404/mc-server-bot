@@ -70,12 +70,23 @@ export function buildAmbientContext(
   nearbyPlayerName: string,
   timeOfDay: string,
   isRaining: boolean,
-  playerHeldItem: string
+  playerHeldItem: string,
+  /**
+   * Project Sid P3-B — adopted-meme labels biasing the bot's ambient chatter so
+   * culture surfaces in idle talk (one of the two behavior-bias hooks). Empty /
+   * omitted when `social.culture` is off ⇒ the prompt is byte-for-byte identical
+   * to before, so there's no behavior change with the flag off.
+   */
+  beliefs: string[] = []
 ): string {
+  const beliefLine =
+    beliefs.length > 0
+      ? `- ${botName} has come to believe in: ${beliefs.join(', ')} (let it color the remark)\n`
+      : '';
   return `Generate a short ambient remark (1 sentence max) that ${botName} would say given this context:
 - Time of day: ${timeOfDay}
 - Weather: ${isRaining ? 'raining' : 'clear'}
 - A player named ${nearbyPlayerName} is nearby
 - The player is holding: ${playerHeldItem || 'nothing'}
-Just output the dialogue line, nothing else.`;
+${beliefLine}Just output the dialogue line, nothing else.`;
 }

@@ -231,6 +231,14 @@ export class CurriculumAgent {
      * Only consumed on the LLM-proposal path.
      */
     rulesContext?: string,
+    /**
+     * Project Sid P3-B — pre-rendered adopted-meme line (e.g. "Beliefs you've
+     * taken to heart: eco. Let them shape what you choose to do."). Built by
+     * VoyagerLoop via formatCultureForPrompt; '' / undefined when
+     * `social.culture` is off or the bot has adopted nothing, so it costs zero
+     * tokens by default. Only consumed on the LLM-proposal path.
+     */
+    cultureContext?: string,
   ): Promise<Task> {
     this.lastBotForProgression = bot;
     await this.worldMemory.rememberFromBot(bot);
@@ -248,7 +256,7 @@ export class CurriculumAgent {
     }
 
     if (this.useLLM && this.llmClient) {
-      return this.proposeLLMTask(bot, personality, skillLibrary, rulesContext);
+      return this.proposeLLMTask(bot, personality, skillLibrary, rulesContext, cultureContext);
     }
     return this.proposeStaticTask(personality);
   }
@@ -358,6 +366,7 @@ export class CurriculumAgent {
     personality: string,
     skillLibrary: SkillLibrary,
     rulesContext?: string,
+    cultureContext?: string,
   ): Promise<Task> {
     try {
       const obs = renderObservation(bot);
@@ -382,8 +391,13 @@ export class CurriculumAgent {
       // before in those cases.
       const rulesLine = rulesContext && rulesContext.trim().length > 0 ? `${rulesContext.trim()}\n` : '';
 
+      // Project Sid P3-B — interpolate the bot's adopted-meme line (already
+      // capped + formatted by formatCultureForPrompt). Empty when culture is off
+      // or nothing's adopted, so the prompt is byte-identical to before then.
+      const cultureLine = cultureContext && cultureContext.trim().length > 0 ? `${cultureContext.trim()}\n` : '';
+
       const userMessage = `Bot personality: ${personality}
-${rulesLine}${contextQA}
+${rulesLine}${cultureLine}${contextQA}
 ${obsText}
 Available skills: ${await skillLibrary.buildSkillSummary()}
 Completed tasks: ${completedStr}

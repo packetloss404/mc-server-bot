@@ -11,6 +11,7 @@ import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
+import { CultureManager } from '../social/CultureManager';
 import { BlackboardManager } from '../voyager/BlackboardManager';
 import { WorkerHandle } from '../worker/WorkerHandle';
 import { SharedWorldModel } from '../voyager/SharedWorldModel';
@@ -47,6 +48,10 @@ export class BotManager {
   private conversationManager: ConversationManager;
   private socialMemory: SocialMemory;
   private botComms: BotComms;
+  /** Project Sid P3-B — authoritative cross-worker cultural-meme registry.
+   *  Owned by the main thread (like AffinityManager); workers reach it via
+   *  CultureProxy over IPC. Only exercised when `config.social.culture` is on. */
+  private cultureManager: CultureManager;
   private blackboardManager: BlackboardManager;
   private sharedWorldModel: SharedWorldModel;
   private swarmCoordinator: SwarmCoordinator;
@@ -84,6 +89,7 @@ export class BotManager {
     this.conversationManager = new ConversationManager();
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
     this.botComms = BotComms.getInstance();
+    this.cultureManager = new CultureManager(path.join(process.cwd(), 'data'));
     this.blackboardManager = new BlackboardManager(path.join(process.cwd(), 'data'));
     this.sharedWorldModel = new SharedWorldModel(path.join(process.cwd(), 'data', 'shared_world.json'));
     this.swarmCoordinator = new SwarmCoordinator(this.blackboardManager);
@@ -205,6 +211,12 @@ export class BotManager {
       // the resident task-proposal prompt. Gated on governance.enabled
       // (returns [] when off ⇒ no token cost). WorkerHandle caches for 60s.
       (botName: string): TownRule[] => this.resolveActiveRulesForBot(botName),
+      // Project Sid P3-B — the cross-worker meme registry + a per-bot town
+      // resolver so adoptions are tagged by town (powering the per-town meme
+      // curves in GET /api/culture). Only consulted when `config.social.culture`
+      // is on; the worker never even builds a CultureProxy when the flag is off.
+      this.cultureManager,
+      (botName: string): string => this.resolveTownIdForBot(botName),
     );
 
     // Wire reputation listener immediately so it's ready before the worker sends events
@@ -431,6 +443,7 @@ export class BotManager {
     this.affinityManager.shutdown();
     this.socialMemory.shutdown();
     this.blackboardManager.shutdown();
+    if (typeof (this.cultureManager as any).shutdown === 'function') (this.cultureManager as any).shutdown();
     if (typeof (this.sharedWorldModel as any).shutdown === 'function') (this.sharedWorldModel as any).shutdown();
     if (typeof (this.botReputation as any).shutdown === 'function') (this.botReputation as any).shutdown();
   }
@@ -478,6 +491,33 @@ export class BotManager {
 
   getBotComms(): BotComms {
     return this.botComms;
+  }
+
+  /** Project Sid P3-B — accessor for the cultural-meme registry (used by
+   *  GET /api/culture). Always returns the registry; it stays empty unless
+   *  `config.social.culture` is on and bots start adopting memes. */
+  getCultureManager(): CultureManager {
+    return this.cultureManager;
+  }
+
+  /**
+   * Project Sid P3-B — resolve a bot's town id so meme adoptions can be tagged
+   * by town (per-town meme curves). Walks every town (small N) for a resident
+   * row whose botName matches; returns '' for non-residents or on any error.
+   */
+  private resolveTownIdForBot(botName: string): string {
+    try {
+      const towns = this.townManager.listTowns();
+      for (const town of towns) {
+        const residents = this.townManager.listResidents(town.id);
+        if (residents.some((r) => r.botName.toLowerCase() === botName.toLowerCase())) {
+          return town.id;
+        }
+      }
+    } catch {
+      /* swallow — town tagging is additive */
+    }
+    return '';
   }
 
   getBlackboardManager(): BlackboardManager {

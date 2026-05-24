@@ -138,6 +138,32 @@ export interface Config {
     /** Master switch for P2 standing-rule behavior. Default false. */
     enabled: boolean;
   };
+  /**
+   * Project Sid P3 — "Culture & social spread".
+   *
+   * When `social.botAffinity` is true, bots write directed bot→peer affinity
+   * edges from inter-bot interactions (the VoyagerLoop brain-tick message
+   * drain): a cheap, non-LLM sentiment signal (message kind + keyword scan via
+   * the existing `analyzeSentiment`) nudges the bot→peer edge through the same
+   * AffinityProxy/IPC path used for player affinity. The bot's top bot-
+   * relationships are surfaced in its chat system prompt, and a disliked peer
+   * (below the affinity hostile threshold) is deprioritized for help/resource
+   * sharing — reusing the existing `isHostile` gate.
+   *
+   * When `social.culture` is true, the (separately implemented) CultureManager
+   * meme layer is active. P3-A defines this flag so the meme work needs no
+   * config.ts change; P3-A itself never reads it.
+   *
+   * BOTH default OFF (behavior-changing). With `botAffinity` off, inter-bot
+   * messages are processed byte-for-byte as today (no affinity edges written,
+   * no prompt change, no help/share gating) and there is zero added LLM cost.
+   */
+  social?: {
+    /** Master switch for P3-A bot→bot affinity. Default false. */
+    botAffinity: boolean;
+    /** Reserved for P3-B cultural memes (CultureManager). Default false. */
+    culture: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +195,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'auth',
   'security',
   'governance',
+  'social',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -297,6 +324,13 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
   governance: {
     required: false,
     fields: [{ key: 'enabled', type: 'boolean', optional: true }],
+  },
+  social: {
+    required: false,
+    fields: [
+      { key: 'botAffinity', type: 'boolean', optional: true },
+      { key: 'culture', type: 'boolean', optional: true },
+    ],
   },
 };
 

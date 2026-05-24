@@ -10,6 +10,7 @@ import { DifficultyBalancer } from '../voyager/DifficultyBalancer';
 import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
 import type { TownRule } from '../town/RuleStore';
+import type { CultureManager } from '../social/CultureManager';
 import { logger } from '../util/logger';
 
 export interface WorkerBotData {
@@ -94,6 +95,17 @@ export class WorkerHandle {
   private resolveActiveRules: ((botName: string) => TownRule[]) | null = null;
   private activeRulesCache: { value: TownRule[]; expiresAt: number } | null = null;
   private static readonly RULES_CACHE_TTL_MS = 60_000;
+  /**
+   * Project Sid P3-B — the cross-worker cultural-meme registry (owned by the
+   * main thread) and a resolver for this bot's town id (for per-town adoption
+   * tracking). Both wired by BotManager. Routed to the worker's CultureProxy
+   * over IPC. Null in headless/test instantiations; the town id is cached for
+   * 60s like the role/rules caches.
+   */
+  private cultureManager: CultureManager | null = null;
+  private resolveTownId: ((botName: string) => string) | null = null;
+  private townIdCache: { value: string; expiresAt: number } | null = null;
+  private static readonly TOWN_CACHE_TTL_MS = 60_000;
 
   constructor(
     data: WorkerBotData,
@@ -107,6 +119,8 @@ export class WorkerHandle {
     playerIntentModel: PlayerIntentModel | null = null,
     resolveBotRole: ((botName: string) => string | null) | null = null,
     resolveActiveRules: ((botName: string) => TownRule[]) | null = null,
+    cultureManager: CultureManager | null = null,
+    resolveTownId: ((botName: string) => string) | null = null,
   ) {
     this.botName = data.botName;
     this.personality = data.personality;
@@ -123,6 +137,8 @@ export class WorkerHandle {
     this.onSwarmDirective = onSwarmDirective;
     this.resolveBotRole = resolveBotRole;
     this.resolveActiveRules = resolveActiveRules;
+    this.cultureManager = cultureManager;
+    this.resolveTownId = resolveTownId;
 
     // Provide a basic cached status while worker boots
     this.lastStatus = {
@@ -206,6 +222,12 @@ export class WorkerHandle {
     if (type === 'affinity.isHostile') return this.affinityManager.isHostile(args[0], args[1]);
     if (type === 'affinity.getAllForBot') return this.affinityManager.getAllForBot(args[0]);
     if (type === 'affinity.getAll') return this.affinityManager.getAll();
+
+    // Culture (Project Sid P3-B). Reads route to the main-thread registry so a
+    // meme observed in any worker is visible here. Returns inert values when no
+    // registry is wired (headless/test) so the worker degrades to a no-op.
+    if (type === 'culture.matchMeme') return this.cultureManager ? this.cultureManager.matchMeme(args[0]) : null;
+    if (type === 'culture.getAdoptedMemes') return this.cultureManager ? this.cultureManager.getAdoptedMemes(args[0]) : [];
 
     // Conversation
     if (type === 'conversation.getHistory') return this.conversationManager.getHistory(args[0], args[1]);
@@ -316,6 +338,20 @@ export class WorkerHandle {
     if (type === 'affinity.onHit') { this.affinityManager.onHit(data[0], data[1]); return; }
     if (type === 'affinity.onGift') { this.affinityManager.onGift(data[0], data[1]); return; }
     if (type === 'affinity.clearBot') { this.affinityManager.clearBot(data[0]); return; }
+
+    // Fire-and-forget culture operations (Project Sid P3-B). Swallowed when no
+    // registry is wired, so a worker built with the flag off (no CultureProxy)
+    // never reaches here anyway.
+    if (type === 'culture.adopt') {
+      // Tag the adoption with the bot's town (resolved + cached main-side) so
+      // GET /api/culture can mirror Sid's per-town meme curves. The worker
+      // passes '' since it doesn't know its town; we fill it in here.
+      const townId = data[2] || this.getCachedTownId(data[1]);
+      this.cultureManager?.adopt(data[0], data[1], townId);
+      return;
+    }
+    if (type === 'culture.observeChat') { this.cultureManager?.observeChat(data[0]); return; }
+    if (type === 'culture.addMeme') { this.cultureManager?.addMeme(data[0], data[1], data[2]); return; }
 
     // Fire-and-forget conversation operations
     if (type === 'conversation.addPlayerMessage') { this.conversationManager.addPlayerMessage(data[0], data[1], data[2]); return; }
@@ -435,6 +471,29 @@ export class WorkerHandle {
     }
     if (!this.resolveActiveRules) return [];
     try { return this.resolveActiveRules(target) ?? []; } catch { return []; }
+  }
+
+  /**
+   * Project Sid P3-B — resolve this bot's town id, cached for 60s. Mirrors the
+   * role/rules caches. Returns '' when no resolver is wired or it throws, so
+   * adoptions are simply left untagged (counted under '(unaffiliated)').
+   */
+  private getCachedTownId(botName: string): string {
+    const target = botName ?? this.botName;
+    if (target === this.botName) {
+      const now = Date.now();
+      if (this.townIdCache && this.townIdCache.expiresAt > now) {
+        return this.townIdCache.value;
+      }
+      let value = '';
+      if (this.resolveTownId) {
+        try { value = this.resolveTownId(target) ?? ''; } catch { value = ''; }
+      }
+      this.townIdCache = { value, expiresAt: now + WorkerHandle.TOWN_CACHE_TTL_MS };
+      return value;
+    }
+    if (!this.resolveTownId) return '';
+    try { return this.resolveTownId(target) ?? ''; } catch { return ''; }
   }
 
   /** Send a command to the worker */

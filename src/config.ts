@@ -164,6 +164,34 @@ export interface Config {
     /** Reserved for P3-B cultural memes (CultureManager). Default false. */
     culture: boolean;
   };
+  /**
+   * Project Sid P4 — "PIANO cognition".
+   *
+   * When `cognition.perceptionTick` is true, the threat/opportunity/survival-
+   * goal assessors run on their OWN short-interval timer in BotInstance (a
+   * `perceptionInterval` mirroring `instinctInterval`/`survivalInterval`),
+   * writing results into a per-bot AgentState cache that VoyagerLoop.runOneCycle
+   * READS instead of computing inline. This lets the bot perceive a spawning
+   * threat mid-task (the sequential loop is blocked during task execution)
+   * rather than only reacting when the next cycle reaches the inline scan.
+   *
+   * When `cognition.cognitiveController` is true, the (separately implemented —
+   * P4-B) CognitiveController replaces the imperative priority ladder in
+   * runOneCycle with a single Decision emitter and broadcasts the decision to
+   * chat/proactive speech. P4-A defines this flag so the controller work needs
+   * no config.ts change; P4-A itself never reads it.
+   *
+   * BOTH default OFF (behavior-changing). With `perceptionTick` off, the
+   * perception timer is never started and runOneCycle computes the assessment
+   * inline byte-for-byte as today — the AgentState cache is never consulted and
+   * there is zero added timer / CPU cost.
+   */
+  cognition?: {
+    /** Master switch for P4-A always-on perception tick. Default false. */
+    perceptionTick: boolean;
+    /** Reserved for P4-B CognitiveController + decision broadcast. Default false. */
+    cognitiveController: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +224,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'security',
   'governance',
   'social',
+  'cognition',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -330,6 +359,13 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
     fields: [
       { key: 'botAffinity', type: 'boolean', optional: true },
       { key: 'culture', type: 'boolean', optional: true },
+    ],
+  },
+  cognition: {
+    required: false,
+    fields: [
+      { key: 'perceptionTick', type: 'boolean', optional: true },
+      { key: 'cognitiveController', type: 'boolean', optional: true },
     ],
   },
 };

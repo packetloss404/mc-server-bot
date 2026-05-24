@@ -18,9 +18,11 @@ import { BlackboardManager, BlackboardTask } from './BlackboardManager';
 import { SocialMemory } from '../social/SocialMemory';
 import { BotComms } from '../social/BotComms';
 import { DecisionTrace } from './DecisionTrace';
-import { GoalGenerator, GoalGeneratorState } from './GoalGenerator';
+import { GoalGenerator, GoalGeneratorState, Goal } from './GoalGenerator';
 import { ThreatAssessor, ThreatAssessment } from './ThreatAssessor';
-import { OpportunityDetector } from './OpportunityDetector';
+import { OpportunityDetector, OpportunityScan } from './OpportunityDetector';
+import { AgentState } from './AgentState';
+import { decide as cognitiveDecide, CognitiveContext, Decision } from './CognitiveController';
 import { DecisionNarrator } from './DecisionNarrator';
 import { ProactiveCommunicator } from './ProactiveCommunicator';
 import { ActionTemplateRegistry } from './ActionTemplates';
@@ -137,6 +139,31 @@ export class VoyagerLoop {
   private goalGenerator: GoalGenerator | null = null;
   private threatAssessor: ThreatAssessor | null = null;
   private opportunityDetector: OpportunityDetector | null = null;
+  /**
+   * P4-A — per-bot shared cognitive state. Always allocated (cheap, empty), but
+   * only WRITTEN by the perception tick and READ by runOneCycle when
+   * `config.cognition.perceptionTick` is enabled. With the flag off it stays
+   * empty and is never consulted (inline path unchanged).
+   */
+  private agentState: AgentState = new AgentState();
+  /**
+   * P4-A — max age (ms) a cached perception value may have and still be used by
+   * runOneCycle. Older than this ⇒ fall back to inline compute. Sized a few
+   * cycles wide of the ~750ms perception interval so a slightly-late tick is
+   * still usable, but a wedged/stopped tick forces a fresh inline assessment.
+   */
+  private static readonly PERCEPTION_MAX_AGE_MS = 3000;
+  /**
+   * P4-B — the most recent structured Decision emitted by the Cognitive
+   * Controller this cycle. Only WRITTEN when
+   * `config.cognition.cognitiveController` is enabled; null otherwise. The
+   * `conditioningForTalk` field is broadcast to the talk modules (handleChat /
+   * ProactiveCommunicator) via getTalkConditioning() so speech is conditioned
+   * on the same decision the loop is acting on. With the flag OFF this stays
+   * null and getTalkConditioning() returns undefined ⇒ talk falls back to
+   * getInternalState() exactly as today.
+   */
+  private lastDecision: Decision | null = null;
   private decisionNarrator: DecisionNarrator | null = null;
   private proactiveCommunicator: ProactiveCommunicator | null = null;
   private actionTemplates: ActionTemplateRegistry | null = null;
@@ -259,6 +286,124 @@ export class VoyagerLoop {
 
   getDecisionTrace(): DecisionTrace {
     return this.decisionTrace;
+  }
+
+  /** P4-A — the per-bot AgentState cache (written by the perception tick). */
+  getAgentState(): AgentState {
+    return this.agentState;
+  }
+
+  /**
+   * P4-A — always-on perception tick.
+   *
+   * Runs the synchronous threat/opportunity/survival-goal assessors and writes
+   * their results into the AgentState cache. Driven by BotInstance's
+   * independent `perceptionInterval` ONLY when `config.cognition.perceptionTick`
+   * is enabled — it decouples fast perception from the slow sequential loop
+   * (which is blocked during task execution). The work mirrors EXACTLY what
+   * runOneCycle computes inline (same assessor calls, same survival-override
+   * selection rule) so a cache read is interchangeable with an inline compute.
+   *
+   * Self-guarded and fully try/caught: a tick failure leaves the previous
+   * cached values in place and never throws into the caller's timer.
+   */
+  runPerceptionTick(): void {
+    if (!this.config.cognition?.perceptionTick) return;
+    if (!this.bot || !this.bot.entity) return;
+
+    const now = Date.now();
+
+    let threatAssessment: ThreatAssessment | null = null;
+    if (this.threatAssessor) {
+      try {
+        threatAssessment = this.threatAssessor.assess(this.bot);
+        this.agentState.setThreat(threatAssessment, now);
+      } catch { /* keep prior cached threat */ }
+    }
+
+    if (this.opportunityDetector) {
+      try {
+        const scan = this.opportunityDetector.scan(this.bot);
+        this.agentState.setOpportunities(scan, now);
+      } catch { /* keep prior cached opportunities */ }
+    }
+
+    if (this.goalGenerator) {
+      try {
+        const top = this.computeSurvivalGoal(threatAssessment);
+        this.agentState.setSurvivalGoal(top, now);
+      } catch { /* keep prior cached survival goal */ }
+    }
+  }
+
+  /**
+   * P4-A — compute the single survival/safety override goal, or null. Factored
+   * out of runOneCycle so the inline path and the perception tick produce the
+   * IDENTICAL result. The caller passes the threat assessment already in hand
+   * (inline scan or cached) so the nearbyHostiles inputs match.
+   *
+   * Returns the top goal only when it is a survival|safety priority with
+   * urgency >= 7 (the existing override gate); otherwise null.
+   */
+  private computeSurvivalGoal(threatAssessment: ThreatAssessment | null): Goal | null {
+    if (!this.goalGenerator || this.playerTaskQueue.length !== 0) return null;
+    const goals = this.goalGenerator.generateGoals({
+      health: this.bot.health,
+      food: this.bot.food,
+      oxygen: this.getOxygenLevel(),
+      inventory: Object.fromEntries(this.bot.inventory.items().map((i) => [i.name, i.count])),
+      equipment: {},
+      nearbyHostiles: {
+        count: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').length ?? 0,
+        closestDistance: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').reduce((min, t) => Math.min(min, t.distance), Infinity) ?? Infinity,
+      },
+      timeOfDay: this.bot.time?.timeOfDay ?? 0,
+      isRaining: this.bot.isRaining ?? false,
+      hasShelter: false,
+      playerTasks: this.playerTaskQueue.map((t) => t.description),
+      blackboardTasks: [],
+      completedTaskCount: this.curriculumAgent.getCompletedTasks().length,
+      personality: this.personality,
+    });
+    const top = goals[0];
+    if (top && (top.priority === 'survival' || top.priority === 'safety') && top.urgency >= 7) {
+      return top;
+    }
+    return null;
+  }
+
+  /**
+   * P4-B — assemble the bottlenecked CognitiveContext from the ladder signals
+   * the loop has already computed this cycle. This is ONLY called when
+   * `config.cognition.cognitiveController` is on, and feeds the pure
+   * `decide()`. Defaults make it safe to call from the early-return branches
+   * (build/resident-idle) that don't have every downstream signal in hand.
+   */
+  private buildCognitiveContext(args: {
+    buildGoalActive?: boolean;
+    buildGoalDescription?: string | null;
+    survivalGoal?: Goal | null;
+    playerIntent?: { player: string; intent: string; confidence: number; suggestedTask: string } | null;
+    longTermGoalTask?: string | null;
+    playerTask?: string | null;
+    blackboardTask?: string | null;
+    isResident?: boolean;
+    threatAssessment?: ThreatAssessment | null;
+  }): CognitiveContext {
+    return {
+      instinctPaused: this.paused,
+      instinctReason: null,
+      buildGoalActive: args.buildGoalActive ?? false,
+      buildGoalDescription: args.buildGoalDescription ?? null,
+      survivalGoal: args.survivalGoal ?? null,
+      playerIntent: args.playerIntent ?? null,
+      longTermGoalTask: args.longTermGoalTask ?? null,
+      playerTask: args.playerTask ?? null,
+      blackboardTask: args.blackboardTask ?? null,
+      isResident: args.isResident ?? false,
+      topThreat: args.threatAssessment ?? null,
+      topOpportunity: null,
+    };
   }
 
   setGoalGenerator(g: GoalGenerator): void { this.goalGenerator = g; }
@@ -395,6 +540,32 @@ export class VoyagerLoop {
       parts.push(`Long-term goal: ${goalSummary(this.activeLongTermGoal)}`);
     }
     return parts.join('. ');
+  }
+
+  /**
+   * P4-B — the most recent Cognitive Controller decision (or null when the
+   * controller is disabled / hasn't run yet). Read by the dashboard / A-B
+   * tooling; behavior selection does NOT depend on this getter.
+   */
+  getLastDecision(): Decision | null {
+    return this.lastDecision;
+  }
+
+  /**
+   * P4-B — decision broadcast for the talk modules.
+   *
+   * When `config.cognition.cognitiveController` is ON, returns the current
+   * decision's `conditioningForTalk` string so chat + proactive speech are
+   * conditioned on the SAME decision the loop is acting on (no "say one thing,
+   * do another"). Falls back to `getInternalState()` if no decision has been
+   * emitted yet this connection.
+   *
+   * When the flag is OFF, returns `undefined` — callers then use
+   * `getInternalState()` exactly as before, so prompts are byte-identical.
+   */
+  getTalkConditioning(): string | undefined {
+    if (!this.config.cognition?.cognitiveController) return undefined;
+    return this.lastDecision?.conditioningForTalk ?? this.getInternalState();
   }
 
   queueLongTermGoal(description: string, requestedBy: string): void {
@@ -593,10 +764,23 @@ export class VoyagerLoop {
     // Reflect on emotional state (decay toward neutral)
     this.socialMemory?.reflect(this.botName);
 
-    // Assess threats and scan opportunities each cycle
+    // Assess threats and scan opportunities each cycle.
+    //
+    // P4-A: when the perception tick is enabled, READ the latest threat
+    // assessment from the AgentState cache (populated off the loop by
+    // BotInstance's perceptionInterval) and only fall back to an inline
+    // assess() if the cache is empty or stale. When the flag is OFF,
+    // `cognition?.perceptionTick` is falsy so we take the SAME inline assess()
+    // path as before — byte-identical behavior.
+    const perceptionTickOn = !!this.config.cognition?.perceptionTick;
     let threatAssessment: ThreatAssessment | null = null;
     if (this.threatAssessor) {
-      try { threatAssessment = this.threatAssessor.assess(this.bot); } catch { /* ignore scan errors */ }
+      if (perceptionTickOn) {
+        threatAssessment = this.agentState.getFreshThreat(VoyagerLoop.PERCEPTION_MAX_AGE_MS);
+      }
+      if (!threatAssessment) {
+        try { threatAssessment = this.threatAssessor.assess(this.bot); } catch { /* ignore scan errors */ }
+      }
       if (threatAssessment && threatAssessment.overallThreatLevel >= 7) {
         this.decisionTrace.record('task_selection', threatAssessment.suggestedAction,
           `Threat level ${threatAssessment.overallThreatLevel}: ${threatAssessment.threats[0]?.description || 'unknown'}`,
@@ -649,13 +833,24 @@ export class VoyagerLoop {
     // Proactive communication: announce discoveries and threats
     if (this.proactiveCommunicator && this.opportunityDetector) {
       try {
-        const scan = this.opportunityDetector.scan(this.bot);
+        // P4-A: prefer the cached scan when the perception tick is on; fall
+        // back to an inline scan() when stale/empty. Flag OFF ⇒ always inline,
+        // identical to before.
+        let scan: OpportunityScan | null = perceptionTickOn
+          ? this.agentState.getFreshOpportunities(VoyagerLoop.PERCEPTION_MAX_AGE_MS)
+          : null;
+        if (!scan) {
+          scan = this.opportunityDetector.scan(this.bot);
+        }
         const announcements = this.proactiveCommunicator.checkAndAnnounce({
           threats: threatAssessment?.threats.map((t) => ({ type: t.type, source: t.source, dangerLevel: t.dangerLevel, distance: t.distance, position: t.position })) ?? [],
           opportunities: scan.opportunities,
           health: this.bot.health,
           food: this.bot.food,
           currentTask: this.currentTask ?? undefined,
+          // P4-B: undefined when the controller is OFF (getTalkConditioning
+          // short-circuits), so ProactiveCommunicator behaves exactly as before.
+          decisionConditioning: this.getTalkConditioning(),
         });
         for (const ann of announcements) {
           // Gate by both priority and DifficultyBalancer chat probability so bots stay
@@ -668,35 +863,44 @@ export class VoyagerLoop {
     }
 
     if (this.activeLongTermGoal?.spec.kind === 'build_structure') {
+      // P4-B: record the structured decision for talk-conditioning (flag-gated).
+      // Behavior (runBuildGoalCycle) is unchanged either way.
+      if (this.config.cognition?.cognitiveController) {
+        this.lastDecision = cognitiveDecide(this.buildCognitiveContext({
+          buildGoalActive: true,
+          buildGoalDescription: this.activeLongTermGoal.rawRequest,
+          threatAssessment,
+        }));
+      }
       await this.runBuildGoalCycle();
       return;
     }
 
     // GoalGenerator: check for survival/safety overrides before normal task selection
     let goalOverrideTask: Task | null = null;
+    // P4-B: capture which signal produced the override so the Cognitive
+    // Controller can label it correctly (survival goal vs. player intent).
+    // Only assigned when the controller flag is on; unused on the OFF path.
+    const ccOn = !!this.config.cognition?.cognitiveController;
+    let ccSurvivalGoal: Goal | null = null;
+    let ccPlayerIntent: { player: string; intent: string; confidence: number; suggestedTask: string } | null = null;
     if (this.goalGenerator && this.playerTaskQueue.length === 0) {
       try {
-        const goals = this.goalGenerator.generateGoals({
-          health: this.bot.health,
-          food: this.bot.food,
-          oxygen: this.getOxygenLevel(),
-          inventory: Object.fromEntries(this.bot.inventory.items().map((i) => [i.name, i.count])),
-          equipment: {},
-          nearbyHostiles: {
-            count: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').length ?? 0,
-            closestDistance: threatAssessment?.threats.filter((t) => t.type === 'hostile_mob').reduce((min, t) => Math.min(min, t.distance), Infinity) ?? Infinity,
-          },
-          timeOfDay: this.bot.time?.timeOfDay ?? 0,
-          isRaining: this.bot.isRaining ?? false,
-          hasShelter: false,
-          playerTasks: this.playerTaskQueue.map((t) => t.description),
-          blackboardTasks: [],
-          completedTaskCount: this.curriculumAgent.getCompletedTasks().length,
-          personality: this.personality,
-        });
-        const top = goals[0];
+        // P4-A: when the perception tick is on, READ the survival-override goal
+        // the tick already computed (falling back to an inline compute if the
+        // cache is empty/stale). When OFF, compute inline EXACTLY as before —
+        // computeSurvivalGoal() is a verbatim extraction of the original inline
+        // generateGoals() + selection, so the disabled path is byte-identical.
+        let top: Goal | null;
+        if (perceptionTickOn) {
+          const [fresh, cached] = this.agentState.getFreshSurvivalGoal(VoyagerLoop.PERCEPTION_MAX_AGE_MS);
+          top = fresh ? cached : this.computeSurvivalGoal(threatAssessment);
+        } else {
+          top = this.computeSurvivalGoal(threatAssessment);
+        }
         if (top && (top.priority === 'survival' || top.priority === 'safety') && top.urgency >= 7) {
           goalOverrideTask = { description: top.description, keywords: top.keywords };
+          if (ccOn) ccSurvivalGoal = top;
           this.decisionTrace.record('task_selection', top.description, `GoalGenerator: ${top.priority} override (urgency ${top.urgency})`,
             top.description, { priority: top.priority, urgency: top.urgency });
         }
@@ -749,6 +953,7 @@ export class VoyagerLoop {
             .split(/\s+/)
             .filter((w) => w.length > 2);
           goalOverrideTask = { description: bestIntent.suggestedTask, keywords };
+          if (ccOn) ccPlayerIntent = bestIntent;
           this.decisionTrace.record(
             'task_selection',
             bestIntent.suggestedTask,
@@ -827,6 +1032,13 @@ export class VoyagerLoop {
 
     const haveHigherPriority = Boolean(goalOverrideTask || goalTask || playerTask || blackboardTask);
     if (isResident && !haveHigherPriority) {
+      // P4-B: record the resident-idle decision (flag-gated). Same early return.
+      if (ccOn) {
+        this.lastDecision = cognitiveDecide(this.buildCognitiveContext({
+          isResident: true,
+          threatAssessment,
+        }));
+      }
       logger.debug(
         { bot: this.botName, role: botRole },
         'Resident has no swarm/player task this tick; idling (skipping curriculum fallback)',
@@ -849,6 +1061,26 @@ export class VoyagerLoop {
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);
     const plan = buildTaskPlan(task, progression);
     this.currentTask = task.description;
+
+    // P4-B: emit the structured Cognitive Controller decision for THIS cycle
+    // (flag-gated). The action.kind decide() selects is identical to the
+    // imperative ladder above — the value here is the structured decision plus
+    // the `conditioningForTalk` string broadcast to chat/proactive speech.
+    // Behavior selection above is unchanged; this is purely additive.
+    if (ccOn) {
+      this.lastDecision = cognitiveDecide(this.buildCognitiveContext({
+        survivalGoal: ccSurvivalGoal,
+        playerIntent: ccPlayerIntent,
+        longTermGoalTask: goalTask ? goalTask.description : null,
+        // NOTE: `playerTask` aliases `goalTask` when a long-term goal is active
+        // (see `const playerTask = goalTask || …shift()`), so only treat it as a
+        // genuine player-queue request when there is no long-term goal.
+        playerTask: !goalTask && playerTask ? playerTask.description : null,
+        blackboardTask: blackboardTask ? blackboardTask.description : null,
+        isResident,
+        threatAssessment,
+      }));
+    }
 
     // Personality-flavored acknowledgment when starting a player-requested task.
     if (playerTask && playerTask.requestedBy) {

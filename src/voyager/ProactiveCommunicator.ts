@@ -27,6 +27,14 @@ export interface CommunicatorState {
   health: number;
   food: number;
   currentTask?: string;
+  /**
+   * P4-B — the Cognitive Controller's `conditioningForTalk` for the current
+   * decision. When present (controller flag ON), the status-update announcement
+   * is framed from this shared decision string so proactive speech coheres with
+   * what the bot is actually doing. When absent (flag OFF), status updates use
+   * `currentTask` exactly as before — byte-identical behavior.
+   */
+  decisionConditioning?: string;
 }
 
 type Personality = 'guard' | 'explorer' | 'farmer' | 'merchant' | 'blacksmith' | 'elder';
@@ -367,11 +375,18 @@ export class ProactiveCommunicator {
     if (!state.currentTask) return;
     if (!this.shouldAnnounce('status_update', this.lastAnnouncedAt)) return;
 
+    // P4-B: when the Cognitive Controller supplied a decision conditioning
+    // string, frame the status from it so proactive speech matches the current
+    // decision; otherwise keep the original "Still working on: <task>" wording.
+    const message = state.decisionConditioning
+      ? state.decisionConditioning
+      : `Still working on: ${state.currentTask}`;
+
     const announcement: Announcement = {
       id: generateId(),
       botName: this.botName,
       type: 'status_update',
-      message: `Still working on: ${state.currentTask}`,
+      message,
       priority: 2,
       timestamp: Date.now(),
     };

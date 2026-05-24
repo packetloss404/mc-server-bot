@@ -121,6 +121,13 @@ export class BotInstance {
   private voyagerLoop: VoyagerLoop | null = null;
   private instinctInterval: NodeJS.Timeout | null = null;
   private survivalInterval: NodeJS.Timeout | null = null;
+  /**
+   * Project Sid P4-A — always-on perception tick handle. Only started when
+   * `config.cognition.perceptionTick` is enabled; null (never scheduled)
+   * otherwise. Cleared in stopAmbientBehaviors/disconnect like the other
+   * ambient timers.
+   */
+  private perceptionInterval: NodeJS.Timeout | null = null;
   private instinctResumeTimeout: NodeJS.Timeout | null = null;
   private instinctActive = false;
   private instinctReason: 'attack' | 'hazard' | null = null;
@@ -287,6 +294,7 @@ export class BotInstance {
           this.startChatListener();
           this.startVoyagerIfCodegen();
           this.startSurvivalLoop();
+          this.startPerceptionLoop();
         });
       });
     });
@@ -1037,7 +1045,12 @@ export class BotInstance {
 
       const affinity = await this.affinityManager.get(this.name, playerName);
       const isCodegen = this.mode === BotMode.CODEGEN;
-      const internalState = this.voyagerLoop?.getInternalState();
+      // P4-B: when the Cognitive Controller is enabled, condition chat on the
+      // SAME current decision the loop is acting on (so the bot can't promise
+      // one thing in chat while doing another). getTalkConditioning() returns
+      // undefined when the flag is OFF, so we fall back to getInternalState()
+      // and the prompt is byte-identical to before.
+      const internalState = this.voyagerLoop?.getTalkConditioning() ?? this.voyagerLoop?.getInternalState();
 
       // Build social context from memory for LLM prompt
       let socialContext = this.socialMemory.buildMemoryContext(this.name, playerName);
@@ -1373,6 +1386,51 @@ export class BotInstance {
     };
 
     this.survivalInterval = setTimeout(tick, nextDelay());
+  }
+
+  /**
+   * Project Sid P4-A — always-on perception tick. Runs the threat /
+   * opportunity / survival-goal assessors off the slow sequential VoyagerLoop
+   * (which is blocked during task execution) on a short ~750ms interval and
+   * writes the results into the loop's AgentState cache, which runOneCycle then
+   * reads. Mirrors startInstinctLoop's setTimeout-with-jitter pattern and its
+   * destroyed/null-bot guards.
+   *
+   * GATED on `config.cognition.perceptionTick`: when the flag is OFF this is a
+   * no-op (no timer is ever scheduled), so bot behavior is byte-identical to
+   * today. Only meaningful in codegen mode where the VoyagerLoop exists.
+   */
+  private startPerceptionLoop(): void {
+    if (!this.config.cognition?.perceptionTick) return;
+    if (this.perceptionInterval || !this.bot || this.destroyed) return;
+    if (this.mode !== BotMode.CODEGEN || !this.voyagerLoop) return;
+
+    // ~750ms tick with ±20% jitter so perception loops across bots don't sync.
+    const BASE_MS = 750;
+    const nextDelay = () => Math.round(BASE_MS * (0.8 + Math.random() * 0.4));
+
+    const tick = () => {
+      try {
+        if (!this.bot || this.destroyed) return;
+        if (this.state === BotState.DISCONNECTED) return;
+        if (this.bot.health <= 0) return;
+        // Fire-and-forget perception; VoyagerLoop.runPerceptionTick is fully
+        // self-guarded and re-checks the cognition flag.
+        this.voyagerLoop?.runPerceptionTick();
+      } catch (err) {
+        logger.debug({ err: (err as any)?.message, bot: this.name }, 'perception tick error');
+      } finally {
+        // Re-check destroyed AND bot !== null so we don't reschedule on a
+        // torn-down instance (same race guard as startSurvivalLoop).
+        if (this.perceptionInterval !== null && !this.destroyed && this.bot) {
+          this.perceptionInterval = setTimeout(tick, nextDelay());
+        } else {
+          this.perceptionInterval = null;
+        }
+      }
+    };
+
+    this.perceptionInterval = setTimeout(tick, nextDelay());
   }
 
   /** Eat an edible inventory item when food <= 6 (3 hunger bar half-icons). */
@@ -1732,6 +1790,10 @@ export class BotInstance {
     if (this.survivalInterval) {
       clearTimeout(this.survivalInterval);
       this.survivalInterval = null;
+    }
+    if (this.perceptionInterval) {
+      clearTimeout(this.perceptionInterval);
+      this.perceptionInterval = null;
     }
     if (this.voyagerLoop) {
       this.voyagerLoop.stop();

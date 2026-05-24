@@ -124,3 +124,19 @@ governance:
 social:
   botAffinity: false
   culture: false
+
+# Project Sid P4 — "PIANO cognition".
+#   perceptionTick: master switch for the always-on perception tick (P4-A).
+#     When ON, the threat/opportunity/survival-goal assessors run on their own
+#     short-interval timer (~750ms, like the instinct loop) and write results
+#     into a per-bot AgentState cache; VoyagerLoop.runOneCycle READS that cache
+#     instead of computing inline, so a threat that spawns mid-task is perceived
+#     before the next cycle's inline scan would have caught it. Default OFF —
+#     when false the perception timer is never started and runOneCycle computes
+#     the assessment inline byte-for-byte as today (cache never consulted, zero
+#     added timer/CPU cost).
+#   cognitiveController: reserved for the P4-B CognitiveController + decision
+#     broadcast (replaces the imperative priority ladder). Default OFF.
+cognition:
+  perceptionTick: false
+  cognitiveController: false

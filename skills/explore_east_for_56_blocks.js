@@ -1,5 +1,5 @@
 async function explore_east_for_56_blocks(bot) {
-  const startPos = bot.entity.position;
-  const targetX = startPos.x + 56;
-  await moveTo(targetX, startPos.y, startPos.z, 2, 60);
+  const currentPos = bot.entity.position;
+  const targetX = currentPos.x + 56;
+  await moveTo(targetX, currentPos.y, currentPos.z, 2, 30);
 }

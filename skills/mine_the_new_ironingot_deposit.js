@@ -1,35 +1,29 @@
 async function mine_the_new_ironingot_deposit(bot) {
-  // First swim to surface if drowning
-  await swimToTheSurfaceDrowning(bot);
-
-  // Move to the iron_ore location (known from world memory: 953, 51, 282)
-  const targetX = 953;
-  const targetY = 51;
-  const targetZ = 282;
-  await moveTo(targetX, targetY, targetZ, 3, 30);
-
-  // Find the iron_ore block to mine
-  const ironOre = bot.findBlock({
-    matching: b => b.name === 'iron_ore',
-    maxDistance: 5
-  });
-  if (!ironOre) {
-    // Try exploring slightly if not found
-    await exploreUntil({
-      x: 1,
-      y: 0,
-      z: 0
-    }, 15, () => bot.findBlock({
-      matching: b => b.name === 'iron_ore',
-      maxDistance: 32
-    }));
+  // First, ensure we're on the surface if underwater
+  const isHeadSubmerged = () => {
+    const eyePos = bot.entity.position.offset(0, bot.entity.eyeHeight, 0);
+    const eyeBlock = bot.blockAt(eyePos);
+    return eyeBlock && (eyeBlock.name.includes('water') || eyeBlock.name.includes('lava') || eyeBlock.name === 'bubble_column');
+  };
+  const isFeetInFluid = () => {
+    const feetBlock = bot.blockAt(bot.entity.position);
+    return feetBlock && (feetBlock.name.includes('water') || feetBlock.name.includes('lava') || feetBlock.name === 'bubble_column');
+  };
+  if (isHeadSubmerged() || isFeetInFluid()) {
+    bot.setControlState('jump', true);
+    bot.setControlState('forward', true);
+    bot.setControlState('sprint', true);
+    const startTime = Date.now();
+    while (Date.now() - startTime < 30000) {
+      await bot.waitForTicks(5);
+      if (!isHeadSubmerged()) {
+        await bot.waitForTicks(10);
+        break;
+      }
+    }
+    bot.clearControlStates();
   }
 
-  // Mine the iron_ore with stone_pickaxe
-  const inv = bot.inventory.items();
-  const stonePickaxe = inv.find(i => i.name === 'stone_pickaxe');
-  if (stonePickaxe) {
-    await bot.equip(stonePickaxe, 'hand');
-  }
+  // Mine iron_ore (the actual block that yields raw_iron/iron_ingot)
   await mineBlock('iron_ore', 1);
 }

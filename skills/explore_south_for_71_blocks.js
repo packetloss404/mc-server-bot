@@ -1,7 +1,23 @@
 async function explore_south_for_71_blocks(bot) {
-  // Move south 71 blocks from current position (716, 70, 202) to (716, 70, 131)
-  const targetX = 716;
-  const targetY = 70;
-  const targetZ = 202 - 71;
-  await moveTo(targetX, targetY, targetZ, 2, 60);
+  const startZ = bot.entity.position.z;
+  const targetZ = startZ + 71;
+  await exploreUntil('south', 30, () => {
+    const ironOre = bot.findBlock({
+      matching: block => block.name === 'iron_ore',
+      maxDistance: 32
+    });
+    if (!ironOre) { console.log("Block not found"); return; }
+    if (ironOre) return ironOre;
+    if (bot.entity.position.z >= targetZ - 5) return bot.entity.position;
+    return null;
+  });
+  const ironOre = bot.findBlock({
+    matching: block => block.name === 'iron_ore',
+    maxDistance: 32
+  });
+  if (!ironOre) { console.log("Block not found"); return; }
+  if (ironOre) {
+    await mineBlock('iron_ore', 1);
+    await smeltItem('iron_ore', 'coal', 1);
+  }
 }

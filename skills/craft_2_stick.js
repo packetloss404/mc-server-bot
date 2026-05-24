@@ -1,18 +1,25 @@
 async function craft2Sticks(bot) {
-  const inv = bot.inventory.items();
-  const sticks = inv.find(i => i.name === 'stick');
+  // Check if we already have at least 2 sticks
+  const sticks = bot.inventory.items().find(item => item.name === 'stick');
   if (sticks && sticks.count >= 2) {
+    return; // Already have 2+ sticks
+  }
+
+  // We need planks for sticks. 2 planks make 4 sticks at a crafting table.
+  // Place crafting table if not already placed, then craft sticks.
+  const craftingTable = bot.inventory.items().find(item => item.name === 'crafting_table');
+  const planks = bot.inventory.items().find(item => item.name.includes('_planks'));
+  if (!planks || planks.count < 2) {
+    // Not enough planks - this shouldn't happen given inventory
     return;
   }
-  const oakLog = bot.findBlock({
-    matching: b => b.name === 'oak_log',
-    maxDistance: 32
-  });
-  if (!oakLog) {
+
+  // Place crafting table nearby
+  if (craftingTable) {
     const pos = bot.entity.position;
-    await moveTo(pos.x + 10, pos.y, pos.z + 10, 2, 15);
+    await placeItem('crafting_table', Math.floor(pos.x) + 2, Math.floor(pos.y) - 1, Math.floor(pos.z));
   }
-  await mineBlock('oak_log', 1);
-  await craftItem('oak_planks', 4);
-  await craftItem('stick', 2);
+
+  // Craft 4 sticks using crafting table (uses 2 planks)
+  await craftItem('stick', 4);
 }

@@ -1,0 +1,22 @@
+async function explore_south_for_54_blocks(bot) {
+  const targetZ = bot.entity.position.z + 54;
+  await exploreUntil('south', 20, () => {
+    const ironOre = bot.findBlock({
+      matching: block => block.name === 'iron_ore',
+      maxDistance: 32
+    });
+    if (!ironOre) { console.log("Block not found"); return; }
+    if (ironOre) return ironOre;
+    if (bot.entity.position.z >= targetZ - 5) return bot.entity.position;
+    return null;
+  });
+  const ironOre = bot.findBlock({
+    matching: block => block.name === 'iron_ore',
+    maxDistance: 32
+  });
+  if (!ironOre) { console.log("Block not found"); return; }
+  if (ironOre) {
+    await mineBlock('iron_ore', 1);
+    await smeltItem('iron_ore', 'coal', 1);
+  }
+}

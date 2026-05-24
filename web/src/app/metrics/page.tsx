@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { api, MetricsData } from '@/lib/api';
+import { api, MetricsData, CivilizationMetricsData } from '@/lib/api';
 import { PageHeader } from '@/components/PageHeader';
 import { STATE_COLORS, STATE_LABELS, PERSONALITY_COLORS } from '@/lib/constants';
 
@@ -201,15 +201,108 @@ function ProgressRing({
   );
 }
 
+/* ── Role-distribution colours (mirrors the Fleet card palette, + Sid roles) ── */
+const OBSERVED_ROLE_COLORS: Record<string, string> = {
+  guard: '#4A90D9',
+  farmer: '#F39C12',
+  miner: '#95A5A6',
+  lumberjack: '#27AE60',
+  blacksmith: '#E74C3C',
+  builder: '#1ABC9C',
+  gatherer: '#9B59B6',
+  idle: '#52525B',
+};
+
+/* ── Civilization-progress card (Project Sid P1-B) ── */
+function CivilizationCard({ civ }: { civ: CivilizationMetricsData | null }) {
+  if (!civ) {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 8 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.18 }}
+        className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5"
+      >
+        <h2 className="text-sm font-semibold text-zinc-300 mb-1">Civilization</h2>
+        <p className="text-xs text-zinc-600">Metrics unavailable</p>
+      </motion.div>
+    );
+  }
+
+  const roleEntries = Object.entries(civ.roleDistribution).sort((a, b) => b[1] - a[1]);
+  const maxRole = Math.max(1, ...roleEntries.map(([, v]) => v));
+  // Entropy "health" colour: Sid healthy ≈3.4–4.0 bits, collapsed ≈2.6.
+  const entropyColor = civ.roleEntropy >= 2.6 ? '#10B981' : civ.roleEntropy >= 1.5 ? '#F59E0B' : '#EF4444';
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 8 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.18 }}
+      className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-5"
+    >
+      <div className="flex items-baseline justify-between mb-4">
+        <h2 className="text-sm font-semibold text-zinc-300">Civilization</h2>
+        <span className="text-[10px] text-zinc-600">{civ.fleetSize} bots · Project Sid</span>
+      </div>
+
+      <div className="grid grid-cols-3 gap-3 mb-4">
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Role Entropy</p>
+          <p className="text-2xl font-bold mt-1" style={{ color: entropyColor }}>
+            {civ.roleEntropy.toFixed(2)}
+          </p>
+          <p className="text-[10px] text-zinc-500 mt-0.5">bits (Fig-8E)</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Exclusivity</p>
+          <p className="text-2xl font-bold mt-1 text-cyan-400">
+            {civ.actionExclusivity.toFixed(2)}
+          </p>
+          <p className="text-[10px] text-zinc-500 mt-0.5">0–1 (Fig-9)</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium">Unique Items</p>
+          <p className="text-2xl font-bold mt-1 text-yellow-400">{civ.uniqueItems.distinct}</p>
+          <p className="text-[10px] text-zinc-500 mt-0.5">{civ.uniqueItems.total} total (Fig-5)</p>
+        </div>
+      </div>
+
+      <p className="text-[10px] text-zinc-500 uppercase tracking-wider font-medium mb-2">Observed Roles</p>
+      {roleEntries.length > 0 ? (
+        <div className="space-y-2">
+          {roleEntries.map(([role, count], i) => (
+            <HBar
+              key={role}
+              label={role}
+              value={count}
+              max={maxRole}
+              color={OBSERVED_ROLE_COLORS[role] || '#6B7280'}
+              delay={i * 0.03}
+            />
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-zinc-600">No observed roles yet</p>
+      )}
+    </motion.div>
+  );
+}
+
 export default function MetricsPage() {
   const [metrics, setMetrics] = useState<MetricsData | null>(null);
+  const [civ, setCiv] = useState<CivilizationMetricsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastRefresh, setLastRefresh] = useState<number>(0);
 
   const refresh = useCallback(async () => {
     try {
-      const data = await api.getMetrics();
+      const [data, civData] = await Promise.all([
+        api.getMetrics(),
+        api.getCivilizationMetrics(),
+      ]);
       setMetrics(data);
+      setCiv(civData);
       setLastRefresh(Date.now());
     } catch {
       /* keep stale data on error */
@@ -324,6 +417,9 @@ export default function MetricsPage() {
         <MetricCard label="Skills" value={skills.count} color="text-yellow-400" delay={0.12} />
         <MetricCard label="Active Tasks" value={tasks.activeTasks} sub={`${tasks.totalQueued} queued`} color="text-blue-400" delay={0.15} />
       </div>
+
+      {/* ══ Civilization progress (Project Sid P1-B) ══ */}
+      <CivilizationCard civ={civ} />
 
       {/* ══ Bot Activity & State Breakdown ══ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

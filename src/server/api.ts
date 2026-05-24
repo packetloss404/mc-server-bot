@@ -25,6 +25,8 @@ import { HighlightStream } from '../town/HighlightStream';
 import type { TownEvent } from '../town/Town';
 import { ScheduleManager } from '../town/ScheduleManager';
 import { TOWN_ROLES, type TownRole } from '../town/RoleManager';
+import { loadObservedRole, inferObservedRole, type BotActionStats } from '../town/ObservedRoleModel';
+import { computeCivilizationMetrics } from '../town/CivilizationMetrics';
 import { ChronicleGenerator } from '../town/ChronicleGenerator';
 import { ChronicleScheduler } from '../town/ChronicleScheduler';
 import { SquadManager } from '../control/SquadManager';
@@ -1160,6 +1162,39 @@ export function createAPIServer(
     });
   });
 
+  // Observed-role inference (Project Sid P1-A) — classify what the bot
+  // *actually does* from its persisted action tallies (data/stats.json) and
+  // compare to the role its town assigned it. Read-only; computes on demand.
+  // Returns { observedRole, scores, assignedRole } where assignedRole is the
+  // town RoleManager's current_role if the bot is a resident, else null.
+  app.get('/api/bots/:name/observed-role', (req: Request, res: Response) => {
+    const name = req.params.name as string;
+    const handle = botManager.getWorker(name);
+    if (!handle) {
+      res.status(404).json({ error: 'Bot not found' });
+      return;
+    }
+    const { observedRole, scores } = loadObservedRole(name);
+    // assignedRole: scan towns for a resident row matching this bot. Most
+    // bots belong to at most one town; first alive match wins.
+    let assignedRole: string | null = null;
+    const tm = botManager.getTownManager();
+    for (const town of tm.listTowns()) {
+      const resident = tm
+        .listResidents(town.id)
+        .find(
+          (r) =>
+            r.botName.toLowerCase() === name.toLowerCase() &&
+            (r.status === 'alive' || r.status == null),
+        );
+      if (resident) {
+        assignedRole = resident.currentRole ?? null;
+        break;
+      }
+    }
+    res.json({ observedRole, scores, assignedRole });
+  });
+
   // Bot decision traces — from worker-forwarded trace buffer
   app.get('/api/bots/:name/decisions', (req: Request, res: Response) => {
     const handle = botManager.getWorker(req.params.name as string);
@@ -1902,6 +1937,65 @@ export function createAPIServer(
     } catch (err) {
       logger.error({ err }, 'Failed to gather metrics');
       res.status(500).json({ error: 'Failed to gather metrics' });
+    }
+  });
+
+  // Civilization-progress metrics (Project Sid P1-B). Read-only; defaults ON.
+  // Measures the emergent society over the CURRENT fleet:
+  //   - roleEntropy:        Shannon entropy (bits) over observed roles (Fig-8E).
+  //   - actionExclusivity:  how concentrated each action type is in one bot (Fig-9).
+  //   - uniqueItems:        distinct + cumulative items mined+crafted (Fig-5).
+  //   - roleDistribution:   observed-role histogram.
+  // Inputs are the per-bot action tallies on disk (data/stats.json) and each
+  // current bot's observed role (reusing ObservedRoleModel from P1-A); the math
+  // lives in the pure town/CivilizationMetrics module.
+  let civMetricsCache: { at: number; payload: any } | null = null;
+  app.get('/api/metrics/civilization', (_req: Request, res: Response) => {
+    try {
+      if (civMetricsCache && Date.now() - civMetricsCache.at < METRICS_TTL_MS) {
+        res.json(civMetricsCache.payload);
+        return;
+      }
+
+      // Current fleet = the live worker handles (same source as /api/metrics).
+      const fleetNames = botManager.getAllWorkers().map((w) => w.botName);
+
+      // Load the on-disk action tallies once; the API process only has the file
+      // (StatsTracker lives inside per-bot worker threads).
+      let allStats: Record<string, BotActionStats> = {};
+      try {
+        const statsPath = path.join(process.cwd(), 'data', 'stats.json');
+        if (fs.existsSync(statsPath)) {
+          allStats = JSON.parse(fs.readFileSync(statsPath, 'utf-8')) as Record<string, BotActionStats>;
+        }
+      } catch {
+        allStats = {};
+      }
+
+      // Restrict stats + observed roles to the current fleet so the metrics
+      // describe the live society, not every bot that ever ran.
+      const statsByBot: Record<string, BotActionStats> = {};
+      const observedRoles: string[] = [];
+      for (const name of fleetNames) {
+        const row = allStats[name] ?? {};
+        statsByBot[name] = row;
+        // Reuse the already-parsed allStats instead of loadObservedRole(name),
+        // which would re-read+parse stats.json once per bot (N+1 disk reads on
+        // this cached-but-hot endpoint).
+        observedRoles.push(inferObservedRole(row).observedRole);
+      }
+
+      const metrics = computeCivilizationMetrics(observedRoles, statsByBot);
+      const payload = {
+        timestamp: Date.now(),
+        fleetSize: fleetNames.length,
+        ...metrics,
+      };
+      civMetricsCache = { at: Date.now(), payload };
+      res.json(payload);
+    } catch (err) {
+      logger.error({ err }, 'Failed to gather civilization metrics');
+      res.status(500).json({ error: 'Failed to gather civilization metrics' });
     }
   });
 

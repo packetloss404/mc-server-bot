@@ -518,6 +518,20 @@ export interface MetricsData {
   [key: string]: any;
 }
 
+// Civilization-progress metrics (Project Sid P1-B) — GET /api/metrics/civilization
+export interface CivilizationMetricsData {
+  timestamp: number;
+  fleetSize: number;
+  roleEntropy: number;
+  actionExclusivity: number;
+  uniqueItems: {
+    distinct: number;
+    total: number;
+    items: string[];
+  };
+  roleDistribution: Record<string, number>;
+}
+
 // Bot-to-bot message (BotComms.peekUnread payload)
 export interface BotMessage {
   id: string;
@@ -988,6 +1002,8 @@ export const api = {
     fetchJSON<any>(`/api/bots/${botName}/diagnostics`).catch(() => null),
   getMetrics: () =>
     fetchJSON<any>('/api/metrics').catch(() => null),
+  getCivilizationMetrics: () =>
+    fetchJSON<CivilizationMetricsData>('/api/metrics/civilization').catch(() => null),
   getBlackboard: () =>
     fetchJSON<{ blackboard: { messages: any[]; tasks: any[]; goals: any[]; swarmGoal: string | null; reservations: any[] } }>('/api/blackboard').catch(() => ({
       blackboard: { messages: [], tasks: [], goals: [], swarmGoal: null, reservations: [] },

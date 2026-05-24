@@ -30,6 +30,7 @@ import { computeCivilizationMetrics } from '../town/CivilizationMetrics';
 import { ChronicleGenerator } from '../town/ChronicleGenerator';
 import { ChronicleScheduler } from '../town/ChronicleScheduler';
 import type { TownRule } from '../town/RuleStore';
+import { MAX_DECREE_TEXT_LENGTH } from '../town/DecreeManager';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -4325,8 +4326,8 @@ export function createAPIServer(
       res.status(400).json({ error: 'text is required' });
       return;
     }
-    if (text.length > 1000) {
-      res.status(400).json({ error: 'text must be 1000 characters or fewer' });
+    if (text.length > MAX_DECREE_TEXT_LENGTH) {
+      res.status(400).json({ error: `text must be ${MAX_DECREE_TEXT_LENGTH} characters or fewer` });
       return;
     }
     const proposedBy = typeof body.proposedBy === 'string' ? body.proposedBy : undefined;

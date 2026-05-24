@@ -16,7 +16,7 @@ import { placeBlock } from '../actions/placeBlock';
 import { Vec3 } from 'vec3';
 import { BlackboardManager, BlackboardTask } from './BlackboardManager';
 import { SocialMemory } from '../social/SocialMemory';
-import { BotComms } from '../social/BotComms';
+import type { BotMessage } from '../social/BotComms';
 import { DecisionTrace } from './DecisionTrace';
 import { GoalGenerator, GoalGeneratorState, Goal } from './GoalGenerator';
 import { ThreatAssessor, ThreatAssessment } from './ThreatAssessor';
@@ -64,6 +64,20 @@ export interface CultureLike {
   adopt(memeId: string, botName: string, townId?: string): void;
   observeChat(text: string): void;
   addMeme(label: string, keywords: string[], originBot?: string): void;
+}
+
+/**
+ * Minimal surface VoyagerLoop needs from the inter-bot message layer (real
+ * per-worker `BotComms` OR the cross-worker `BotCommsProxy`). Sends are
+ * fire-and-forget; `getUnread` may await an IPC round-trip (the proxy) or
+ * return synchronously (the local class), so it's typed as either. The relay is
+ * AUTHORITATIVE in the main thread (SHOULD-FIX #1), so a broadcast issued here
+ * lands in OTHER bots' worker inboxes and the drain sees cross-worker traffic.
+ */
+export interface BotCommsLike {
+  getUnread(botName: string): BotMessage[] | Promise<BotMessage[]>;
+  broadcast(from: string, content: string, type?: BotMessage['type']): void;
+  sendMessage(from: string, to: string, content: string, type?: BotMessage['type']): void;
 }
 
 /** Minimal surface VoyagerLoop needs from DifficultyBalancer (real or proxied). */
@@ -129,7 +143,7 @@ export class VoyagerLoop {
   private blackboardManager: BlackboardManager | null = null;
   private activeBlackboardTask: BlackboardTask | null = null;
   private socialMemory: SocialMemory | null = null;
-  private botComms: BotComms | null = null;
+  private botComms: BotCommsLike | null = null;
   private affinityManager: AffinityLike | null = null;
   private cultureManager: CultureLike | null = null;
   /** P3-B — meme ids this bot already adopted, to suppress re-adoption /
@@ -480,7 +494,7 @@ export class VoyagerLoop {
     this.socialMemory = memory;
   }
 
-  setBotComms(comms: BotComms): void {
+  setBotComms(comms: BotCommsLike): void {
     this.botComms = comms;
   }
 
@@ -755,7 +769,7 @@ export class VoyagerLoop {
     // Check for inter-bot messages (help requests become queued tasks)
     // Process inter-bot messages (rate-limited to 3 per cycle)
     if (this.botComms) {
-      const unread = this.botComms.getUnread(this.botName);
+      const unread = await this.botComms.getUnread(this.botName);
       for (const msg of unread.slice(0, 3)) {
         await this.processBotMessage(msg);
       }
@@ -1954,11 +1968,11 @@ export class VoyagerLoop {
     logger.info({ bot: this.botName, from: msg.from, meme: meme.label }, 'Adopted meme from trusted peer (culture)');
 
     // Propagation: re-broadcast the belief so it keeps spreading along the
-    // social graph. NOTE: BotComms is currently a per-worker singleton, so this
-    // broadcast does NOT yet deliver to other bots' workers — cross-worker
-    // meme diffusion needs a main-thread message relay (mirror CultureProxy).
-    // Tracked for the final senior-engineer review; the registry/adoption/
-    // measurement side IS cross-worker (via CultureProxy) and works today.
+    // social graph. With SHOULD-FIX #1 this `broadcast` goes through the
+    // cross-worker BotCommsProxy → main-thread BotComms relay, so it now
+    // actually fans out to OTHER bots' worker inboxes (when culture/affinity is
+    // on the proxy is wired). The registry/adoption side was already cross-worker
+    // via CultureProxy; this completes the loop for the message transport.
     try {
       this.botComms?.broadcast(this.botName, `I believe in ${meme.label}.`, 'chat');
     } catch {
@@ -2025,6 +2039,11 @@ export class VoyagerLoop {
         this.socialMemory?.addMemory(this.botName, 'chat', msg.from, content, 0.15);
         break;
       case 'trade_offer':
+        // NIT #6 — intentionally NOT gated on isPeerDisliked (unlike
+        // help_request / request above). A trade is mutually beneficial and the
+        // TradeNegotiator already evaluates whether the proposal is worth it, so
+        // we let even a disliked peer make an offer the bot can rationally
+        // accept or decline on its own (economic) merits.
         if (this.tradeNegotiator) {
           const proposals = this.tradeNegotiator.processTradeMessages(this.botName, [msg]);
           for (const proposal of proposals) {

@@ -11,6 +11,7 @@ import { PlayerIntentModel } from '../voyager/PlayerIntentModel';
 import { TraceRecord, TraceType } from '../voyager/DecisionTrace';
 import type { TownRule } from '../town/RuleStore';
 import type { CultureManager } from '../social/CultureManager';
+import type { BotComms } from '../social/BotComms';
 import { logger } from '../util/logger';
 
 export interface WorkerBotData {
@@ -106,6 +107,16 @@ export class WorkerHandle {
   private resolveTownId: ((botName: string) => string) | null = null;
   private townIdCache: { value: string; expiresAt: number } | null = null;
   private static readonly TOWN_CACHE_TTL_MS = 60_000;
+  /**
+   * Project Sid P3 (SHOULD-FIX #1) — the AUTHORITATIVE cross-worker inter-bot
+   * message relay (owned by the main thread, like cultureManager). Routed to
+   * the worker's BotCommsProxy over IPC so a broadcast/sendMessage from one
+   * bot's worker actually lands in OTHER bots' worker inboxes. Null in
+   * headless/test instantiations AND whenever both `social.botAffinity` and
+   * `social.culture` are off (the worker never builds a BotCommsProxy then, so
+   * none of these IPC types are ever sent — flag-off behavior is byte-identical).
+   */
+  private botComms: BotComms | null = null;
 
   constructor(
     data: WorkerBotData,
@@ -121,6 +132,7 @@ export class WorkerHandle {
     resolveActiveRules: ((botName: string) => TownRule[]) | null = null,
     cultureManager: CultureManager | null = null,
     resolveTownId: ((botName: string) => string) | null = null,
+    botComms: BotComms | null = null,
   ) {
     this.botName = data.botName;
     this.personality = data.personality;
@@ -139,6 +151,7 @@ export class WorkerHandle {
     this.resolveActiveRules = resolveActiveRules;
     this.cultureManager = cultureManager;
     this.resolveTownId = resolveTownId;
+    this.botComms = botComms;
 
     // Provide a basic cached status while worker boots
     this.lastStatus = {
@@ -228,6 +241,13 @@ export class WorkerHandle {
     // registry is wired (headless/test) so the worker degrades to a no-op.
     if (type === 'culture.matchMeme') return this.cultureManager ? this.cultureManager.matchMeme(args[0]) : null;
     if (type === 'culture.getAdoptedMemes') return this.cultureManager ? this.cultureManager.getAdoptedMemes(args[0]) : [];
+
+    // Inter-bot message relay reads (Project Sid P3 SHOULD-FIX #1). Route to the
+    // main-thread BotComms so a bot drains the SAME inbox every other worker
+    // delivered into. Inert ([] ) when no relay is wired (headless/test), so the
+    // worker's drain degrades to a clean no-op.
+    if (type === 'botComms.getUnread') return this.botComms ? this.botComms.getUnread(args[0]) : [];
+    if (type === 'botComms.getKnownBots') return this.botComms ? this.botComms.getKnownBots() : [];
 
     // Conversation
     if (type === 'conversation.getHistory') return this.conversationManager.getHistory(args[0], args[1]);
@@ -352,6 +372,16 @@ export class WorkerHandle {
     }
     if (type === 'culture.observeChat') { this.cultureManager?.observeChat(data[0]); return; }
     if (type === 'culture.addMeme') { this.cultureManager?.addMeme(data[0], data[1], data[2]); return; }
+
+    // Fire-and-forget inter-bot message relay writes (Project Sid P3 SHOULD-FIX
+    // #1). Fan-out happens main-side: a broadcast lands in every OTHER bot's
+    // inbox; a direct send lands only in the named recipient's inbox. Swallowed
+    // when no relay is wired — and a worker built with both social flags off
+    // never builds a BotCommsProxy, so it never reaches here at all.
+    if (type === 'botComms.sendMessage') { this.botComms?.sendMessage(data[0], data[1], data[2], data[3]); return; }
+    if (type === 'botComms.broadcast') { this.botComms?.broadcast(data[0], data[1], data[2]); return; }
+    if (type === 'botComms.registerBot') { this.botComms?.registerBot(data[0]); return; }
+    if (type === 'botComms.unregisterBot') { this.botComms?.unregisterBot(data[0]); return; }
 
     // Fire-and-forget conversation operations
     if (type === 'conversation.addPlayerMessage') { this.conversationManager.addPlayerMessage(data[0], data[1], data[2]); return; }

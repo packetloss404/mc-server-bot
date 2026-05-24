@@ -199,8 +199,17 @@ export class BlackboardManager {
     const candidates = this.state.tasks.filter((t) => t.status === 'pending');
     if (candidates.length === 0) return null;
     const lowered = query?.toLowerCase() || '';
+    // SHOULD-FIX #2 — resolve the bot's active standing rules ONCE here rather
+    // than inside the sort comparator. The wired resolver walks all
+    // towns×residents uncached, so calling it O(N log N) times per claim is a
+    // hot-path waste; the rule set is identical for every candidate task.
+    // Flag-off / no-resolver still yields [] → no boost (identical scoring).
+    let activeRules: TownRule[] = [];
+    if (this.getActiveRulesForBot) {
+      try { activeRules = this.getActiveRulesForBot(botName) ?? []; } catch { activeRules = []; }
+    }
     const ranked = candidates.sort((a, b) =>
-      this.scoreTaskEnhanced(b, lowered, personality, botPosition, role, botName) - this.scoreTaskEnhanced(a, lowered, personality, botPosition, role, botName)
+      this.scoreTaskEnhanced(b, lowered, personality, botPosition, role, activeRules) - this.scoreTaskEnhanced(a, lowered, personality, botPosition, role, activeRules)
       || a.createdAt - b.createdAt
     );
     const task = ranked[0];
@@ -383,7 +392,7 @@ export class BlackboardManager {
     personality?: string,
     botPosition?: { x: number; y: number; z: number },
     role?: string,
-    botName?: string,
+    activeRules: TownRule[] = [],
   ): number {
     let score = this.scoreTask(task, query);
     const priorityBonus: Record<TaskPriority, number> = { low: 0, normal: 3, high: 9, critical: 15 };
@@ -423,19 +432,18 @@ export class BlackboardManager {
       }
     }
     // Project Sid P2-A — standing-rule bias. When governance is enabled the
-    // injected resolver returns the bot's town's active rules (it returns []
-    // when the flag is off OR the bot isn't a resident OR no resolver is
-    // wired), so this whole block is a no-op in the disabled case and scores
-    // match the pre-P2 behavior. Each rule whose keywords match the task adds
-    // a boost scaled by the rule's priority — a follow→amend→re-follow nudge,
-    // not a hard override (kept below the town: +30 dominance).
-    if (botName && this.getActiveRulesForBot) {
-      let rules: TownRule[] = [];
-      try { rules = this.getActiveRulesForBot(botName) ?? []; } catch { rules = []; }
-      if (rules.length > 0) {
+    // caller passes the bot's town's active rules (an empty array when the
+    // flag is off OR the bot isn't a resident OR no resolver is wired), so
+    // this whole block is a no-op in the disabled case and scores match the
+    // pre-P2 behavior. The rules are resolved ONCE in claimBestTask (SHOULD-FIX
+    // #2) instead of per-comparison here. Each rule whose keywords match the
+    // task adds a boost scaled by the rule's priority — a follow→amend→re-follow
+    // nudge, not a hard override (kept below the town: +30 dominance).
+    if (activeRules.length > 0) {
+      {
         const text = `${task.description} ${task.keywords.join(' ')}`.toLowerCase();
         const taskKeywords = task.keywords.map((k) => (typeof k === 'string' ? k.toLowerCase() : ''));
-        for (const rule of rules) {
+        for (const rule of activeRules) {
           if (!rule.active || !Array.isArray(rule.keywords) || rule.keywords.length === 0) continue;
           // A rule matches when one of its keywords equals a task keyword or
           // appears as a WHOLE WORD in the task text. Word-boundary matching

@@ -12,6 +12,7 @@ import { SharedWorldProxy } from './proxies/SharedWorldProxy';
 import { DifficultyBalancerProxy } from './proxies/DifficultyBalancerProxy';
 import { PlayerIntentModelProxy } from './proxies/PlayerIntentModelProxy';
 import { CultureProxy } from './proxies/CultureProxy';
+import { BotCommsProxy } from './proxies/BotCommsProxy';
 import { logger } from '../util/logger';
 
 interface WorkerData {
@@ -114,6 +115,13 @@ const playerIntentModelProxy = new PlayerIntentModelProxy(ipc);
 // Project Sid P3-B — only wire the culture proxy when the meme layer is on, so
 // the flag-off path has zero culture IPC traffic and is a complete no-op.
 const cultureProxy = config.social?.culture ? new CultureProxy(ipc) : null;
+// Project Sid P3 (SHOULD-FIX #1) — cross-worker inter-bot message relay proxy.
+// Only built when bot↔bot affinity OR culture is on (the only consumers of
+// cross-worker inbox traffic). With BOTH off this is null, BotInstance keeps
+// using the per-worker BotComms.getInstance(), and ZERO new IPC is emitted —
+// the flag-off path is byte-identical to before this fix.
+const botCommsProxy =
+  config.social?.botAffinity || config.social?.culture ? new BotCommsProxy(ipc) : null;
 
 const botMode = data.mode === 'codegen' ? BotMode.CODEGEN : BotMode.PRIMITIVE;
 
@@ -131,6 +139,7 @@ const instance = new BotInstance({
   difficultyBalancer: difficultyBalancerProxy as any,
   playerIntentModel: playerIntentModelProxy as any,
   cultureManager: cultureProxy as any,
+  botComms: botCommsProxy as any,
   onSwarmDirective: (description, requestedBy) => {
     ipc.notify('swarm.directive', { description, requestedBy });
   },

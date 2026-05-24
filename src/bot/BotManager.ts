@@ -217,6 +217,14 @@ export class BotManager {
       // is on; the worker never even builds a CultureProxy when the flag is off.
       this.cultureManager,
       (botName: string): string => this.resolveTownIdForBot(botName),
+      // Project Sid P3 (SHOULD-FIX #1) — the AUTHORITATIVE inter-bot message
+      // relay. This is the SAME main-thread BotComms the dashboard API
+      // (GET/POST /api/bots/:name/messages) already reads/writes, so a message
+      // a bot's worker broadcasts now fans out to OTHER bots' worker inboxes
+      // through it. The worker only reaches it (via BotCommsProxy) when
+      // `social.botAffinity` or `social.culture` is on; with both off no proxy
+      // is built and this is never exercised.
+      this.botComms,
     );
 
     // Wire reputation listener immediately so it's ready before the worker sends events

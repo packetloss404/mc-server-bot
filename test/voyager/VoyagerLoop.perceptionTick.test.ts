@@ -1,8 +1,13 @@
 /**
  * Project Sid P4-A — always-on perception tick + AgentState integration.
  *
- * These tests verify the FLAG GATING on VoyagerLoop (the BotInstance timer that
- * drives runPerceptionTick is exercised separately):
+ * These tests verify the FLAG GATING on VoyagerLoop by calling
+ * runPerceptionTick() directly. The BotInstance setInterval that drives it on a
+ * cadence is NOT covered here: that timer's start/stop lifecycle requires a live
+ * mineflayer BotInstance (a real connection + entity), which is impractical to
+ * stand up in a unit test, so it is left to manual/integration verification.
+ * What we CAN assert deterministically is that the per-tick work
+ * (runPerceptionTick) is correctly gated and wired — which is what follows:
  *
  *   1. With `cognition.perceptionTick` OFF, runPerceptionTick() is a no-op —
  *      the assessors are NOT invoked and the AgentState cache stays empty (the

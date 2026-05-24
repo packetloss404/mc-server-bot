@@ -610,6 +610,12 @@ export class ApprovalManager {
   ): Promise<boolean> {
     const rehydrator = this.rehydrators.get(descriptor.kind);
     if (!rehydrator) {
+      // Defensive log-and-skip: an open row may carry a kind whose proposer
+      // module isn't registered this process — e.g. a 'decree' row persisted
+      // while governance was on, then the flag turned off so DecreeManager
+      // (which registers the 'decree' rehydrator) is never constructed. We
+      // intentionally leave the row open and untouched rather than throwing;
+      // re-enabling the flag re-registers the rehydrator and picks it up.
       logger.debug(
         { approvalId, kind: descriptor.kind },
         'ApprovalManager.rehydrate: no rehydrator registered for kind; skipping',

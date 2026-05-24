@@ -232,7 +232,10 @@ function CivilizationCard({ civ }: { civ: CivilizationMetricsData | null }) {
   const roleEntries = Object.entries(civ.roleDistribution).sort((a, b) => b[1] - a[1]);
   const maxRole = Math.max(1, ...roleEntries.map(([, v]) => v));
   // Entropy "health" colour: Sid healthy ≈3.4–4.0 bits, collapsed ≈2.6.
-  const entropyColor = civ.roleEntropy >= 2.6 ? '#10B981' : civ.roleEntropy >= 1.5 ? '#F59E0B' : '#EF4444';
+  // Green only at the healthy band (>=3.4); amber in the slide toward collapse
+  // (2.6–3.4); red at/below the collapsed level (<2.6). A collapsed society
+  // must NOT read as green.
+  const entropyColor = civ.roleEntropy >= 3.4 ? '#10B981' : civ.roleEntropy >= 2.6 ? '#F59E0B' : '#EF4444';
 
   return (
     <motion.div

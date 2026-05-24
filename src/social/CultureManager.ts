@@ -22,13 +22,13 @@ import { logger } from '../util/logger';
  * curves.
  *
  * ── Threading ──────────────────────────────────────────────────────────────
- * Each bot runs in its own worker thread, and `BotComms`/`SocialMemory` are
- * per-worker singletons that do NOT share memory across workers (verified: no
- * proxy, `getUnread` never reloads the file). So the AUTHORITATIVE culture
- * registry lives in the MAIN thread (owned by BotManager, like AffinityManager)
+ * Each bot runs in its own worker thread. The AUTHORITATIVE culture registry
+ * therefore lives in the MAIN thread (owned by BotManager, like AffinityManager)
  * and workers reach it through `CultureProxy` over the existing IPC channel —
  * the same proven cross-worker substrate P3-A uses for affinity. This is what
  * makes a meme observed by bot A actually visible to bot B (and to the API).
+ * (The inter-bot MESSAGE BUS is likewise main-thread-authoritative via
+ * `BotCommsProxy` → the BotManager-owned `BotComms` relay; SHOULD-FIX #1.)
  *
  * Everything here is gated by the caller on `config.social.culture`; with the
  * flag OFF the worker never wires a CultureProxy, so this class is never

@@ -29,8 +29,23 @@ import { PERSONALITIES } from '../personality/PersonalityType';
 import { BlackboardManager } from '../voyager/BlackboardManager';
 import { SharedWorldModel } from '../voyager/SharedWorldModel';
 import { SocialMemory } from '../social/SocialMemory';
-import { BotComms } from '../social/BotComms';
+import { BotComms, BotMessage } from '../social/BotComms';
 import { parseBuildIntent } from '../control/BuildIntentResolver';
+
+/**
+ * Project Sid P3 (SHOULD-FIX #1) — minimal inter-bot comms surface BotInstance
+ * needs, satisfied by BOTH the per-worker `BotComms` (flags off) and the
+ * cross-worker `BotCommsProxy` (flags on). Reads (`getUnread`, `getKnownBots`)
+ * are sync on the local class but async over IPC, so they're typed as either.
+ */
+export interface BotCommsLike {
+  registerBot(botName: string): void;
+  unregisterBot(botName: string): void;
+  getKnownBots(): string[] | Promise<string[]>;
+  getUnread(botName: string): BotMessage[] | Promise<BotMessage[]>;
+  broadcast(from: string, content: string, type?: BotMessage['type']): void;
+  sendMessage(from: string, to: string, content: string, type?: BotMessage['type']): void;
+}
 
 export interface BotOptions {
   name: string;
@@ -48,6 +63,11 @@ export interface BotOptions {
   /** Project Sid P3-B — cross-worker meme registry proxy. Null/undefined when
    *  `config.social.culture` is off, so culture is a complete no-op. */
   cultureManager?: any;
+  /** Project Sid P3 (SHOULD-FIX #1) — cross-worker inter-bot message relay
+   *  proxy (BotCommsProxy). Null/undefined when BOTH `social.botAffinity` and
+   *  `social.culture` are off, in which case BotInstance falls back to the
+   *  per-worker `BotComms.getInstance()` and behavior is byte-identical. */
+  botComms?: BotCommsLike;
   onSwarmDirective?: (description: string, requestedBy: string) => Promise<void> | void;
   onReputationEvent?: (event: any) => void;
   onVoyagerLoopCreated?: (loop: VoyagerLoop) => void;
@@ -114,7 +134,10 @@ export class BotInstance {
   private hasSpawnedOnceThisConnection = false;
   private chatCooldowns: Map<string, number> = new Map();
   private socialMemory: SocialMemory;
-  private botComms: BotComms;
+  /** Project Sid P3 (SHOULD-FIX #1) — the cross-worker BotCommsProxy when a
+   *  social flag is on, else the per-worker BotComms.getInstance() singleton.
+   *  Typed via BotCommsLike so both satisfy the call sites below. */
+  private botComms: BotCommsLike;
   /** Project Sid P3-B — CultureProxy (or null when `config.social.culture` is
    *  off). Used to wire the meme layer into VoyagerLoop + bias ambient chat. */
   private cultureManager: any | null = null;
@@ -174,7 +197,10 @@ export class BotInstance {
     this.onPlayerLeft = options.onPlayerLeft;
     this.onImpersonation = options.onImpersonation;
     this.socialMemory = new SocialMemory(path.join(process.cwd(), 'data'));
-    this.botComms = BotComms.getInstance();
+    // Project Sid P3 (SHOULD-FIX #1) — use the cross-worker relay proxy when a
+    // social flag wired one in; otherwise fall back to the per-worker singleton
+    // (byte-identical to the legacy path when both flags are off).
+    this.botComms = options.botComms ?? BotComms.getInstance();
     this.botComms.registerBot(this.name);
   }
 
@@ -995,7 +1021,7 @@ export class BotInstance {
   private async buildBotRelationshipContext(): Promise<string> {
     if (!this.config.social?.botAffinity) return '';
     try {
-      const knownBots = new Set(this.botComms.getKnownBots());
+      const knownBots = new Set(await this.botComms.getKnownBots());
       const self = this.name.toLowerCase();
       const all = await this.affinityManager.getAllForBot(this.name);
       const peers = Object.entries(all)

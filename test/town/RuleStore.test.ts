@@ -140,13 +140,24 @@ describe('BlackboardManager rule boost (P2-A scoring bias)', () => {
     }
   });
 
-  /** Reach into private scoreTaskEnhanced for a deterministic single-task score. */
+  /**
+   * Reach into private scoreTaskEnhanced for a deterministic single-task score.
+   * SHOULD-FIX #2: scoreTaskEnhanced now takes the pre-resolved active rules
+   * (resolved once in claimBestTask) rather than a botName it resolves itself,
+   * so mirror that here — resolve via the wired resolver, then pass the rules.
+   */
   function score(task: any, botName?: string): number {
-    return (bb as unknown as {
+    const inner = bb as unknown as {
+      getActiveRulesForBot: ((name: string) => any[]) | null;
       scoreTaskEnhanced: (
-        t: any, q: string, p?: string, pos?: any, role?: string, name?: string,
+        t: any, q: string, p?: string, pos?: any, role?: string, rules?: any[],
       ) => number;
-    }).scoreTaskEnhanced(task, '', undefined, undefined, undefined, botName);
+    };
+    let rules: any[] = [];
+    if (botName && inner.getActiveRulesForBot) {
+      try { rules = inner.getActiveRulesForBot(botName) ?? []; } catch { rules = []; }
+    }
+    return inner.scoreTaskEnhanced(task, '', undefined, undefined, undefined, rules);
   }
 
   function makeTask(description: string, keywords: string[]) {

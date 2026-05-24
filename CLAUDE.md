@@ -12,24 +12,28 @@ npm run dev
 npm start
 ```
 
-Always start production runs with log capture so logs can be inspected:
+Two systemd units run the stack, both enabled at boot, restart-on-failure with a 5s backoff:
+
+- `dyobot.service` — bot API on port **3001** (`/opt/mc-server-bot`, `node dist/index.js`, logs to `/var/log/dyobot.log`)
+- `dyobot-web.service` — Next.js dashboard on port **3000** (`/opt/mc-server-bot/web`, `npm start`, logs to `/var/log/dyobot-web.log`). Depends on `dyobot.service` and calls its API.
 
 ```bash
-node dist/index.js > /tmp/dyobot.log 2>&1 & disown
+sudo systemctl restart dyobot       # after npm run build (root)
+sudo systemctl restart dyobot-web   # after web build (cd web && npm run build)
+sudo systemctl status dyobot dyobot-web --no-pager
 ```
 
-Before restarting, kill existing instances first:
+Logs:
 
 ```bash
-lsof -ti:3001 | xargs kill -9 2>/dev/null; sleep 2
+tail -f /var/log/dyobot.log
+tail -f /var/log/dyobot-web.log
+grep -E "task proposed|Execution result|task evaluated" /var/log/dyobot.log
 ```
 
-Useful log commands:
+Dashboard URL: `http://<host>:3000/`.
 
-```bash
-tail -f /tmp/dyobot.log
-grep -E "task proposed|Execution result|task evaluated" /tmp/dyobot.log
-```
+For ad-hoc foreground runs (e.g. debugging a startup crash), stop the relevant service first. Note that Next.js' `next-server` child binds IPv6 `*:3000` and won't show up in `lsof -ti:3000` (IPv4-only) — use `sudo lsof -i :3000` or `ss -tlnp | grep :3000` to find leftover processes.
 
 ## Testing
 

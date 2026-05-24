@@ -4,6 +4,25 @@ All notable changes to DyoBot are documented in this file.
 
 ---
 
+## 2026-05-24
+
+### Security
+- **Bot impersonation detection** — When someone logs in under a bot's username, Minecraft kicks the real bot with a duplicate-login reason. The bot now recognizes that kick, **quarantines itself** (new `BotState.QUARANTINED`, stops the reconnect tug-of-war), and alerts via the dashboard activity feed + log, optional in-game chat broadcast, and an optional Discord/Slack webhook (`IMPERSONATION_ALERT_WEBHOOK`). A corroborating "ghost name online" signal catches it when another bot sees the impostor. New: `GET /api/security/impersonation`, `POST /api/bots/:name/quarantine/release`, `security.impersonationDetection` config (on by default).
+
+### Features — Project Sid concepts (flag-gated, OFF by default)
+Inspired by *Project Sid: Many-agent simulations toward AI civilization* (arXiv:2411.00114). See `docs/project-sid-roadmap.md`. All behavior-changing features are gated and default off; the codebase is a verified no-op with every flag at its default.
+- **P1 — Civilization metrics + emergent roles** (read-only, on): infers each bot's role from its action tallies (`GET /api/bots/:name/observed-role`) and reports role-distribution entropy, action exclusivity, and cumulative unique items (`GET /api/metrics/civilization`) with a dashboard card.
+- **P2 — Governance that bites** (`governance.enabled`): mayor decrees persist as standing town rules that bias task scoring and are injected into resident prompts; bots propose rules through the existing approval/vote workflow. New: `GET /api/towns/:id/rules`, `POST /api/towns/:id/propose-rule`.
+- **P3 — Culture & social spread** (`social.botAffinity`, `social.culture`): bot↔bot affinity edges gate cooperation (declining disliked peers); emergent keyword "memes" adopted from trusted peers bias ambient chat + goals. Added a main-thread `BotComms` relay so inter-bot messages cross worker threads. New: `GET /api/culture`.
+- **P4 — PIANO cognition** (`cognition.perceptionTick`, `cognition.cognitiveController`): an independent perception tick + per-bot `AgentState` so threats are perceived mid-task; a `CognitiveController` emits a structured decision broadcast so chat coheres with the current action.
+
+### Maintenance
+- **Document systemd deployment** — `CLAUDE.md` now documents the `dyobot` (3001) + `dyobot-web` (3000) services, log paths, and the IPv6 `next-server` lsof caveat, replacing the old foreground-run notes.
+- **Tests** — ~110 unit tests added across the security and Project Sid modules (394 total, green).
+- Snapshot the learned skill library; add the small-medieval-town-hall schematic.
+
+---
+
 ## [Unreleased] — 2026-03-25
 
 ### Bug Fixes

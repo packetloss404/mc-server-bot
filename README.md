@@ -23,6 +23,8 @@ Java Edition 1.21+
 - **Social memory** — Bot-to-bot messaging and shared world knowledge
 - **LLM-powered chat** — Natural conversations with context awareness
 - **Fleet control platform** — Centralized commands, missions, squads, roles, and world markers
+- **Town & civilization layer** — Towns with residents, roles, schedules, decrees, trade routes, diplomacy, and a schematic-based build coordinator
+- **Impersonation defense** — Detects when someone logs in under a bot's username (a duplicate-login kick), quarantines the impersonated bot, and alerts you
 - **Natural language commander** — Issue orders in plain English, parsed into structured plans
 - **Web dashboard** — Next.js dashboard for monitoring and controlling your fleet
 - **HTTP API** — Spawn and manage bots programmatically
@@ -84,13 +86,18 @@ src/
 ├── voyager/      # Learning loop, task planning, skill library
 ├── actions/      # Bot actions (mine, craft, follow, attack, etc.)
 ├── personality/  # Personality types, affinity, and conversation
-├── social/       # Bot-to-bot messaging and memory
+├── social/       # Bot-to-bot messaging, memory, and culture
 ├── control/      # Fleet control platform (commands, missions, squads, roles, markers)
+├── town/         # Towns, residents, roles, decrees/governance, trade, diplomacy
+├── build/        # Schematic-based multi-bot build coordination
+├── supplychain/  # Supply chain templates and coordination
+├── security/     # Impersonation detection
+├── worker/       # Per-bot worker threads and IPC proxies
 ├── server/       # Express HTTP API and socket events
 └── util/         # Logger and helpers
 web/              # Next.js dashboard
 skills/           # Learned skills saved as JS modules
-data/             # Persistent bot state and memory
+data/             # Persistent bot state and memory (gitignored)
 ```
 
 ## Control Platform
@@ -103,6 +110,15 @@ The control platform provides centralized fleet management:
 - **Roles** — Assign roles with autonomy levels and manual override tracking
 - **World markers** — Named positions, zones (rectangular/circular areas), and routes (waypoint sequences)
 - **Natural language commander** — Parse plain English orders into structured plans and execute them
+
+## Experimental: Project Sid concepts
+
+Inspired by [*Project Sid: Many-agent simulations toward AI civilization*](https://arxiv.org/abs/2411.00114), these capabilities are **flag-gated and OFF by default** — enable them per the `security`/`governance`/`social`/`cognition` sections in `config.yml`. See [`docs/project-sid-roadmap.md`](docs/project-sid-roadmap.md).
+
+- **Civilization metrics + emergent roles** (read-only, always on) — infers each bot's role from what it actually does and reports role-distribution entropy, action exclusivity, and cumulative unique items (`GET /api/metrics/civilization`, `GET /api/bots/:name/observed-role`).
+- **Governance that bites** (`governance.enabled`) — mayor decrees become standing town rules that bias task selection and are injected into resident prompts; bots can propose rules through the approval/vote workflow.
+- **Culture & social spread** (`social.botAffinity`, `social.culture`) — bot↔bot affinity gates cooperation; emergent keyword "memes" adopted from trusted peers bias behavior (`GET /api/culture`).
+- **PIANO cognition** (`cognition.perceptionTick`, `cognition.cognitiveController`) — an independent perception tick lets a bot react to threats mid-task; a cognitive controller broadcasts its current decision so chat stays coherent with action.
 
 ## API
 
@@ -124,6 +140,8 @@ Edit `config.yml` to customize:
 - **Voyager settings** — Learning loop behavior
 - **LLM provider** — Model selection for code generation and chat (Anthropic or Gemini)
 - **Behaviors** — Toggle ambient chat, wandering, head tracking, combat instincts
+- **Security** — `security.impersonationDetection` (impersonation defense, on by default) and `IMPERSONATION_ALERT_WEBHOOK` env var for outbound alerts
+- **Experimental flags** — `governance`, `social`, and `cognition` sections gate the Project Sid features above (all default off)
 
 ## Contributing
 

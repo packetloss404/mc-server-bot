@@ -12,8 +12,14 @@ Guidance for coding agents working in `D:\projects\mc-server-bot`.
 - `src/voyager/` task planning, code execution, critic loop, skill storage.
 - `src/actions/` primitive bot actions.
 - `src/personality/` affinity and conversation systems.
-- `src/social/` bot-to-bot messaging and memory.
+- `src/social/` bot-to-bot messaging, memory, and culture/meme spread.
 - `src/control/` fleet control platform (commands, missions, markers, squads, roles, commander).
+- `src/town/` towns, residents, roles, schedules, decrees/governance, trade routes, diplomacy.
+- `src/build/` schematic-based multi-bot build coordination.
+- `src/supplychain/` supply chain templates and coordination.
+- `src/security/` impersonation detection.
+- `src/worker/` per-bot worker threads, IPC channel, and cross-thread proxies.
+- `src/ai/` LLM client abstraction (Anthropic, Gemini) and prompt logic.
 - `src/server/` Express + Socket.IO API.
 
 ## Source Of Truth

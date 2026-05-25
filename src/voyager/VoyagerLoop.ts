@@ -1,6 +1,7 @@
 import { Bot } from 'mineflayer';
 import { LLMClient } from '../ai/LLMClient';
 import { Config } from '../config';
+import { isProtected, getNearestProtectedCenter } from '../actions/geofence';
 import { SkillLibrary, SkillMatch } from './SkillLibrary';
 import { CodeExecutor } from './CodeExecutor';
 import { CurriculumAgent, Task } from './CurriculumAgent';
@@ -373,7 +374,19 @@ export class VoyagerLoop {
       },
       timeOfDay: this.bot.time?.timeOfDay ?? 0,
       isRaining: this.bot.isRaining ?? false,
-      hasShelter: false,
+      // A bot standing inside a protected town zone (near our builds) is
+      // effectively sheltered — don't make it abandon work every night to
+      // rebuild a redundant hut in the middle of town. Bots out in the
+      // wilderness still get the shelter goal.
+      hasShelter: (() => {
+        const p = this.bot?.entity?.position;
+        return p ? isProtected(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z)) : false;
+      })(),
+      // Where to send the bot at night instead of building a hut (nearest town).
+      shelterTarget: (() => {
+        const p = this.bot?.entity?.position;
+        return p ? getNearestProtectedCenter(Math.floor(p.x), Math.floor(p.z)) : null;
+      })(),
       playerTasks: this.playerTaskQueue.map((t) => t.description),
       blackboardTasks: [],
       completedTaskCount: this.curriculumAgent.getCompletedTasks().length,

@@ -33,6 +33,9 @@ export interface GoalGeneratorState {
   timeOfDay: number;       // 0-24000 Minecraft ticks
   isRaining: boolean;
   hasShelter: boolean;
+  /** Nearest town/safe-zone center; when set, the night-shelter goal sends the
+   *  bot here instead of building a hut. Null when no protected zones exist. */
+  shelterTarget?: { x: number; y: number; z: number } | null;
   playerTasks: string[];
   blackboardTasks: string[];
   completedTaskCount: number;
@@ -348,25 +351,20 @@ export class GoalGenerator {
 
     const isNight = state.timeOfDay >= NIGHT_START && state.timeOfDay < NIGHT_END;
     if (isNight && !state.hasShelter) {
+      // Night without shelter: send the bot BACK TO TOWN to wait out the night
+      // rather than letting it build a one-off hut wherever it happens to be
+      // (that scattered cobblestone huts across the map). One goal covers clear
+      // and rainy nights — rain just raises urgency.
+      const t = state.shelterTarget;
       goals.push({
         id: nextGoalId('safety'),
         priority: 'safety',
-        urgency: 6,
-        description: 'Find or build shelter — it is nighttime',
-        keywords: ['shelter', 'enclose', 'wall', 'roof', 'door', 'night', 'safety'],
-        source: 'nighttime without shelter',
-      });
-    }
-
-    // Rain at night without shelter is extra dangerous
-    if (isNight && state.isRaining && !state.hasShelter) {
-      goals.push({
-        id: nextGoalId('safety'),
-        priority: 'safety',
-        urgency: 7,
-        description: 'Seek shelter urgently — rainy night',
-        keywords: ['shelter', 'rain', 'night', 'safety'],
-        source: 'rainy night without shelter',
+        urgency: state.isRaining ? 7 : 6,
+        description: t
+          ? `Night is falling — travel to town near (${t.x}, ${t.y}, ${t.z}) and wait there until morning. Do NOT place blocks or build a shelter; just go to town.`
+          : 'Night is falling — find existing natural cover and wait until morning. Do NOT build a shelter.',
+        keywords: ['travel', 'move', 'goto', 'town', 'return', 'night', 'safety'],
+        source: state.isRaining ? 'rainy night — return to town' : 'nighttime — return to town',
       });
     }
   }

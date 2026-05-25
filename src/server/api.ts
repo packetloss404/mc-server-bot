@@ -2341,6 +2341,49 @@ export function createAPIServer(
     res.json({ success: true });
   });
 
+  // Retry a failed (or completed_with_errors) build — re-runs incomplete
+  // assignments, resuming each bot from its already-placed blocks.
+  app.post('/api/builds/:id/retry', asyncH(async (req: Request, res: Response) => {
+    try {
+      const job = await buildCoordinator.retryBuild(req.params.id as string);
+      if (!job) {
+        res.status(404).json({ error: 'Build not found' });
+        return;
+      }
+      res.json({ success: true, build: job });
+    } catch (err: any) {
+      res.status(409).json({ error: err.message });
+    }
+  }));
+
+  // Demolish a build's footprint (chunked /fill air via an op bot). Use
+  // ?dryRun=true to preview the bounding box without clearing anything.
+  app.post('/api/builds/:id/demolish', asyncH(async (req: Request, res: Response) => {
+    try {
+      const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
+      const result = await buildCoordinator.demolishBuild(req.params.id as string, { dryRun });
+      if (!result) {
+        res.status(404).json({ error: 'Build not found' });
+        return;
+      }
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(409).json({ error: err.message });
+    }
+  }));
+
+  // Build the rail+walkway tunnel between the two town halls. Use ?dryRun=true
+  // to preview the planned route/boxes before carving.
+  app.post('/api/tunnel', asyncH(async (req: Request, res: Response) => {
+    try {
+      const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
+      const result = await buildCoordinator.buildTunnel({ dryRun });
+      res.json({ success: true, ...result });
+    } catch (err: any) {
+      res.status(409).json({ error: err.message });
+    }
+  }));
+
   // ═══════════════════════════════════════
   //  CAMPAIGN ENDPOINTS
   // ═══════════════════════════════════════

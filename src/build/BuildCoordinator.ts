@@ -276,6 +276,199 @@ export class BuildCoordinator {
     });
   }
 
+  /**
+   * Retry a FAILED (or completed_with_errors) build job. Resets its non-
+   * completed assignments to runnable and re-executes, resuming each bot from
+   * its persisted blocksPlaced so already-placed blocks are skipped. This is
+   * how a build that died from transient disconnects/throttle gets driven to
+   * completion without re-placing the whole schematic.
+   */
+  async retryBuild(jobId: string): Promise<BuildJob | null> {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+    if (job.status !== 'failed' && job.status !== 'completed_with_errors') {
+      throw new Error(
+        `Build ${jobId} is '${job.status}' — only failed/completed_with_errors jobs can be retried`,
+      );
+    }
+    for (const a of job.assignments) {
+      if (a.status !== 'completed') a.status = 'waiting';
+    }
+    this.cancelledJobs.delete(jobId);
+    logger.info(
+      { jobId, placed: job.placedBlocks, total: job.totalBlocks },
+      'Retrying build job — resuming from placed blocks',
+    );
+    await this.resumeJob(job);
+    return job;
+  }
+
+  /**
+   * Demolish a build's footprint with chunked `/fill <bbox> air` issued by an
+   * op'd bot. Clears failed / partial / floating ("sky") builds. With
+   * `dryRun`, computes and returns the bounding box only (for confirmation)
+   * without touching the world. Scoped strictly to THIS job's box — the caller
+   * must ensure it doesn't overlap a build worth keeping (it bypasses the
+   * mining geofence since /fill is an op command).
+   */
+  async demolishBuild(
+    jobId: string,
+    opts: { dryRun?: boolean } = {},
+  ): Promise<{
+    box: { x1: number; y1: number; z1: number; x2: number; y2: number; z2: number };
+    volume: number;
+    fillCommands: number;
+    executed: boolean;
+  } | null> {
+    const job = this.jobs.get(jobId);
+    if (!job) return null;
+
+    const cached = await this.loadSchematicCached(job.schematicFile);
+    const w = cached.size.x, h = cached.size.y, l = cached.size.z;
+    const x1 = job.origin.x, y1 = job.origin.y, z1 = job.origin.z;
+    const x2 = x1 + w - 1, y2 = y1 + h - 1, z2 = z1 + l - 1;
+    const box = { x1, y1, z1, x2, y2, z2 };
+    const volume = w * h * l;
+
+    // Chunk into <=32-cube sub-boxes so each /fill stays under the vanilla
+    // 32768-block limit regardless of footprint size.
+    const CH = 32;
+    const chunks: Array<[number, number, number, number, number, number]> = [];
+    for (let x = x1; x <= x2; x += CH)
+      for (let y = y1; y <= y2; y += CH)
+        for (let z = z1; z <= z2; z += CH)
+          chunks.push([x, y, z, Math.min(x + CH - 1, x2), Math.min(y + CH - 1, y2), Math.min(z + CH - 1, z2)]);
+
+    if (opts.dryRun) {
+      return { box, volume, fillCommands: chunks.length, executed: false };
+    }
+
+    // Any connected (op'd) bot can issue the fills.
+    let handle: any = null;
+    for (const h2 of this.botManager.getAllWorkers() as any[]) {
+      if (h2 && typeof h2.isBotConnected === 'function' && (await h2.isBotConnected())) { handle = h2; break; }
+    }
+    if (!handle) throw new Error('No connected bot available to issue /fill');
+
+    logger.info({ jobId, box, chunks: chunks.length }, 'Demolishing build footprint');
+    for (const [cx1, cy1, cz1, cx2, cy2, cz2] of chunks) {
+      handle.chat(`/fill ${cx1} ${cy1} ${cz1} ${cx2} ${cy2} ${cz2} air`);
+      await this.sleep(150); // gentle cadence so the fills don't trip a chat-spam kick
+    }
+
+    job.status = 'cancelled';
+    job.placedBlocksAtCancel = job.placedBlocks;
+    this.eventLog.push({
+      type: 'build:demolished',
+      botName: handle.botName ?? 'system',
+      description: `Demolished ${job.schematicFile} at ${x1},${y1},${z1} (${chunks.length} /fill ops)`,
+      metadata: { jobId, box },
+    });
+    this.io.emit('build:demolished', { jobId, box });
+    this.persistJobs();
+    return { box, volume, fillCommands: chunks.length, executed: true };
+  }
+
+  /**
+   * Build an underground rail+walkway tunnel between the two town halls. An
+   * L-shaped stone-shelled corridor at y50: a rail line (powered rail every 8
+   * blocks, redstone block beneath to drive carts) along one edge, a 3-wide
+   * stone walkway beside it, glowstone-lit ceiling, and ladder shafts up to
+   * each hall floor (y64). All via op /fill + /setblock and fully idempotent,
+   * so a re-run after a mid-build bot drop just resumes harmlessly. dryRun
+   * returns the plan without touching the world.
+   */
+  async buildTunnel(opts: { dryRun?: boolean } = {}): Promise<{ plan: any; executed: boolean; commands?: number }> {
+    // Geometry: floor block at y50, walkable air y51-55 (5 tall), ceiling y56.
+    const FLOOR = 50, AIR1 = 51, AIR2 = 55, CEIL = 56, HALL_Y = 64;
+    // Rail centerline forms an L sharing corner block (railX, railZ).
+    const railX = 1225, railZ = 122;
+    const aZ1 = 122, aZ2 = 526;          // leg A (along Z) toward Hall A
+    const bX1 = 1225, bX2 = 1640;        // leg B (along X) toward Hall B
+    // Shell + interior boxes (interior 5 wide × 5 tall; shell +1 each side, y49-56).
+    const legA = { shell: [1224, 49, 121, 1230, CEIL, 527], air: [1225, AIR1, 122, 1229, AIR2, 526] };
+    const legB = { shell: [1224, 49, 121, 1641, CEIL, 127], air: [1225, AIR1, 122, 1640, AIR2, 126] };
+    const stairs = [{ x: 1226, z: 524 }, { x: 1638, z: 123 }]; // up into Hall A / Hall B
+
+    const plan = {
+      floorY: FLOOR, route: 'L-shaped (shares corner 1225/122)',
+      legA_shell: legA.shell, legB_shell: legB.shell,
+      rail: { legA: `x${railX} z${aZ1}..${aZ2}`, legB: `z${railZ} x${bX1}..${bX2}` },
+      poweredRailEvery: 8, ceilingLightEvery: 5, stairwells: stairs,
+    };
+    if (opts.dryRun) return { plan, executed: false };
+
+    // Re-acquire a connected op bot if the current one drops mid-build.
+    const opBot = async (): Promise<any> => {
+      for (const h of this.botManager.getAllWorkers() as any[]) {
+        if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) return h;
+      }
+      return null;
+    };
+    let handle = await opBot();
+    if (!handle) throw new Error('No connected bot available to build the tunnel');
+
+    let n = 0;
+    const cmd = async (c: string): Promise<void> => {
+      if (n % 60 === 0) { const h = await opBot(); if (h) handle = h; }
+      if (!handle) throw new Error('Lost all connected bots mid-tunnel');
+      handle.chat(c);
+      n++;
+      await this.sleep(110);
+    };
+    const fillBox = async (b: number[], block: string): Promise<void> => {
+      const [x1, y1, z1, x2, y2, z2] = b;
+      const CH = 32;
+      for (let x = x1; x <= x2; x += CH)
+        for (let y = y1; y <= y2; y += CH)
+          for (let z = z1; z <= z2; z += CH)
+            await cmd(`/fill ${x} ${y} ${z} ${Math.min(x + CH - 1, x2)} ${Math.min(y + CH - 1, y2)} ${Math.min(z + CH - 1, z2)} ${block}`);
+    };
+
+    logger.info({ plan }, 'Building rail+walkway tunnel between town halls');
+
+    // 1) Stone shells, then 2) hollow the interiors (floor at y50 survives).
+    await fillBox(legA.shell, 'stone');
+    await fillBox(legB.shell, 'stone');
+    await fillBox(legA.air, 'air');
+    await fillBox(legB.air, 'air');
+
+    // 3) Rail line (sits at y51 on the y50 floor). Powered rail every 8 with a
+    //    redstone_block beneath to keep carts moving. Sharing (railX, railZ)
+    //    makes the corner auto-curve.
+    let i = 0;
+    for (let z = aZ2; z >= aZ1; z--, i++) {
+      const powered = i % 8 === 0;
+      if (powered) await cmd(`/setblock ${railX} ${FLOOR} ${z} redstone_block`);
+      await cmd(`/setblock ${railX} ${AIR1} ${z} ${powered ? 'powered_rail' : 'rail'}`);
+    }
+    for (let x = bX1; x <= bX2; x++, i++) {
+      const powered = i % 8 === 0;
+      if (powered) await cmd(`/setblock ${x} ${FLOOR} ${railZ} redstone_block`);
+      await cmd(`/setblock ${x} ${AIR1} ${railZ} ${powered ? 'powered_rail' : 'rail'}`);
+    }
+
+    // 4) Glowstone in the ceiling for light (no mob spawns).
+    for (let z = aZ1; z <= aZ2; z += 5) await cmd(`/setblock ${railX + 2} ${CEIL} ${z} glowstone`);
+    for (let x = bX1; x <= bX2; x += 5) await cmd(`/setblock ${x} ${CEIL} ${railZ + 2} glowstone`);
+
+    // 5) Ladder shafts up to each hall floor (support wall to the west → facing=east).
+    for (const s of stairs) {
+      await fillBox([s.x, AIR1, s.z, s.x, HALL_Y, s.z], 'air');
+      for (let y = AIR1; y <= HALL_Y; y++) await cmd(`/setblock ${s.x} ${y} ${s.z} ladder[facing=east]`);
+    }
+
+    this.eventLog.push({
+      type: 'build:tunnel',
+      botName: handle?.botName ?? 'system',
+      description: `Built rail+walkway tunnel between town halls (${n} commands)`,
+      metadata: { plan },
+    });
+    this.io.emit('build:tunnel', { plan });
+    logger.info({ commands: n }, 'Tunnel build complete');
+    return { plan, executed: true, commands: n };
+  }
+
   // ── Schematic parsing & cache ──────────────────────────
 
   /**
@@ -1029,8 +1222,19 @@ export class BuildCoordinator {
       }
     }
 
-    // Execute all bot assignments in parallel — each bot works on its Y range
-    const promises = assignments.map(async (assignment, i) => {
+    // Execute assignments in retry ROUNDS. A transient server kick fails one
+    // bot's assignment; rather than failing the whole job we wait a grace
+    // period for the bot to reconnect and resume from blocksPlaced, retrying up
+    // to MAX_BUILD_ROUNDS. This lets a build grind to completion through the
+    // server's connection-throttle churn instead of dying on the first kick.
+    const MAX_BUILD_ROUNDS = 8;
+    const RECONNECT_GRACE_MS = 45000;
+    for (let round = 0; round < MAX_BUILD_ROUNDS; round++) {
+      if (this.cancelledJobs.has(jobId)) break;
+      // Run every not-yet-completed assignment in parallel this round.
+      const promises = assignments.map(async (assignment, i) => {
+      // Skip assignments already finished in a prior round.
+      if (assignment.status === 'completed') return;
       // Check for cancellation
       if (this.cancelledJobs.has(jobId)) return;
 
@@ -1118,6 +1322,24 @@ export class BuildCoordinator {
 
     await Promise.all(promises);
 
+      // Round complete. Stop if cancelled, every assignment finished, or every
+      // block is in the world; otherwise wait for kicked bots to reconnect and
+      // run another round (each bot resumes from its blocksPlaced).
+      if (this.cancelledJobs.has(jobId)) break;
+      if (assignments.every((a) => a.status === 'completed')) break;
+      if (job.placedBlocks >= job.totalBlocks) break;
+      if (round < MAX_BUILD_ROUNDS - 1) {
+        const incomplete = assignments
+          .filter((a) => a.status !== 'completed')
+          .map((a) => a.botName);
+        logger.warn(
+          { jobId, round: round + 1, incomplete, placed: job.placedBlocks, total: job.totalBlocks },
+          'Build round incomplete — waiting for reconnects, then retrying',
+        );
+        await this.sleep(RECONNECT_GRACE_MS);
+      }
+    }
+
     // ── Post-placement bunker entry build (underground mode only) ──
     // Runs ONCE per job after every bot has finished its slice. Uses any
     // still-connected bot as the op'd probe; failures here are non-fatal —
@@ -1163,7 +1385,11 @@ export class BuildCoordinator {
       // missing-material / out-of-stock failures that left holes in the build.
       const failedBlockCount = assignments.reduce((sum, a) => sum + (a.failedBlocks ?? 0), 0);
       job.failedBlockCount = failedBlockCount;
-      if (allCompleted) {
+      // A job is complete if every assignment finished OR every block made it
+      // into the world (a bot may be 'failed' from a kick yet its blocks were
+      // reassigned/retried and placed). Only a genuinely short build is failed.
+      const placedAll = job.placedBlocks >= job.totalBlocks;
+      if (allCompleted || placedAll) {
         job.status = failedBlockCount > 0 ? 'completed_with_errors' : 'completed';
       } else {
         job.status = 'failed';
@@ -1228,13 +1454,25 @@ export class BuildCoordinator {
       );
     }
 
-    // Helper: place a single block with verification + retry.
-    const placeOne = async (block: BlockEntry): Promise<void> => {
+    // Per-block placement cadence. The old 250ms sleep + an IPC verify probe on
+    // EVERY block made large builds crawl (~4s/block in practice → ~18h for a
+    // 15k schematic). We now place with a short sleep and only verify
+    // periodically (see PLACE loop) — /setblock is reliable on an op'd bot, so
+    // spot-checking is enough and keeps the chat cadence under the spam limit.
+    const PLACE_SLEEP_MS = 60;
+    // Place a single block. verify=false is fire-and-forget (fast path);
+    // verify=true probes + retries to catch genuine failures.
+    const placeOne = async (block: BlockEntry, verify: boolean): Promise<void> => {
       const blockSpec = block.stateStr ? `${block.name}[${block.stateStr}]` : block.name;
+      if (!verify) {
+        handle.chat(`/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`);
+        await this.sleep(PLACE_SLEEP_MS);
+        return;
+      }
       const MAX_ATTEMPTS = 3;
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
         handle.chat(`/setblock ${block.wx} ${block.wy} ${block.wz} minecraft:${blockSpec} replace`);
-        await this.sleep(250);
+        await this.sleep(PLACE_SLEEP_MS);
 
         // Verify placement via IPC probe on the bot's own handle.
         let placed: { name: string } | null = null;
@@ -1246,10 +1484,16 @@ export class BuildCoordinator {
           placed = null;
         }
 
-        // If probe returned nothing (chunk not loaded / transient IPC error),
-        // accept the placement optimistically — further retry without evidence
-        // risks doubling up server load for every block.
-        if (!placed) return;
+        // Probe returned nothing (chunk not loaded / transient IPC error). On
+        // an early attempt, re-issue /setblock next loop so the block isn't
+        // silently dropped if the chunk just hadn't loaded yet (the cause of
+        // hollow builds). On the final attempt accept optimistically — the
+        // /setblock likely landed server-side and re-issuing forever risks a
+        // chat-spam kick.
+        if (!placed) {
+          if (attempt < MAX_ATTEMPTS) continue;
+          return;
+        }
 
         const placedName = placed.name?.startsWith('minecraft:')
           ? placed.name.slice('minecraft:'.length)
@@ -1283,30 +1527,33 @@ export class BuildCoordinator {
         await this.sleep(500);
       }
 
-      // Bot-death check BEFORE each placement: if the worker handle is
-      // dead or the mineflayer bot is disconnected, hand off remaining
-      // blocks to any spare bot whose assignment has completed.
-      const alive = typeof handle.isAlive === 'function' ? handle.isAlive() : true;
-      let connected = true;
-      if (alive && typeof handle.isBotConnected === 'function') {
-        try {
-          connected = await handle.isBotConnected();
-        } catch {
-          connected = false;
+      // Bot-death check only every 25 blocks — each check is an IPC round-trip,
+      // and doing it per block was a major slowdown. Between checks we assume
+      // the bot is still connected; a death is caught within 25 blocks.
+      if (bi % 25 === 0) {
+        const alive = typeof handle.isAlive === 'function' ? handle.isAlive() : true;
+        let connected = true;
+        if (alive && typeof handle.isBotConnected === 'function') {
+          try {
+            connected = await handle.isBotConnected();
+          } catch {
+            connected = false;
+          }
+        }
+        if (!alive || !connected) {
+          const remaining = blocks.slice(bi);
+          assignment.status = 'failed';
+          logger.error(
+            { jobId, bot: assignment.botName, remaining: remaining.length, placed: assignment.blocksPlaced },
+            'Bot disconnected mid-build — attempting reassignment',
+          );
+          this.reassignRemaining(jobId, job, assignment, remaining);
+          throw new Error('bot disconnected');
         }
       }
-      if (!alive || !connected) {
-        const remaining = blocks.slice(bi);
-        assignment.status = 'failed';
-        logger.error(
-          { jobId, bot: assignment.botName, remaining: remaining.length, placed: assignment.blocksPlaced },
-          'Bot disconnected mid-build — attempting reassignment',
-        );
-        this.reassignRemaining(jobId, job, assignment, remaining);
-        throw new Error('bot disconnected');
-      }
 
-      await placeOne(block);
+      // Spot-verify every 20th block; the rest are fast fire-and-forget.
+      await placeOne(block, bi % 20 === 0);
 
       assignment.blocksPlaced++;
       assignment.currentY = block.localY;

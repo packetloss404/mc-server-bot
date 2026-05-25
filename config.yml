@@ -13,9 +13,13 @@ minecraft:
 bots:
   maxBots: 10
   defaultMode: "codegen"
-  joinStaggerMs: 15000
-  reconnectDelaySec: 30
-  maxReconnectAttempts: 10
+  # Gentle on the server's connection rate-limiter: a wide join stagger + long
+  # reconnect delay keeps 8 bots from hammering logins (which trips the server
+  # into refusing logins fleet-wide). Raised after a churn-induced login
+  # rate-limit on 2026-05-25.
+  joinStaggerMs: 45000
+  reconnectDelaySec: 60
+  maxReconnectAttempts: 30
 
 behavior:
   headTrackingRange: 10
@@ -101,7 +105,7 @@ security:
 #     decrees keep their legacy one-shot-task behavior and task scores are
 #     identical to today (the rule store is never consulted).
 governance:
-  enabled: false
+  enabled: true
 
 # Project Sid P3 — "Culture & social spread".
 #   botAffinity: master switch for bot->bot affinity edges (P3-A). When ON,
@@ -122,8 +126,8 @@ governance:
 #     per-town meme curves. Default OFF — when false the worker never wires the
 #     culture proxy, so there is zero behavior change and zero added LLM cost.
 social:
-  botAffinity: false
-  culture: false
+  botAffinity: true
+  culture: true
 
 # Project Sid P4 — "PIANO cognition".
 #   perceptionTick: master switch for the always-on perception tick (P4-A).
@@ -138,5 +142,79 @@ social:
 #   cognitiveController: reserved for the P4-B CognitiveController + decision
 #     broadcast (replaces the imperative priority ladder). Default OFF.
 cognition:
-  perceptionTick: false
-  cognitiveController: false
+  perceptionTick: true
+  cognitiveController: true
+
+# Mining geofence — keeps bots from tunnelling through town structures to gather
+# raw materials, and routes resource mining to a single communal mine site.
+# Consumed by src/actions/geofence.ts (read once per worker; fail-open if absent
+# or unreadable, so mining never breaks just because this section is missing).
+mining:
+  # Axis-aligned protected boxes around known builds. mineBlock refuses to dig
+  # any block inside these zones, so bots can't chew into roads / houses / the
+  # town hall. Coordinates are generous bounding boxes around each build cluster.
+  protectedZones:
+    - name: "victorian-cluster"      # victorian palace + Sam's plaque + town hall + sam-cottage(1640)
+      minX: 1590
+      minY: 40
+      minZ: 150
+      maxX: 1670
+      maxY: 130
+      maxZ: 230
+    - name: "townhall-cluster-1200"  # birch houses / earlier town-hall attempts
+      minX: 1160
+      minY: 40
+      minZ: 460
+      maxX: 1240
+      maxY: 130
+      maxZ: 540
+    - name: "sam-cottage-829"
+      minX: 800
+      minY: 40
+      minZ: 215
+      maxX: 860
+      maxY: 120
+      maxZ: 270
+    - name: "north-outliers"         # birch house outliers around 958/-179
+      minX: 930
+      minY: 40
+      minZ: -210
+      maxX: 990
+      maxY: 130
+      maxZ: -150
+  # Communal mine site: bots walk here before mining any routed block type, then
+  # dig down/out AT the site instead of wherever they happen to be standing.
+  # Placed just east of the victorian cluster, outside its protected box.
+  mineSite:
+    x: 1720
+    y: 64
+    z: 194
+    radius: 24
+  # Raw block types that must be sourced at the communal mine, not in town.
+  routeToMineBlocks:
+    - stone
+    - cobblestone
+    - deepslate
+    - cobbled_deepslate
+    - andesite
+    - diorite
+    - granite
+    - tuff
+    - dirt
+    - gravel
+    - coal_ore
+    - iron_ore
+    - copper_ore
+    - gold_ore
+    - redstone_ore
+    - lapis_ore
+    - diamond_ore
+    - emerald_ore
+    - deepslate_coal_ore
+    - deepslate_iron_ore
+    - deepslate_copper_ore
+    - deepslate_gold_ore
+    - deepslate_redstone_ore
+    - deepslate_lapis_ore
+    - deepslate_diamond_ore
+    - deepslate_emerald_ore

@@ -6,6 +6,7 @@ import { Vec3 } from 'vec3';
 import { BotState, BotMode } from './BotState';
 import { Config } from '../config';
 import { logger } from '../util/logger';
+import { isProtected } from '../actions/geofence';
 import { LLMClient } from '../ai/LLMClient';
 import { AffinityManager } from '../personality/AffinityManager';
 import { ConversationManager } from '../personality/ConversationManager';
@@ -251,6 +252,35 @@ export class BotInstance {
 
     this.bot.loadPlugin(pathfinder);
     this.bot.loadPlugin(collectBlock);
+
+    // Geofence enforcement at the lowest choke point. EVERY block dig — whether
+    // from mineBlock.ts, mineflayer-collectblock, clearSite.ts, or arbitrary
+    // LLM-generated codegen — funnels through bot.dig, so wrapping it here
+    // guards them all (a generated script can't tunnel through roads / houses /
+    // the town hall). Installed on 'spawn': bot.dig does NOT exist synchronously
+    // right after createBot (mineflayer injects it asynchronously), so capturing
+    // it here directly threw "Cannot read properties of undefined (reading
+    // 'bind')" and aborted the connect. Digs only happen once in-world, so
+    // 'spawn' is both safe and early enough.
+    this.bot.once('spawn', () => {
+      const b = this.bot as any;
+      if (!b || typeof b.dig !== 'function' || b.__digGuarded) return;
+      const originalDig = b.dig.bind(b);
+      b.dig = async (block: any, ...rest: any[]) => {
+        const p = block?.position;
+        if (p && isProtected(Math.floor(p.x), Math.floor(p.y), Math.floor(p.z))) {
+          logger.warn(
+            { bot: this.name, x: Math.floor(p.x), y: Math.floor(p.y), z: Math.floor(p.z) },
+            'dig blocked: target is inside a protected build zone',
+          );
+          throw new Error(
+            `dig blocked: (${Math.floor(p.x)},${Math.floor(p.y)},${Math.floor(p.z)}) is inside a protected build zone`,
+          );
+        }
+        return originalDig(block, ...rest);
+      };
+      b.__digGuarded = true;
+    });
 
     // Forward player join/leave to the main thread. The gate skips the initial
     // player_info population that arrives during login (before 'spawn' fires);
@@ -689,8 +719,12 @@ export class BotInstance {
     let delay: number;
     if (throttleSecs !== null) {
       const base = (throttleSecs + 2) * 1000;
-      const jitter = base * (Math.random() * 0.4 - 0.2);
-      delay = Math.max(0, Math.round(base + jitter));
+      // Spread reconnects across the whole fleet. N bots kicked together must
+      // NOT retry within the same few seconds or they re-trip the server's
+      // connection throttle (the kick-storm). Each bot adds a random offset in
+      // a window sized by the fleet, so they fan out instead of re-clustering.
+      const spread = Math.random() * Math.max(1, this.config.bots.maxBots) * 4000;
+      delay = Math.max(0, Math.round(base + spread));
       logger.info(
         { bot: this.name, throttleSecs, delay, attempt: this.reconnectAttempts + 1 },
         'Scheduling reconnect (honoring server throttle hint)',
@@ -700,8 +734,8 @@ export class BotInstance {
         this.config.bots.reconnectDelaySec * Math.pow(2, this.reconnectAttempts) * 1000,
         30000,
       );
-      const jitter = baseDelay * (Math.random() * 0.5 - 0.25);
-      delay = Math.max(0, Math.round(baseDelay + jitter));
+      const spread = Math.random() * Math.max(1, this.config.bots.maxBots) * 2000;
+      delay = Math.max(0, Math.round(baseDelay + spread));
       logger.info({ bot: this.name, delay, attempt: this.reconnectAttempts + 1 }, 'Scheduling reconnect');
     }
     this.reconnectAttempts++;

@@ -192,6 +192,25 @@ export interface Config {
     /** Reserved for P4-B CognitiveController + decision broadcast. Default false. */
     cognitiveController: boolean;
   };
+  /**
+   * Mining geofence — stops bots gathering raw materials by tunnelling through
+   * town structures and routes resource mining to a designated communal mine
+   * site. Consumed by src/actions/geofence.ts. All fields optional; when the
+   * `mining:` section is absent the geofence is empty and mining behaves
+   * byte-for-byte as before (no protection, no routing).
+   */
+  mining?: {
+    /** Axis-aligned boxes around builds; blocks inside are never dug. */
+    protectedZones?: Array<{
+      name?: string;
+      minX: number; minY: number; minZ: number;
+      maxX: number; maxY: number; maxZ: number;
+    }>;
+    /** Designated communal dig site bots travel to for routed block types. */
+    mineSite?: { x: number; y: number; z: number; radius?: number };
+    /** Block types that must be sourced at the mine site, not dug in place. */
+    routeToMineBlocks?: string[];
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -225,6 +244,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'governance',
   'social',
   'cognition',
+  'mining',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -366,6 +386,14 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
     fields: [
       { key: 'perceptionTick', type: 'boolean', optional: true },
       { key: 'cognitiveController', type: 'boolean', optional: true },
+    ],
+  },
+  mining: {
+    required: false,
+    fields: [
+      { key: 'protectedZones', type: 'array', optional: true },
+      { key: 'mineSite', type: 'object', optional: true },
+      { key: 'routeToMineBlocks', type: 'array', optional: true },
     ],
   },
 };

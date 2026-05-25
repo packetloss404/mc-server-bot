@@ -1,5 +1,7 @@
 import { Bot } from 'mineflayer';
 import { ActionResult } from './types';
+import { moveNearWithCleanup } from './moveHelper';
+import { isProtected, getMineSite, shouldRouteToMine } from './geofence';
 
 const PICKAXE_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
 const AXE_TIERS = ['netherite', 'diamond', 'iron', 'stone', 'golden', 'wooden'];
@@ -43,6 +45,31 @@ export async function mineBlock(bot: Bot, blockType: string, count = 1): Promise
     return { success: false, message: `Unknown block type: ${blockType}` };
   }
 
+  // Communal-mine routing: raw resources must be gathered AT the designated mine
+  // site, never dug out of town. If this is a routed block type and the bot isn't
+  // already at the mine, walk there first so the findBlocks search below scans
+  // mine terrain rather than whatever the bot is standing in (a road, a house...).
+  const mineSite = getMineSite();
+  if (mineSite && shouldRouteToMine(blockType)) {
+    const radius = mineSite.radius ?? 24;
+    const dx = bot.entity.position.x - mineSite.x;
+    const dz = bot.entity.position.z - mineSite.z;
+    if (dx * dx + dz * dz > radius * radius) {
+      const reached = await moveNearWithCleanup(
+        bot,
+        { x: mineSite.x, y: mineSite.y, z: mineSite.z, range: Math.min(radius, 6) },
+        60000,
+      );
+      if (!reached) {
+        return {
+          success: false,
+          message: `Could not reach the communal mine at ${mineSite.x},${mineSite.y},${mineSite.z} to gather ${blockType}`,
+          data: { mined: 0 },
+        };
+      }
+    }
+  }
+
   const positions = bot.findBlocks({
     matching: [blockInfo.id],
     maxDistance: 32,
@@ -81,7 +108,22 @@ export async function mineBlock(bot: Bot, blockType: string, count = 1): Promise
     };
   }
 
-  const targets = safePositions
+  // Geofence: never dig a block inside a protected build zone (roads, houses, the
+  // town hall, plazas). This is what stops bots tunnelling through structures —
+  // even when a matching block inside a build happens to be the closest one.
+  const fencedPositions = safePositions.filter(
+    (pos: any) => !isProtected(Math.floor(pos.x), Math.floor(pos.y), Math.floor(pos.z)),
+  );
+
+  if (fencedPositions.length === 0) {
+    return {
+      success: false,
+      message: `All nearby ${blockType} is inside a protected build zone — refusing to dig into town structures. Travel to the communal mine to gather ${blockType}.`,
+      data: { mined: 0 },
+    };
+  }
+
+  const targets = fencedPositions
     .slice(0, count)
     .map((pos: any) => bot.blockAt(pos))
     .filter((block: any) => block);

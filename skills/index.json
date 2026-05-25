@@ -114985,9 +114985,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v2.js",
-    "quality": 0.05263157894736842,
+    "quality": 0.05,
     "successCount": 0,
-    "failureCount": 17,
+    "failureCount": 18,
     "embedding": [
       -0.016165175,
       -0.025034443,
@@ -115246,7 +115246,7 @@
       0.018824592,
       -0.0053027533
     ],
-    "lastQualityUpdate": 1779733080312
+    "lastQualityUpdate": 1779744830395
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v3",
@@ -115531,9 +115531,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v4.js",
-    "quality": 0.05263157894736842,
+    "quality": 0.045454545454545456,
     "successCount": 0,
-    "failureCount": 17,
+    "failureCount": 20,
     "embedding": [
       -0.019982878,
       -0.024311312,
@@ -115792,7 +115792,7 @@
       0.01778724,
       -0.0028084866
     ],
-    "lastQualityUpdate": 1779732165288
+    "lastQualityUpdate": 1779744660202
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v5",
@@ -118533,9 +118533,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v2.js",
-    "quality": 0.034482758620689655,
+    "quality": 0.03333333333333333,
     "successCount": 0,
-    "failureCount": 27,
+    "failureCount": 28,
     "embedding": [
       -0.029152958,
       -0.027216895,
@@ -118794,7 +118794,7 @@
       0.01850962,
       -0.00226735
     ],
-    "lastQualityUpdate": 1779741773561
+    "lastQualityUpdate": 1779745195854
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v10",
@@ -119079,9 +119079,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v11.js",
-    "quality": 0.05263157894736842,
+    "quality": 0.05,
     "successCount": 0,
-    "failureCount": 17,
+    "failureCount": 18,
     "embedding": [
       -0.020214459,
       -0.021611782,
@@ -119340,7 +119340,7 @@
       0.019285684,
       -0.002933388
     ],
-    "lastQualityUpdate": 1779732576656
+    "lastQualityUpdate": 1779744764946
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v12",
@@ -130041,9 +130041,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v7.js",
-    "quality": 0.034482758620689655,
+    "quality": 0.03333333333333333,
     "successCount": 0,
-    "failureCount": 27,
+    "failureCount": 28,
     "embedding": [
       -0.032509767,
       -0.020098947,
@@ -130302,7 +130302,7 @@
       0.016618984,
       -0.0017975654
     ],
-    "lastQualityUpdate": 1779741142930
+    "lastQualityUpdate": 1779745021063
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v10",

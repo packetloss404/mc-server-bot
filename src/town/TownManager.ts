@@ -1564,14 +1564,37 @@ export class TownManager {
   // ──────────────────────────────────────────────────────────────────────
 
   /**
-   * Hook invoked by the existing BuildCoordinator's `build:completed` emit.
-   * Phase 1 has no town↔build linkage yet, so when `townId` is omitted (the
-   * common case today) this is a no-op. Once Phase 2 starts tagging build
-   * jobs with their owning town this becomes the side channel that records a
-   * `build_completed` event row.
+   * Hook invoked by the existing BuildCoordinator's `build:completed` emit
+   * (wired once per process in api.ts, so unlike BuildCoordinator's in-memory
+   * per-job `onCompleted` hook it SURVIVES a restart and also fires for jobs
+   * resumed from disk). When the job carries a `buildingId` (set by TownBrain
+   * when it queues a planned building), this is the authoritative place that
+   * advances the building row to its terminal state — flip to 'complete' on
+   * success, delete on failure/cancel so the kind re-queues cleanly. Without
+   * this, a linked build that finishes in a process that didn't start it would
+   * leave its row stuck 'building' forever and re-wedge the build loop.
+   *
+   * Idempotent with TownBrain's in-memory `onCompleted` hook: when both fire
+   * (no restart) updateBuildingStatus/deleteBuilding just run twice harmlessly.
    */
-  onBuildCompleted(job: { townId?: string; jobId: string; status?: string; placedBlocks?: number; totalBlocks?: number; schematicFile?: string }): void {
+  onBuildCompleted(job: { townId?: string; buildingId?: string; jobId: string; status?: string; placedBlocks?: number; totalBlocks?: number; schematicFile?: string }): void {
     if (!job.townId) return;
+
+    if (job.buildingId) {
+      const ok = job.status === 'completed' || job.status === 'completed_with_errors';
+      if (ok) {
+        this.updateBuildingStatus(job.buildingId, 'complete');
+      } else {
+        // failed / cancelled — drop the row so the kind re-queues next tick
+        // instead of the row holding the build loop's in-flight lock.
+        this.deleteBuilding(job.buildingId);
+      }
+      logger.info(
+        { townId: job.townId, buildingId: job.buildingId, jobId: job.jobId, status: job.status, resolved: ok ? 'complete' : 'deleted' },
+        'TownManager: reconciled building row from build:completed',
+      );
+    }
+
     this.recordEvent({
       townId: job.townId,
       kind: 'build_completed',

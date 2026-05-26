@@ -62,7 +62,7 @@ llm:
   temperature: 0.7
   chatMaxTokens: 2048
   codeGenMaxTokens: 8192
-  maxConcurrentRequests: 3
+  maxConcurrentRequests: 1
 
 skills:
   directory: "./skills"
@@ -142,8 +142,8 @@ social:
 #   cognitiveController: reserved for the P4-B CognitiveController + decision
 #     broadcast (replaces the imperative priority ladder). Default OFF.
 cognition:
-  perceptionTick: true
-  cognitiveController: true
+  perceptionTick: false
+  cognitiveController: false
 
 # Build-system tuning knobs.
 #   sitePrepTimeoutMs: hard deadline for the pre-job phase of startBuild

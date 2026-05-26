@@ -253,8 +253,11 @@ export class OpportunityDetector {
     for (const entity of Object.values(bot.entities)) {
       if (entity === bot.entity) continue;
       if (entity.entityType === undefined) continue;
-      // item entities have objectType 'Item' or name 'item'
-      if (entity.name !== 'item' && (entity as any).objectType !== 'Item') continue;
+      // item entities have name 'item' (modern) or displayName 'Item'. Avoid
+      // reading the deprecated `objectType` getter — it fires a console.trace on
+      // every access, and this loop runs for every entity on every perception
+      // tick across every bot (was ~18KB/s of stack-trace spam → 1.6GB logs).
+      if (entity.name !== 'item' && (entity as any).displayName !== 'Item') continue;
       if (!entity.position) continue;
 
       const dist = entity.position.distanceTo(pos);

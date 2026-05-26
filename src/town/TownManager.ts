@@ -1130,6 +1130,66 @@ export class TownManager {
     }
   }
 
+  /**
+   * Record where a planned building actually landed and flip it to 'building'
+   * (or straight to 'complete'). Called from TownBrain's build hooks once
+   * BuildCoordinator has resolved the (auto-flat) origin. Writing the origin
+   * here is what lets buildLoop's orphan reaper distinguish a live in-progress
+   * row (origin set) from a never-started orphan (origin null).
+   */
+  recordBuildingPlacement(
+    buildingId: string,
+    placement: {
+      origin: { x: number; y: number; z: number };
+      width?: number | null;
+      height?: number | null;
+      depth?: number | null;
+      status?: 'building' | 'complete';
+    },
+  ): void {
+    try {
+      this.db
+        .update(schema.buildings)
+        .set({
+          originX: placement.origin.x,
+          originY: placement.origin.y,
+          originZ: placement.origin.z,
+          width: placement.width ?? undefined,
+          height: placement.height ?? undefined,
+          depth: placement.depth ?? undefined,
+          status: placement.status ?? 'building',
+          builtAt: placement.status === 'complete' ? Date.now() : undefined,
+        })
+        .where(eq(schema.buildings.id, buildingId))
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, buildingId },
+        'recordBuildingPlacement: failed',
+      );
+    }
+  }
+
+  /**
+   * Hard-delete a building row. Used by TownBrain to clear a planned row whose
+   * build never started (resolve failure, no connected residents, startBuild
+   * throw) or whose job ended in failure/cancel — so the kind is re-queued next
+   * tick instead of the row holding the build loop's in-flight lock forever.
+   */
+  deleteBuilding(buildingId: string): void {
+    try {
+      this.db
+        .delete(schema.buildings)
+        .where(eq(schema.buildings.id, buildingId))
+        .run();
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message, buildingId },
+        'deleteBuilding: failed',
+      );
+    }
+  }
+
   // ──────────────────────────────────────────────────────────────────────
   //  Events — first-class observability surface
   // ──────────────────────────────────────────────────────────────────────

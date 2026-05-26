@@ -100,8 +100,9 @@ export async function attack(bot: Bot, entityName: string, maxDuration = 30000):
     };
 
     const onEntitySpawn = (entity: any) => {
-      // Filter for item drops near the target's last known position
-      if (entity.type === 'object' && entity.objectType === 'Item' &&
+      // Filter for item drops near the target's last known position.
+      // Use entity.name ('item') rather than the deprecated objectType getter.
+      if (entity.name === 'item' &&
           target.position && entity.position &&
           target.position.distanceTo(entity.position) <= 3) {
         droppedItem = entity;

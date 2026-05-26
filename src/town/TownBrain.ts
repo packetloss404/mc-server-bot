@@ -537,9 +537,33 @@ export class TownBrain {
     if (plan.length === 0) return;
 
     const existing = this.townManager.listBuildings(this.townId);
+
+    // Orphan reaper. A 'planned'/'building' row with no resolved origin is a
+    // wedged leftover — a build that never started (resolve failure, offline
+    // residents, startBuild throw) or a process that died mid-build before the
+    // completion hook could resolve the row (e.g. a restart). Ticks are
+    // serialized (see tickInFlight), so between ticks there is never a
+    // legitimate in-flight queue holding a null-origin row: queuePlanItem runs
+    // entirely within one tick and the onStarted hook writes the origin before
+    // it returns. A null origin here is therefore unambiguously an orphan.
+    // Reap it so it can't hold the in-flight lock and wedge the loop forever.
+    const orphans = existing.filter(
+      (b) => (b.status === 'planned' || b.status === 'building') && b.origin == null,
+    );
+    for (const o of orphans) {
+      logger.warn(
+        { townId: this.townId, buildingId: o.id, name: o.name, status: o.status },
+        'TownBrain build: reaping orphaned origin-less building row',
+      );
+      this.townManager.deleteBuilding(o.id);
+    }
+    const live = orphans.length > 0
+      ? existing.filter((b) => !orphans.some((o) => o.id === b.id))
+      : existing;
+
     // ONE planned-but-not-started building at a time per town. If anything is
     // already 'planned' or 'building' for this town, defer to next tick.
-    const inFlight = existing.filter(
+    const inFlight = live.filter(
       (b) => b.status === 'planned' || b.status === 'building',
     );
     if (inFlight.length > 0) {
@@ -553,13 +577,13 @@ export class TownBrain {
     // Count what we already have built (or in-flight) per kind. Stored as
     // building.name beginning with the kind id ('town_hall', 'house', ...) —
     // we tag new rows that way in createPlannedBuilding below.
-    const haveCounts = this.countBuildingsByKind(existing);
+    const haveCounts = this.countBuildingsByKind(live);
 
     for (const item of plan) {
       const have = haveCounts[item.kind] ?? 0;
       if (have >= item.count) continue;
       if (!item.required) continue;
-      await this.queuePlanItem(town, item, existing);
+      await this.queuePlanItem(town, item, live);
       // ONE per tick — bail after we've queued the first gap.
       return;
     }
@@ -604,6 +628,29 @@ export class TownBrain {
       return;
     }
 
+    // Resolve connected residents BEFORE creating any row. startBuild rejects
+    // the whole job if ANY listed bot is disconnected, so filter to residents
+    // whose worker handles report a connected bot. Doing this first means we
+    // never create a planned row we can't act on this tick — an unbuildable
+    // row would otherwise just sit in the registry holding the in-flight lock.
+    const residents = this.townManager.listResidents(this.townId);
+    const allNames = residents.map((r) => r.botName);
+    const connectedNames: string[] = [];
+    for (const n of allNames) {
+      const handle = this.botManager.getWorker(n) as { isBotConnected?: () => Promise<boolean> } | undefined;
+      if (!handle || typeof handle.isBotConnected !== 'function') continue;
+      try {
+        if (await handle.isBotConnected()) connectedNames.push(n);
+      } catch { /* swallow — treat as disconnected */ }
+    }
+    if (connectedNames.length === 0) {
+      logger.debug(
+        { townId: this.townId, residents: allNames.length },
+        'TownBrain build: no connected residents to start build with; will retry next tick',
+      );
+      return;
+    }
+
     const building = this.townManager.createPlannedBuilding({
       townId: this.townId,
       // Stored as "<kind>:<n>" so countBuildingsByKind groups by kind.
@@ -624,8 +671,11 @@ export class TownBrain {
     if (!resolved) {
       logger.warn(
         { townId: this.townId, kind: item.kind, buildingId: building.id },
-        'TownBrain build: no schematic could be resolved; planned row stays for retry',
+        'TownBrain build: no schematic could be resolved; deleting planned row to avoid wedge',
       );
+      // Drop the origin-less row so it can't hold the in-flight lock; the kind
+      // is re-queued from scratch next tick.
+      this.townManager.deleteBuilding(building.id);
       return;
     }
 
@@ -640,35 +690,48 @@ export class TownBrain {
       'TownBrain build: queuing planned building',
     );
 
-    // Best-effort: pass to BuildCoordinator with auto-flat origin. The
-    // capital coords are the seed for the SiteSelector spiral.
+    // Pass to BuildCoordinator with auto-flat origin. The capital coords are
+    // the seed for the SiteSelector spiral. The job carries townId/buildingId
+    // so its lifecycle hooks can keep the building row in sync:
+    //   onStarted   → record the resolved origin + flip to 'building'
+    //   onCompleted → flip to 'complete', or delete the row on failure/cancel
+    // This is the town↔build linkage: it guarantees the row always advances to
+    // a terminal state, so a planned/building row can never orphan and wedge
+    // the build loop the way it did before.
     try {
-      const residents = this.townManager.listResidents(this.townId);
-      // startBuild rejects the whole job if ANY listed bot is disconnected,
-      // so filter to residents whose worker handles report a connected bot.
-      // Without this the auto pipeline jams whenever the login-throttle
-      // cycle has even one resident temporarily offline.
-      const allNames = residents.map((r) => r.botName);
-      const connectedNames: string[] = [];
-      for (const n of allNames) {
-        const handle = this.botManager.getWorker(n) as { isBotConnected?: () => Promise<boolean> } | undefined;
-        if (!handle || typeof handle.isBotConnected !== 'function') continue;
-        try {
-          if (await handle.isBotConnected()) connectedNames.push(n);
-        } catch { /* swallow — treat as disconnected */ }
-      }
-      if (connectedNames.length === 0) {
-        logger.debug(
-          { townId: this.townId, residents: allNames.length },
-          'TownBrain build: no connected residents to start build with; will retry next tick',
-        );
-        return;
-      }
       const job = await this.buildCoordinator.startBuild(
         resolved.schematicFile,
         { x: town.capital.x, y: town.capital.y, z: town.capital.z },
         connectedNames,
-        { originMode: 'auto-flat' },
+        {
+          originMode: 'auto-flat',
+          townId: this.townId,
+          buildingId: building.id,
+          onStarted: (j) => {
+            // Build actually launched and the origin is resolved. Writing it
+            // onto the row (non-null) is what keeps buildLoop's orphan reaper
+            // from treating this live build as a leftover.
+            this.townManager.recordBuildingPlacement(building.id, {
+              origin: j.origin,
+              status: 'building',
+            });
+          },
+          onCompleted: (j) => {
+            if (j.status === 'completed' || j.status === 'completed_with_errors') {
+              this.townManager.updateBuildingStatus(building.id, 'complete');
+              logger.info(
+                { townId: this.townId, buildingId: building.id, jobId: j.id, status: j.status },
+                'TownBrain build: building row marked complete',
+              );
+            } else {
+              logger.warn(
+                { townId: this.townId, buildingId: building.id, jobId: j.id, status: j.status },
+                'TownBrain build: build did not complete; deleting row for clean re-queue',
+              );
+              this.townManager.deleteBuilding(building.id);
+            }
+          },
+        },
       );
       this.townManager.recordEvent({
         townId: this.townId,
@@ -686,8 +749,12 @@ export class TownBrain {
     } catch (err: any) {
       logger.warn(
         { townId: this.townId, kind: item.kind, err: err?.message },
-        'TownBrain build: startBuild failed (row stays planned, will retry)',
+        'TownBrain build: startBuild failed; deleting planned row to avoid wedge',
       );
+      // startBuild threw before producing a job (or during pre-build site
+      // prep). Delete the row so the kind is retried cleanly next tick instead
+      // of leaving a stuck planned/building row.
+      this.townManager.deleteBuilding(building.id);
     }
   }
 

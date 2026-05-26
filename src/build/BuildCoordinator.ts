@@ -54,6 +54,15 @@ export interface BuildJob {
    * cancellation. Only set on cancelled jobs.
    */
   placedBlocksAtCancel?: number;
+  /**
+   * Town↔build linkage. When a build is queued by TownBrain on behalf of a
+   * planned building row, these carry the owning town + building ids through
+   * to the `build:completed` emit so the town registry can flip the row's
+   * status (planned → building → complete) and never leaves an orphan that
+   * wedges the build loop. Unset for ad-hoc / API-driven builds.
+   */
+  townId?: string;
+  buildingId?: string;
 }
 
 /**
@@ -378,7 +387,7 @@ export class BuildCoordinator {
    * so a re-run after a mid-build bot drop just resumes harmlessly. dryRun
    * returns the plan without touching the world.
    */
-  async buildTunnel(opts: { dryRun?: boolean } = {}): Promise<{ plan: any; executed: boolean; commands?: number }> {
+  async buildTunnel(opts: { dryRun?: boolean } = {}): Promise<{ plan: any; executed: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
     // Geometry: floor block at y50, walkable air y51-55 (5 tall), ceiling y56.
     const FLOOR = 50, AIR1 = 51, AIR2 = 55, CEIL = 56, HALL_Y = 64;
     // Rail centerline forms an L sharing corner block (railX, railZ).
@@ -424,6 +433,14 @@ export class BuildCoordinator {
           for (let z = z1; z <= z2; z += CH)
             await cmd(`/fill ${x} ${y} ${z} ${Math.min(x + CH - 1, x2)} ${Math.min(y + CH - 1, y2)} ${Math.min(z + CH - 1, z2)} ${block}`);
     };
+    // Record the discrete track elements so we can verify+repair them after
+    // placement (the bulk stone shell goes in via reliable op /fill and isn't
+    // re-read). Names match what getBlockAt returns; stateStr is only used when
+    // re-placing a missing block.
+    const targets: BlockEntry[] = [];
+    const rec = (x: number, y: number, z: number, name: string, stateStr = ''): void => {
+      targets.push({ wx: x, wy: y, wz: z, name, stateStr, localY: 0 });
+    };
 
     logger.info({ plan }, 'Building rail+walkway tunnel between town halls');
 
@@ -439,34 +456,50 @@ export class BuildCoordinator {
     let i = 0;
     for (let z = aZ2; z >= aZ1; z--, i++) {
       const powered = i % 8 === 0;
-      if (powered) await cmd(`/setblock ${railX} ${FLOOR} ${z} redstone_block`);
+      if (powered) { await cmd(`/setblock ${railX} ${FLOOR} ${z} redstone_block`); rec(railX, FLOOR, z, 'redstone_block'); }
       await cmd(`/setblock ${railX} ${AIR1} ${z} ${powered ? 'powered_rail' : 'rail'}`);
+      rec(railX, AIR1, z, powered ? 'powered_rail' : 'rail');
     }
     for (let x = bX1; x <= bX2; x++, i++) {
       const powered = i % 8 === 0;
-      if (powered) await cmd(`/setblock ${x} ${FLOOR} ${railZ} redstone_block`);
+      if (powered) { await cmd(`/setblock ${x} ${FLOOR} ${railZ} redstone_block`); rec(x, FLOOR, railZ, 'redstone_block'); }
       await cmd(`/setblock ${x} ${AIR1} ${railZ} ${powered ? 'powered_rail' : 'rail'}`);
+      rec(x, AIR1, railZ, powered ? 'powered_rail' : 'rail');
     }
 
     // 4) Glowstone in the ceiling for light (no mob spawns).
-    for (let z = aZ1; z <= aZ2; z += 5) await cmd(`/setblock ${railX + 2} ${CEIL} ${z} glowstone`);
-    for (let x = bX1; x <= bX2; x += 5) await cmd(`/setblock ${x} ${CEIL} ${railZ + 2} glowstone`);
+    for (let z = aZ1; z <= aZ2; z += 5) { await cmd(`/setblock ${railX + 2} ${CEIL} ${z} glowstone`); rec(railX + 2, CEIL, z, 'glowstone'); }
+    for (let x = bX1; x <= bX2; x += 5) { await cmd(`/setblock ${x} ${CEIL} ${railZ + 2} glowstone`); rec(x, CEIL, railZ + 2, 'glowstone'); }
 
-    // 5) Ladder shafts up to each hall floor (support wall to the west → facing=east).
+    // 5) Ladder shafts up to each hall floor. Ladders face WEST so they attach
+    //    to the block to their EAST; through the hollow lower shaft (y51-55)
+    //    that block is interior air, so we first lay a stone backing pillar
+    //    there (above the ceiling the ladder attaches to solid terrain). The
+    //    east side is used so the backing never collides with the rail line
+    //    (legA rail at x1225, legB rail at z122). Without this the bottom rungs
+    //    had no support and popped off → unenterable shaft.
     for (const s of stairs) {
       await fillBox([s.x, AIR1, s.z, s.x, HALL_Y, s.z], 'air');
-      for (let y = AIR1; y <= HALL_Y; y++) await cmd(`/setblock ${s.x} ${y} ${s.z} ladder[facing=east]`);
+      for (let y = AIR1; y <= AIR2; y++) { await cmd(`/setblock ${s.x + 1} ${y} ${s.z} stone`); rec(s.x + 1, y, s.z, 'stone'); }
+      for (let y = AIR1; y <= HALL_Y; y++) { await cmd(`/setblock ${s.x} ${y} ${s.z} ladder[facing=west]`); rec(s.x, y, s.z, 'ladder', 'facing=west'); }
     }
+
+    // 6) Verify the track elements landed and repair any that didn't.
+    const sweep = await this.verifyAndRepairTargets(null, targets, []);
+    logger.info(
+      { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing, sample: sweep.sampleMisses.slice(0, 8) },
+      'Tunnel verify-and-repair sweep complete',
+    );
 
     this.eventLog.push({
       type: 'build:tunnel',
       botName: handle?.botName ?? 'system',
-      description: `Built rail+walkway tunnel between town halls (${n} commands)`,
-      metadata: { plan },
+      description: `Built rail+walkway tunnel between town halls (${n} commands, ${sweep.missing} track blocks missing after verify)`,
+      metadata: { plan, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } },
     });
     this.io.emit('build:tunnel', { plan });
-    logger.info({ commands: n }, 'Tunnel build complete');
-    return { plan, executed: true, commands: n };
+    logger.info({ commands: n, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } }, 'Tunnel build complete');
+    return { plan, executed: true, commands: n, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } };
   }
 
   // ── Schematic parsing & cache ──────────────────────────
@@ -644,6 +677,14 @@ export class BuildCoordinator {
        * bar before the build is failed. Defaults to 10 minutes.
        */
       autoGatherTimeoutMs?: number;
+      /**
+       * Town↔build linkage (see BuildJob.townId/buildingId). When TownBrain
+       * queues a build for a planned building row it passes these so the
+       * resulting job — and its `build:completed` emit — carries the ids back
+       * to the town registry.
+       */
+      townId?: string;
+      buildingId?: string;
     },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
@@ -1024,6 +1065,8 @@ export class BuildCoordinator {
       placedBlocks: 0,
       assignments,
       cleanupBotNames: options?.cleanupBotNames,
+      townId: options?.townId,
+      buildingId: options?.buildingId,
     };
 
     this.jobs.set(jobId, job);
@@ -1085,6 +1128,18 @@ export class BuildCoordinator {
     this.executeBuild(jobId, blocks, assignments, { autoGather, autoGatherTimeoutMs, botNames }).catch((err) => {
       logger.error({ jobId, err }, 'Build execution failed');
       job.status = 'failed';
+      // Fire the onCompleted hook on this failure path too. The normal
+      // completion path (executeBuild's terminal block) runs the hook, but a
+      // throw here bypassed it — without this the town linkage would never
+      // learn the build failed and the building row would stay 'building'
+      // forever, re-wedging the build loop.
+      const hooks = this.jobHooks.get(jobId);
+      if (hooks?.onCompleted) {
+        try { hooks.onCompleted(job); } catch (hookErr: any) {
+          logger.warn({ err: hookErr.message, jobId }, 'onCompleted hook threw (failure path)');
+        }
+      }
+      this.jobHooks.delete(jobId);
       this.io.emit('build:completed', { ...job, error: err.message });
     });
 
@@ -1376,18 +1431,46 @@ export class BuildCoordinator {
       this.bunkerContext.delete(jobId);
     }
 
+    // ── Real verification + repair sweep ──
+    // The placement loop only spot-checks 1-in-20 blocks (fire-and-forget), so
+    // silent /setblock drops and chunk-load gaps were counted as "placed" —
+    // producing hollow builds that reported as complete. This sweep reads every
+    // target block back via an op bot (teleporting it across the volume to force
+    // chunk loads) and re-places any mismatch, giving the true residual hole
+    // count that the job status below is based on.
+    let sweepRan = false;
+    let sweepMissing = 0;
+    if (!this.cancelledJobs.has(jobId) && job.placedBlocks > 0) {
+      try {
+        const sweep = await this.verifyAndRepairJob(jobId, job, blocks, assignments);
+        if (sweep.checked > 0) {
+          sweepRan = true;
+          sweepMissing = sweep.missing;
+        }
+        logger.info(
+          { jobId, checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing,
+            sample: sweep.sampleMisses.slice(0, 8) },
+          'Build verify-and-repair sweep complete',
+        );
+      } catch (err: any) {
+        logger.warn({ jobId, err: err.message }, 'Verify-and-repair sweep failed — falling back to inline counters');
+      }
+    }
+
     // Final status
     if (!this.cancelledJobs.has(jobId)) {
       const allCompleted = assignments.every((a) => a.status === 'completed');
-      // Sum up failure counters from every bot. If anything failed verification
-      // we report 'completed_with_errors' so dashboards / callers can tell a
-      // partial build apart from a clean one — silent 'completed' would hide
-      // missing-material / out-of-stock failures that left holes in the build.
-      const failedBlockCount = assignments.reduce((sum, a) => sum + (a.failedBlocks ?? 0), 0);
+      // The sweep is authoritative for holes actually present in the world. The
+      // inline per-bot counter is only a fast-path hint (and undercounts because
+      // it spot-checks 1-in-20). Prefer the sweep's residual miss count; fall
+      // back to inline counters only if the sweep couldn't run (no op bot).
+      const inlineFailed = assignments.reduce((sum, a) => sum + (a.failedBlocks ?? 0), 0);
+      const failedBlockCount = sweepRan ? sweepMissing : inlineFailed;
       job.failedBlockCount = failedBlockCount;
-      // A job is complete if every assignment finished OR every block made it
-      // into the world (a bot may be 'failed' from a kick yet its blocks were
-      // reassigned/retried and placed). Only a genuinely short build is failed.
+      // A job is complete only if every assignment finished OR every block was
+      // sent — AND the verify sweep found zero residual holes. A non-zero
+      // residual means real gaps remain, so we report completed_with_errors
+      // (loud) rather than a silent 'completed'.
       const placedAll = job.placedBlocks >= job.totalBlocks;
       if (allCompleted || placedAll) {
         job.status = failedBlockCount > 0 ? 'completed_with_errors' : 'completed';
@@ -1407,7 +1490,7 @@ export class BuildCoordinator {
       this.eventLog.push({
         type: 'build:completed',
         botName: assignments.map((a) => a.botName).join(', '),
-        description: `Build ${job.status}: ${job.schematicFile} (${job.placedBlocks}/${job.totalBlocks} blocks, ${failedBlockCount} failed)`,
+        description: `Build ${job.status}: ${job.schematicFile} (${job.placedBlocks}/${job.totalBlocks} blocks, ${failedBlockCount} missing after verify)`,
         metadata: { jobId, status: job.status, failedBlockCount },
       });
 
@@ -1436,6 +1519,218 @@ export class BuildCoordinator {
     // Cleanup cancellation & reassignment tracking
     this.cancelledJobs.delete(jobId);
     this.reassignQueues.delete(jobId);
+  }
+
+  /**
+   * Return the first connected (and therefore op'd — all build bots are op'd
+   * server-side) worker handle, preferring the names in `preferred`. Used to
+   * pick a verifier/repairer for the post-build sweep that can survive one of
+   * the build bots having dropped.
+   */
+  private async pickConnectedBot(preferred: string[] = []): Promise<any> {
+    const order = [
+      ...preferred,
+      ...((this.botManager.getAllWorkers() as any[]).map((h) => h?.botName).filter(Boolean) as string[]),
+    ];
+    const seen = new Set<string>();
+    for (const name of order) {
+      if (!name || seen.has(name)) continue;
+      seen.add(name);
+      const h = this.botManager.getWorker(name) as any;
+      if (h && typeof h.isBotConnected === 'function') {
+        try { if (await h.isBotConnected()) return h; } catch { /* try next */ }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Verify-and-repair sweep, the real fix for hollow builds reported as
+   * complete. Reads every (non-air) target block back from the world via an op
+   * bot and re-issues /setblock for any that don't match, repeating up to
+   * MAX_ROUNDS over the shrinking miss set.
+   *
+   * getBlockAt only returns a real block for chunks the bot's client has
+   * loaded, so we bucket targets by a (REGION × REGION) XZ grid and teleport
+   * the verifier to each bucket's centre (above the build) before reading it —
+   * this forces the chunks to load and makes the read trustworthy. Placement
+   * itself (op /setblock) lands server-side regardless of where the bot stands,
+   * so re-placement does not need a teleport.
+   *
+   * Returns the number of targets checked, how many were repaired, and the
+   * residual miss count (true holes) plus a sample of their coords.
+   */
+  private async verifyAndRepairJob(
+    jobId: string,
+    job: BuildJob,
+    blocks: BlockEntry[],
+    assignments: BotAssignment[],
+  ): Promise<{
+    checked: number;
+    repaired: number;
+    missing: number;
+    sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
+  }> {
+    // loadSchematicCached already excludes air, so every entry is a solid target.
+    return this.verifyAndRepairTargets(jobId, blocks, assignments.map((a) => a.botName));
+  }
+
+  /**
+   * Reusable core of the verify-and-repair sweep (see verifyAndRepairJob).
+   * `label` is used for cancellation lookup (a real jobId) and logging; pass
+   * null for ad-hoc structures like the tunnel that aren't tracked as jobs.
+   */
+  private async verifyAndRepairTargets(
+    label: string | null,
+    targets: BlockEntry[],
+    preferredBots: string[],
+  ): Promise<{
+    checked: number;
+    repaired: number;
+    missing: number;
+    sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
+  }> {
+    const isCancelled = () => label !== null && this.cancelledJobs.has(label);
+    if (targets.length === 0) return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+
+    let verifier = await this.pickConnectedBot(preferredBots);
+    if (!verifier) {
+      logger.warn({ label }, 'Verify sweep skipped — no connected bot available to read the world back');
+      return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+    }
+
+    const norm = (n: string | undefined): string | null =>
+      n ? (n.startsWith('minecraft:') ? n.slice('minecraft:'.length) : n) : null;
+    const REGION = 32;       // XZ bucket size; comfortably inside render distance
+    const READ_CONCURRENCY = 16;
+    const PLACE_PACE_MS = 55; // gentle on the chat-spam limit during repairs
+    const MAX_ROUNDS = 3;
+    const bucketKey = (b: BlockEntry) => `${Math.floor(b.wx / REGION)},${Math.floor(b.wz / REGION)}`;
+
+    // Pause the verifier where it is and drop it into creative so it survives
+    // wherever we teleport it. Restored in the finally block.
+    const botName = verifier.botName;
+    try { verifier.pauseVoyager?.('verifying build'); } catch { /* best effort */ }
+    try { verifier.stopMovement?.(); } catch { /* best effort */ }
+    try { verifier.chat(`/gamemode creative ${botName}`); } catch { /* best effort */ }
+
+    // After a teleport the server streams the new chunks asynchronously and
+    // bot.blockAt returns null until they arrive — a fixed sleep is racy and was
+    // counting still-loading blocks as "missing". Poll a sentinel coordinate in
+    // the region (any non-null result, including air, means the chunk loaded)
+    // before trusting reads. Returns false if it never loaded within the budget.
+    const waitChunkLoaded = async (x: number, y: number, z: number): Promise<boolean> => {
+      for (let t = 0; t < 15; t++) { // up to ~6s
+        try { if (await verifier.getBlockAt(x, y, z)) return true; } catch { /* retry */ }
+        await this.sleep(400);
+      }
+      return false;
+    };
+
+    let toCheck = targets;
+    let missing: BlockEntry[] = [];
+    let initialMissing = -1; // miss count on the first read, before any repair
+    const sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }> = [];
+
+    try {
+      for (let round = 0; round < MAX_ROUNDS; round++) {
+        if (isCancelled()) break;
+
+        // Re-acquire a connected verifier if the current one dropped.
+        if (!(typeof verifier.isBotConnected === 'function' && (await verifier.isBotConnected()))) {
+          const next = await this.pickConnectedBot(preferredBots);
+          if (!next) {
+            logger.warn({ label, round }, 'Verify sweep aborted mid-way — lost all connected bots');
+            break;
+          }
+          verifier = next;
+          try { verifier.chat(`/gamemode creative ${verifier.botName}`); } catch { /* best effort */ }
+        }
+
+        // Bucket the current miss set by XZ region.
+        const buckets = new Map<string, BlockEntry[]>();
+        for (const b of toCheck) {
+          const k = bucketKey(b);
+          let arr = buckets.get(k);
+          if (!arr) { arr = []; buckets.set(k, arr); }
+          arr.push(b);
+        }
+
+        const roundMisses: BlockEntry[] = [];   // read as wrong → re-place + re-check
+        const unverified: BlockEntry[] = [];     // chunk never loaded → re-check only
+        for (const bucket of buckets.values()) {
+          if (isCancelled()) break;
+
+          // Teleport the verifier above this bucket, then WAIT for the chunk to
+          // actually arrive (not a fixed sleep) so reads are trustworthy.
+          const cx = Math.round(bucket.reduce((s, b) => s + b.wx, 0) / bucket.length);
+          const cz = Math.round(bucket.reduce((s, b) => s + b.wz, 0) / bucket.length);
+          const topY = Math.max(...bucket.map((b) => b.wy));
+          try { verifier.chat(`/tp ${verifier.botName} ${cx} ${topY + 25} ${cz}`); } catch { /* best effort */ }
+          await this.sleep(300);
+          const loaded = await waitChunkLoaded(cx, topY, cz);
+          if (!loaded) {
+            logger.warn(
+              { label, round: round + 1, at: { x: cx, z: cz }, bucketSize: bucket.length },
+              'Verify sweep: chunk did not load after teleport — re-checking this region next round',
+            );
+            // Don't declare these missing (no pointless re-placement); just
+            // re-check them next round once the chunk hopefully loads.
+            for (const b of bucket) unverified.push(b);
+            continue;
+          }
+
+          // Read the whole bucket back in parallel batches.
+          for (let i = 0; i < bucket.length; i += READ_CONCURRENCY) {
+            const slice = bucket.slice(i, i + READ_CONCURRENCY);
+            const reads = await Promise.all(slice.map(async (b) => {
+              try { return await verifier.getBlockAt(b.wx, b.wy, b.wz); }
+              catch { return null; }
+            }));
+            for (let j = 0; j < slice.length; j++) {
+              const b = slice[j];
+              const got = norm(reads[j]?.name);
+              if (got !== b.name) roundMisses.push(b);
+            }
+          }
+        }
+
+        // Re-place only the confirmed misses (server-side op /setblock — no tp
+        // needed). Unverified (chunk-not-loaded) blocks are left alone.
+        for (const b of roundMisses) {
+          if (isCancelled()) break;
+          const spec = b.stateStr ? `${b.name}[${b.stateStr}]` : b.name;
+          try { verifier.chat(`/setblock ${b.wx} ${b.wy} ${b.wz} minecraft:${spec} replace`); } catch { /* best effort */ }
+          await this.sleep(PLACE_PACE_MS);
+        }
+
+        const residual = roundMisses.concat(unverified);
+        missing = residual;
+        if (initialMissing < 0) initialMissing = residual.length;
+        logger.info(
+          { label, round: round + 1, checkedThisRound: toCheck.length,
+            confirmedMissing: roundMisses.length, unverified: unverified.length },
+          'Verify sweep round complete',
+        );
+        if (residual.length === 0) break;
+        toCheck = residual;       // next round re-checks misses + unverified
+        await this.sleep(600);
+      }
+    } finally {
+      try { verifier.chat(`/gamemode survival ${verifier.botName}`); } catch { /* best effort */ }
+      try { verifier.setBotState?.(BotState.IDLE); } catch { /* best effort */ }
+      try { verifier.resumeVoyager?.(); } catch { /* best effort */ }
+    }
+
+    for (const b of missing.slice(0, 12)) {
+      sampleMisses.push({ x: b.wx, y: b.wy, z: b.wz, want: b.name, got: 'absent/mismatch' });
+    }
+    return {
+      checked: targets.length,
+      repaired: initialMissing < 0 ? 0 : Math.max(0, initialMissing - missing.length),
+      missing: missing.length,
+      sampleMisses,
+    };
   }
 
   private async executeBotAssignment(

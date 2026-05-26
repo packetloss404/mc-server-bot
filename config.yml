@@ -19,7 +19,7 @@ bots:
   # rate-limit on 2026-05-25.
   joinStaggerMs: 45000
   reconnectDelaySec: 60
-  maxReconnectAttempts: 30
+  maxReconnectAttempts: 1000
 
 behavior:
   headTrackingRange: 10

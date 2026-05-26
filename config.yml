@@ -145,6 +145,15 @@ cognition:
   perceptionTick: true
   cognitiveController: true
 
+# Build-system tuning knobs.
+#   sitePrepTimeoutMs: hard deadline for the pre-job phase of startBuild
+#     (origin resolution, bunker excavation, site-clear, snap-to-ground).
+#     If this budget elapses the call rejects so the TownBrain serialized loop
+#     is never wedged indefinitely by a hung site-prep operation.
+#     Default 150000 (2.5 min) — generous enough for a loaded 2-core host.
+build:
+  sitePrepTimeoutMs: 150000
+
 # Mining geofence — keeps bots from tunnelling through town structures to gather
 # raw materials, and routes resource mining to a single communal mine site.
 # Consumed by src/actions/geofence.ts (read once per worker; fail-open if absent

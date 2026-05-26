@@ -193,6 +193,26 @@ export interface Config {
     cognitiveController: boolean;
   };
   /**
+   * Build-system tuning knobs.
+   *
+   * All fields are optional; when the `build:` section is absent defaults are
+   * used so existing deployments need no config change.
+   */
+  build?: {
+    /**
+     * Hard deadline for the PRE-JOB phase of `BuildCoordinator.startBuild`
+     * (origin resolution + bunker excavation + site-clear + snap-to-ground).
+     * If this budget elapses before the job object is created the call rejects
+     * and the TownBrain caller cleans up the planned-building row and retries
+     * next tick — preventing a hung startBuild from freezing the serialized
+     * town-management loop indefinitely.
+     *
+     * Generous default (150 s) to avoid killing legitimate slow builds on a
+     * loaded 2-core server; lower in tests via the injected options override.
+     */
+    sitePrepTimeoutMs?: number;
+  };
+  /**
    * Mining geofence — stops bots gathering raw materials by tunnelling through
    * town structures and routes resource mining to a designated communal mine
    * site. Consumed by src/actions/geofence.ts. All fields optional; when the
@@ -245,6 +265,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'social',
   'cognition',
   'mining',
+  'build',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {
@@ -394,6 +415,12 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
       { key: 'protectedZones', type: 'array', optional: true },
       { key: 'mineSite', type: 'object', optional: true },
       { key: 'routeToMineBlocks', type: 'array', optional: true },
+    ],
+  },
+  build: {
+    required: false,
+    fields: [
+      { key: 'sitePrepTimeoutMs', type: 'number', optional: true },
     ],
   },
 };

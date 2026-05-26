@@ -8,6 +8,8 @@ import { Server as SocketIOServer } from 'socket.io';
 import { EventLog } from '../server/EventLog';
 import { logger } from '../util/logger';
 import { atomicWriteJsonSync } from '../util/atomicWrite';
+import { withTimeout } from '../util/withTimeout';
+import type { Config } from '../config';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
 import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
 
@@ -131,6 +133,13 @@ const AUTOGATHER_MAX_CHUNKS = 50;
 const AUTOGATHER_POLL_INTERVAL_MS = 5_000;
 /** Default upper time bound for the whole gather phase. */
 const AUTOGATHER_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
+/**
+ * Default hard deadline for the pre-job phase of startBuild (origin
+ * resolution, bunker excavation, site-clear, snap-to-ground combined).
+ * Overridden by `config.build.sitePrepTimeoutMs` or by the per-call
+ * `options.sitePrepTimeoutMs` knob (lowest wins).
+ */
+const SITE_PREP_DEFAULT_TIMEOUT_MS = 150_000; // 2.5 minutes
 
 // ── Build Coordinator ───────────────────────────────────────
 
@@ -144,6 +153,8 @@ export class BuildCoordinator {
   private schematicsDir: string;
   private persistPath: string;
   private persistTimer: NodeJS.Timeout | null = null;
+  /** Resolved site-prep deadline (from config or the module-level default). */
+  private sitePrepTimeoutMs: number;
   /** Original options for each job, kept for resume. */
   private jobOptions = new Map<string, { fillFoundation?: boolean; snapToGround?: boolean; clearSite?: boolean; mode?: 'surface' | 'underground' }>();
   /**
@@ -182,12 +193,14 @@ export class BuildCoordinator {
   /** Override for unit tests — when set, skipped wall-clock polling delays. */
   protected gatherPollIntervalMs = AUTOGATHER_POLL_INTERVAL_MS;
 
-  constructor(botManager: BotManager, io: SocketIOServer, eventLog: EventLog) {
+  constructor(botManager: BotManager, io: SocketIOServer, eventLog: EventLog, config?: Config) {
     this.botManager = botManager;
     this.io = io;
     this.eventLog = eventLog;
     this.schematicsDir = path.join(process.cwd(), 'schematics');
     this.persistPath = path.join(process.cwd(), 'data', 'builds.json');
+    this.sitePrepTimeoutMs =
+      config?.build?.sitePrepTimeoutMs ?? SITE_PREP_DEFAULT_TIMEOUT_MS;
     this.loadPersistedJobs();
   }
 
@@ -685,6 +698,14 @@ export class BuildCoordinator {
        */
       townId?: string;
       buildingId?: string;
+      /**
+       * Per-call override for the pre-job site-prep deadline. Overrides both
+       * the config knob and the module-level default. Useful in tests and for
+       * callers that know the site prep will be unusually slow (e.g. very large
+       * bunker excavations). When omitted, the constructor-resolved timeout
+       * (`config.build.sitePrepTimeoutMs` ?? 150 s) is used.
+       */
+      sitePrepTimeoutMs?: number;
     },
   ): Promise<BuildJob> {
     const fullPath = path.join(this.schematicsDir, schematicFile);
@@ -759,6 +780,24 @@ export class BuildCoordinator {
       clearSiteEnabled = false;
     }
 
+    // ── Pre-job site-prep deadline ──
+    // The PRE-JOB phase (everything before `executeBuild` is kicked off) runs
+    // several slow awaits while holding the TownBrain tick-lock. If any of
+    // them hangs the whole town-management loop freezes until restart.
+    //
+    // Strategy: track a shared deadline. CRITICAL awaits (resolveOrigin,
+    // prepareBunkerSite) get the remaining budget — a timeout there propagates
+    // and lets TownBrain clean up and retry. BEST-EFFORT awaits (runClearSite,
+    // snapToGround) get the remaining budget too, but are already wrapped in
+    // try/catch that continues on error — a timeout just becomes another
+    // caught error with a log line, preserving the graceful-degrade semantics.
+    const sitePrepBudgetMs =
+      options?.sitePrepTimeoutMs ?? this.sitePrepTimeoutMs;
+    const sitePrepDeadline = Date.now() + sitePrepBudgetMs;
+    /** Remaining ms until the pre-job deadline (always >= 1). */
+    const sitePrepRemaining = (): number =>
+      Math.max(1, sitePrepDeadline - Date.now());
+
     // Find a connected bot handle EARLY so origin resolution can use it.
     let probeHandle: any = null;
     for (const n of botNames) {
@@ -772,7 +811,12 @@ export class BuildCoordinator {
     // ── Origin resolution ──
     // Map originMode -> concrete {x, y, z}. The supplied `origin` is the
     // fallback for 'coords' mode and a hint elsewhere (e.g. Y for player mode).
-    origin = await this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize);
+    // CRITICAL: propagate a timeout so the caller can clean up.
+    origin = await withTimeout(
+      this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize),
+      sitePrepRemaining(),
+      'startBuild resolveOrigin',
+    );
     // resolveOrigin can return a Y from bot position, player position, or
     // auto-flat site selection — none of which are guaranteed to land inside
     // the build-height range. Re-check after resolution so non-'coords' modes
@@ -787,7 +831,14 @@ export class BuildCoordinator {
       if (!probeHandle) {
         throw new Error('Underground build requires a connected bot to excavate the pit');
       }
-      const surfaceY = await sampleSurfaceY(probeHandle, origin.x, origin.z);
+      // CRITICAL: both sampleSurfaceY and prepareBunkerSite are slow IPC/dig
+      // ops — wrap each with the remaining site-prep budget so a hang here
+      // propagates and lets the caller clean up rather than freezing the loop.
+      const surfaceY = await withTimeout(
+        sampleSurfaceY(probeHandle, origin.x, origin.z),
+        sitePrepRemaining(),
+        'startBuild sampleSurfaceY',
+      );
       if (surfaceY == null) {
         throw new Error(
           `Underground build: could not sample surface Y around (${origin.x}, ${origin.z})`,
@@ -804,7 +855,12 @@ export class BuildCoordinator {
       bunkerSurfaceY = surfaceY;
 
       // Excavate the pit. Throws if bedrock or nearby liquid would break the build.
-      const bunkerResult = await prepareBunkerSite(probeHandle, origin, schSize);
+      // CRITICAL: propagate a timeout so the caller can clean up.
+      const bunkerResult = await withTimeout(
+        prepareBunkerSite(probeHandle, origin, schSize),
+        sitePrepRemaining(),
+        'startBuild prepareBunkerSite',
+      );
       logger.info(
         { excavated: bunkerResult.excavated, warnings: bunkerResult.warnings.length },
         'Underground mode: pit excavated',
@@ -842,11 +898,17 @@ export class BuildCoordinator {
         // the schematic top. Typical trees in vanilla cap around 8 blocks of
         // trunk + leaves; 12 is a safe floor for any schematic shorter than that.
         const clearanceHeight = Math.max(schSize.y, 12);
-        const clearResult = await this.runClearSite(probeHandle, {
-          footprintMin,
-          footprintMax,
-          clearanceHeight,
-        });
+        // BEST-EFFORT: a timeout here is caught by the outer try/catch just
+        // like any other runClearSite failure — we log and continue.
+        const clearResult = await withTimeout(
+          this.runClearSite(probeHandle, {
+            footprintMin,
+            footprintMax,
+            clearanceHeight,
+          }),
+          sitePrepRemaining(),
+          'startBuild runClearSite',
+        );
         logger.info(
           { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length, clearanceHeight },
           'Site-prep: cleared footprint ahead of snap-to-ground',
@@ -859,60 +921,74 @@ export class BuildCoordinator {
     }
 
     if (snapToGround && probeHandle) {
-      // Build a grid of sample points across the footprint
-      const footprintXZ = new Map<string, { wx: number; wz: number }>();
-      for (const b of blocks) {
-        const key = `${b.wx},${b.wz}`;
-        if (!footprintXZ.has(key)) footprintXZ.set(key, { wx: b.wx, wz: b.wz });
-      }
-
-      // Sample up to 50 evenly-spaced columns. Probe columns in parallel chunks
-      // so we issue ~10 concurrent IPC scans instead of one at a time.
-      const allColumns = [...footprintXZ.values()];
-      const sampleStep = Math.max(1, Math.floor(allColumns.length / 50));
-      const sampledColumns: { wx: number; wz: number }[] = [];
-      for (let i = 0; i < allColumns.length; i += sampleStep) {
-        sampledColumns.push(allColumns[i]);
-      }
-      const samples: number[] = [];
-      const PROBE_CONCURRENCY = 10;
-      for (let i = 0; i < sampledColumns.length; i += PROBE_CONCURRENCY) {
-        const chunk = sampledColumns.slice(i, i + PROBE_CONCURRENCY);
-        const results = await Promise.all(chunk.map(async (col) => {
-          for (let y = oy + 10; y >= oy - 30; y--) {
-            const wb = await probeHandle.getBlockAt(col.wx, y, col.wz);
-            if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
-              return y + 1;
+      // BEST-EFFORT: wrap the whole snap-to-ground probe loop with the remaining
+      // site-prep budget. A timeout (or any other error) is caught and logged,
+      // then we continue without snapping — identical to what happens today when
+      // no samples are available.
+      try {
+        await withTimeout(
+          (async () => {
+            // Build a grid of sample points across the footprint
+            const footprintXZ = new Map<string, { wx: number; wz: number }>();
+            for (const b of blocks) {
+              const key = `${b.wx},${b.wz}`;
+              if (!footprintXZ.has(key)) footprintXZ.set(key, { wx: b.wx, wz: b.wz });
             }
-          }
-          return null;
-        }));
-        for (const r of results) {
-          if (r !== null) samples.push(r);
-        }
-      }
 
-      if (samples.length > 0) {
-        // Use median ground level
-        samples.sort((a, b) => a - b);
-        const medianGround = samples[Math.floor(samples.length / 2)];
-        const diff = medianGround - oy;
-        if (diff !== 0) {
-          const big = Math.abs(diff) > 5;
-          logger.info(
-            { oldY: oy, newY: medianGround, diff, samples: samples.length, largeDelta: big },
-            big
-              ? 'Snap-to-ground: large terrain delta — still adjusting (fillFoundation will plug gaps)'
-              : 'Snap-to-ground: adjusting origin Y to median terrain height',
-          );
-          // Shift all block world-Y positions by the difference. Previously we
-          // refused to adjust when |diff| > 5, which left builds floating in
-          // mid-air over hills/valleys. Trust fillFoundation to plug any gap.
-          for (const b of blocks) {
-            b.wy += diff;
-          }
-          origin.y = medianGround;
-        }
+            // Sample up to 50 evenly-spaced columns. Probe columns in parallel chunks
+            // so we issue ~10 concurrent IPC scans instead of one at a time.
+            const allColumns = [...footprintXZ.values()];
+            const sampleStep = Math.max(1, Math.floor(allColumns.length / 50));
+            const sampledColumns: { wx: number; wz: number }[] = [];
+            for (let i = 0; i < allColumns.length; i += sampleStep) {
+              sampledColumns.push(allColumns[i]);
+            }
+            const samples: number[] = [];
+            const PROBE_CONCURRENCY = 10;
+            for (let i = 0; i < sampledColumns.length; i += PROBE_CONCURRENCY) {
+              const chunk = sampledColumns.slice(i, i + PROBE_CONCURRENCY);
+              const results = await Promise.all(chunk.map(async (col) => {
+                for (let y = oy + 10; y >= oy - 30; y--) {
+                  const wb = await probeHandle.getBlockAt(col.wx, y, col.wz);
+                  if (wb && wb.name !== 'air' && wb.name !== 'cave_air' && wb.name !== 'void_air') {
+                    return y + 1;
+                  }
+                }
+                return null;
+              }));
+              for (const r of results) {
+                if (r !== null) samples.push(r);
+              }
+            }
+
+            if (samples.length > 0) {
+              // Use median ground level
+              samples.sort((a, b) => a - b);
+              const medianGround = samples[Math.floor(samples.length / 2)];
+              const diff = medianGround - oy;
+              if (diff !== 0) {
+                const big = Math.abs(diff) > 5;
+                logger.info(
+                  { oldY: oy, newY: medianGround, diff, samples: samples.length, largeDelta: big },
+                  big
+                    ? 'Snap-to-ground: large terrain delta — still adjusting (fillFoundation will plug gaps)'
+                    : 'Snap-to-ground: adjusting origin Y to median terrain height',
+                );
+                // Shift all block world-Y positions by the difference. Previously we
+                // refused to adjust when |diff| > 5, which left builds floating in
+                // mid-air over hills/valleys. Trust fillFoundation to plug any gap.
+                for (const b of blocks) {
+                  b.wy += diff;
+                }
+                origin.y = medianGround;
+              }
+            }
+          })(),
+          sitePrepRemaining(),
+          'startBuild snapToGround',
+        );
+      } catch (err: any) {
+        logger.warn({ err: err.message }, 'Snap-to-ground: probe failed — continuing without snap');
       }
     }
 

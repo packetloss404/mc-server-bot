@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { selectBuildSite } from '../../src/build/SiteSelector';
 
 type Block = { name: string; boundingBox?: string };
@@ -100,6 +100,11 @@ describe('SiteSelector.selectBuildSite', () => {
       step: 1,
       maxYDelta: 1,
       maxCandidates: 30,
+      // Raise probe and deadline budgets high so they don't interfere with this
+      // "all terrain is rejected" scenario — we want the natural null return,
+      // not a budget-driven throw.
+      maxProbes: 100_000,
+      deadlineMs: 60_000,
     });
     expect(result).toBeNull();
   });
@@ -120,5 +125,120 @@ describe('SiteSelector.selectBuildSite', () => {
     const result = await selectBuildSite(flatProbe, ref, { x: 3, y: 3, z: 3 }, { maxCandidates: 4 });
     expect(result).not.toBeNull();
     expect(result!.reasons.some((r) => r === 'open to sky')).toBe(true);
+  });
+
+  // -------------------------------------------------------------------------
+  // Timeout / deadline guard tests
+  // -------------------------------------------------------------------------
+
+  it('treats a slow/stuck probe as null (per-probe timeout)', async () => {
+    // Every probe hangs for 200 ms; per-probe timeout is set to 50 ms.
+    // With a flat world underneath the hanging probes, we can still get a
+    // result because the timeout converts stuck calls to null and the
+    // column-top scan falls back gracefully.
+    //
+    // To keep the test deterministic we use a probe that hangs for SLOW probes
+    // in a specific column but resolves quickly for the rest.
+    let hangCount = 0;
+    const hangProbe = async (x: number, y: number, z: number): Promise<Block | null> => {
+      // Hang on the first column at (refX, refZ) to simulate a stuck IPC call.
+      if (x === 100 && z === 100) {
+        hangCount++;
+        await new Promise<void>((res) => setTimeout(res, 200)); // 200 ms hang
+        return null;
+      }
+      return y <= 64 ? STONE : AIR;
+    };
+
+    const ref = { x: 100, y: 65, z: 100 };
+    const result = await selectBuildSite(hangProbe, ref, { x: 1, y: 2, z: 1 }, {
+      maxCandidates: 4,
+      probeTimeoutMs: 50,   // well below the 200 ms hang
+      deadlineMs: 10_000,   // generous overall deadline — should not fire
+    });
+
+    // Should still find a result (the nearby non-hanging candidates).
+    expect(result).not.toBeNull();
+    // The hanging probe was called at least once, confirming it was exercised.
+    expect(hangCount).toBeGreaterThan(0);
+  });
+
+  it('returns best candidate found when deadline fires mid-search', async () => {
+    // Strategy: use a 1x1x1 footprint so the first candidate (origin dx=0,
+    // dz=0) needs only a handful of probe calls and finishes quickly.  After
+    // the first candidate is scored we artificially stall subsequent probes
+    // with a 300 ms sleep so the deadline (150 ms) fires before the second
+    // candidate finishes, triggering the "return bestSoFar" branch.
+    let firstCandidateDone = false;
+    let probeCallCount = 0;
+    const slowAfterFirstProbe = async (x: number, y: number, z: number): Promise<Block | null> => {
+      probeCallCount++;
+      // The first candidate (1x1x1 footprint, refX=100,refZ=100) needs roughly
+      // ~33 (topSolidY scan) + 1 (ground) + 1 (body) + 2 (sky) = ~37 probes.
+      // Mark it done after 50 calls to give some headroom, then slow everything.
+      if (probeCallCount >= 50) firstCandidateDone = true;
+      if (firstCandidateDone) {
+        await new Promise<void>((res) => setTimeout(res, 300));
+      }
+      return y <= 64 ? STONE : AIR;
+    };
+
+    const ref = { x: 100, y: 65, z: 100 };
+    // deadlineMs=150 ms: first candidate completes (<50 fast calls), then the
+    // second candidate stalls (300 ms per probe) and the deadline fires, which
+    // should return bestSoFar (the first scored candidate).
+    const result = await selectBuildSite(slowAfterFirstProbe, ref, { x: 1, y: 1, z: 1 }, {
+      maxCandidates: 20,
+      probeTimeoutMs: 1500,
+      deadlineMs: 150,
+    });
+
+    // Must return the best-so-far candidate, never hang or throw.
+    expect(result).not.toBeNull();
+    expect(result!.score).toBeGreaterThan(0);
+  });
+
+  it('throws when deadline fires and no candidate was found yet', async () => {
+    // Every probe hangs for 300 ms (longer than per-probe timeout of 50 ms,
+    // but the per-probe timeout resolves to null). With all probes returning
+    // null, topSolidY never finds a surface, so no candidate qualifies.
+    // Overall deadline is 200 ms — should fire before maxCandidates exhausted.
+    const neverResolveProbe = async (_x: number, _y: number, _z: number): Promise<Block | null> => {
+      await new Promise<void>((res) => setTimeout(res, 300));
+      return null;
+    };
+
+    const ref = { x: 0, y: 64, z: 0 };
+    await expect(
+      selectBuildSite(neverResolveProbe, ref, { x: 3, y: 3, z: 3 }, {
+        maxCandidates: 50,
+        probeTimeoutMs: 50,   // each probe times out after 50 ms → null
+        deadlineMs: 200,      // overall deadline fires well before 50 candidates
+      }),
+    ).rejects.toThrow(/site selection timed out/);
+  });
+
+  it('respects the maxProbes cap as a secondary budget guard', async () => {
+    let probeCallCount = 0;
+    const countingProbe = async (x: number, y: number, z: number): Promise<Block | null> => {
+      probeCallCount++;
+      return y <= 64 ? STONE : AIR;
+    };
+
+    const ref = { x: 100, y: 65, z: 100 };
+    // maxProbes=5 is too small to finish even the first candidate.  After the
+    // budget is exhausted evaluateCandidate returns null.  With no qualified
+    // candidate the deadline (generous) doesn't help and we throw.
+    await expect(
+      selectBuildSite(countingProbe, ref, { x: 5, y: 5, z: 5 }, {
+        maxCandidates: 30,
+        probeTimeoutMs: 1500,
+        deadlineMs: 30_000,  // generous — should not fire
+        maxProbes: 5,        // exhausted before any candidate finishes
+      }),
+    ).rejects.toThrow(/site selection timed out/);
+
+    // Probe was capped near 5.
+    expect(probeCallCount).toBeLessThanOrEqual(6);
   });
 });

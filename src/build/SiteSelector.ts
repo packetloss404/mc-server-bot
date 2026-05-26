@@ -34,6 +34,36 @@ export interface SiteSelectorOptions {
   maxYDelta?: number;
   /** Skip this many candidates if you have a budget. Default 24. */
   maxCandidates?: number;
+  /**
+   * Per-probe wall-clock timeout in ms. Any individual getBlockAt IPC call
+   * that does not resolve within this window is treated as a null (unreadable)
+   * result and search continues. Default 1500 ms.
+   *
+   * A healthy getBlockAt returns in <100 ms; 1500 ms gives plenty of headroom
+   * for a temporarily busy server without ever blocking the search for more
+   * than 1.5 s per block.
+   */
+  probeTimeoutMs?: number;
+  /**
+   * Overall wall-clock deadline for the entire selectBuildSite call in ms.
+   * Default 60 000 ms (1 minute).
+   *
+   * When the deadline is reached:
+   *  - If at least one qualifying candidate has been found so far, that
+   *    candidate (the best scored so far) is returned immediately.
+   *  - If no qualifying candidate has been found yet, a descriptive Error is
+   *    thrown so the caller can abort and retry rather than hanging forever.
+   *
+   * Throwing is intentional and safe — BuildCoordinator treats a thrown
+   * startBuild as "abort and retry next tick", which is far better than an
+   * unbounded hang.
+   */
+  deadlineMs?: number;
+  /**
+   * Maximum total number of individual block probe calls across the entire
+   * search. Default 4000. Acts as a secondary hang-prevention guard.
+   */
+  maxProbes?: number;
 }
 
 /**
@@ -54,6 +84,9 @@ const DEFAULT_STEP = 4;
 const DEFAULT_FLAT_TOL_SMALL = 2;
 const DEFAULT_FLAT_TOL_LARGE = 4;
 const DEFAULT_MAX_CANDIDATES = 24;
+const DEFAULT_PROBE_TIMEOUT_MS = 1500;
+const DEFAULT_DEADLINE_MS = 60_000;
+const DEFAULT_MAX_PROBES = 4000;
 
 const SKY_CLEARANCE = 2;
 const NEAR_FALLOFF = 12;
@@ -70,6 +103,55 @@ const FLUID_NAMES = new Set([
 ]);
 const PLAYER_BUILT_PATTERN = /planks$|bricks?$|concrete|glass|smooth_|polished_|_slab$|_stairs$|_door$|wool|carpet|fence|bookshelf/;
 const LOG_PATTERN = /_log$|_wood$|^stripped_/;
+
+// ---------------------------------------------------------------------------
+// Timeout guard — local to this file, not imported from util.
+// ---------------------------------------------------------------------------
+
+/**
+ * Race a probe call against a per-probe timeout.
+ * If the probe does not resolve within `timeoutMs`, resolves to null so that
+ * the search continues rather than blocking indefinitely on a stuck IPC call.
+ */
+function probeWithTimeout(
+  probe: BlockProbe,
+  x: number,
+  y: number,
+  z: number,
+  timeoutMs: number,
+): Promise<ProbedBlock | null> {
+  return new Promise<ProbedBlock | null>((resolve) => {
+    let settled = false;
+
+    const timer = setTimeout(() => {
+      if (!settled) {
+        settled = true;
+        resolve(null);
+      }
+    }, timeoutMs);
+
+    probe(x, y, z).then(
+      (result) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(result);
+        }
+      },
+      (_err) => {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
+          resolve(null);
+        }
+      },
+    );
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Classification helpers
+// ---------------------------------------------------------------------------
 
 function isVeg(b: ProbedBlock | null): boolean {
   return !!b && VEG_PATTERN.test(b.name);
@@ -122,14 +204,64 @@ function* spiralOffsets(step: number, radius: number, count: number): Generator<
   }
 }
 
+// ---------------------------------------------------------------------------
+// Probe-counting / deadline context passed through the evaluation chain
+// ---------------------------------------------------------------------------
+
+interface SearchContext {
+  /** Wall-clock deadline (absolute ms from Date.now()). */
+  deadlineAt: number;
+  /** Maximum total probe calls allowed. */
+  maxProbes: number;
+  /** Per-probe timeout (ms). */
+  probeTimeoutMs: number;
+  /** Mutable counter — incremented by every probe call. */
+  probeCount: number;
+}
+
+/** Returns true if either the deadline has passed or the probe budget is exhausted. */
+function budgetExceeded(ctx: SearchContext): boolean {
+  return Date.now() >= ctx.deadlineAt || ctx.probeCount >= ctx.maxProbes;
+}
+
+/**
+ * Probe wrapper that enforces the per-probe timeout and increments the global
+ * probe counter. Returns null when the budget is already exhausted so inner
+ * loops can bail out naturally.
+ */
+async function timedProbe(
+  probe: BlockProbe,
+  x: number,
+  y: number,
+  z: number,
+  ctx: SearchContext,
+): Promise<ProbedBlock | null> {
+  if (budgetExceeded(ctx)) return null;
+  ctx.probeCount++;
+  return probeWithTimeout(probe, x, y, z, ctx.probeTimeoutMs);
+}
+
+// ---------------------------------------------------------------------------
+// Column and candidate evaluation
+// ---------------------------------------------------------------------------
+
 /**
  * Find the topmost solid block in a column by scanning down from yStart.
  * Returns the Y of that block, or null if nothing solid found in the window.
  */
-async function topSolidY(probe: BlockProbe, x: number, z: number, yStart: number, depth = 24): Promise<number | null> {
+async function topSolidY(
+  probe: BlockProbe,
+  x: number,
+  z: number,
+  yStart: number,
+  ctx: SearchContext,
+  depth = 24,
+): Promise<number | null> {
   for (let y = yStart + 8; y > yStart - depth; y--) {
-    const b = await probe(x, y, z);
+    const b = await timedProbe(probe, x, y, z, ctx);
     if (isSolidGround(b)) return y;
+    // If budget was exhausted mid-column, bail out rather than continuing.
+    if (budgetExceeded(ctx)) return null;
   }
   return null;
 }
@@ -142,12 +274,14 @@ async function evaluateCandidate(
   refY: number,
   refPos: { x: number; y: number; z: number },
   flatTol: number,
+  ctx: SearchContext,
 ): Promise<SiteCandidate | null> {
   // 1. Probe column tops across the footprint.
   const tops: number[] = [];
   for (let dx = 0; dx < size.x; dx++) {
     for (let dz = 0; dz < size.z; dz++) {
-      const top = await topSolidY(probe, seedX + dx, seedZ + dz, refY);
+      if (budgetExceeded(ctx)) return null;
+      const top = await topSolidY(probe, seedX + dx, seedZ + dz, refY, ctx);
       if (top !== null) tops.push(top);
     }
   }
@@ -167,8 +301,10 @@ async function evaluateCandidate(
   // 2. Inspect the footprint volume and the ground layer.
   for (let dx = 0; dx < size.x; dx++) {
     for (let dz = 0; dz < size.z; dz++) {
+      if (budgetExceeded(ctx)) return null;
+
       // Ground layer just below the floor.
-      const ground = await probe(origin.x + dx, originY - 1, origin.z + dz);
+      const ground = await timedProbe(probe, origin.x + dx, originY - 1, origin.z + dz, ctx);
       if (isLog(ground)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
       else if (isVeg(ground)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
       if (isFluid(ground)) { obstacles.fluid++; penalty += FLUID_PENALTY; }
@@ -176,7 +312,8 @@ async function evaluateCandidate(
 
       // Column inside the footprint — looking for trees / spawners / player builds.
       for (let dy = 0; dy < size.y; dy++) {
-        const b = await probe(origin.x + dx, originY + dy, origin.z + dz);
+        if (budgetExceeded(ctx)) return null;
+        const b = await timedProbe(probe, origin.x + dx, originY + dy, origin.z + dz, ctx);
         if (!b || b.name === 'air' || b.name === 'cave_air') continue;
         if (isLog(b)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
         else if (isVeg(b)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
@@ -187,7 +324,8 @@ async function evaluateCandidate(
 
       // Sky clearance — partial roofing / cave ceilings penalised.
       for (let dy = 0; dy < SKY_CLEARANCE; dy++) {
-        const top = await probe(origin.x + dx, originY + size.y + dy, origin.z + dz);
+        if (budgetExceeded(ctx)) break;
+        const top = await timedProbe(probe, origin.x + dx, originY + size.y + dy, origin.z + dz, ctx);
         if (top && top.name !== 'air' && top.name !== 'cave_air') {
           penalty += ROOF_PENALTY;
         }
@@ -220,10 +358,18 @@ async function evaluateCandidate(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
 /**
  * Main entry. `refPos` is typically the probe bot's current position.
  * Returns the best candidate found, or `null` if no spot meets the flatness
  * requirement within either radius (caller should refuse to build).
+ *
+ * Throws if the overall deadline is reached and no qualifying candidate has
+ * been found yet — the caller should treat this as "abort and retry" rather
+ * than an infinite hang.
  */
 export async function selectBuildSite(
   probe: BlockProbe,
@@ -237,17 +383,48 @@ export async function selectBuildSite(
   const maxCandidates = options.maxCandidates ?? (large ? 12 : DEFAULT_MAX_CANDIDATES);
   const radius1 = options.radius ?? DEFAULT_RADIUS;
   const radius2 = options.fallbackRadius ?? DEFAULT_FALLBACK_RADIUS;
+  const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
+  const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
+  const maxProbes = options.maxProbes ?? DEFAULT_MAX_PROBES;
 
   const refX = Math.floor(refPos.x);
   const refZ = Math.floor(refPos.z);
   const refY = Math.floor(refPos.y);
 
+  const ctx: SearchContext = {
+    deadlineAt: Date.now() + deadlineMs,
+    maxProbes,
+    probeTimeoutMs,
+    probeCount: 0,
+  };
+
+  // Best qualifying candidate seen so far across both radius passes. Used as
+  // the return value if the deadline fires mid-search.
+  let bestSoFar: SiteCandidate | null = null;
+
   for (const radius of [radius1, radius2]) {
     const scored: SiteCandidate[] = [];
+
     for (const { dx, dz } of spiralOffsets(step, radius, maxCandidates)) {
-      const cand = await evaluateCandidate(probe, refX + dx, refZ + dz, size, refY, refPos, flatTol);
-      if (cand && cand.score > 0) scored.push(cand);
+      // Check deadline/probe-budget before each candidate (fast path).
+      if (budgetExceeded(ctx)) {
+        logger.warn(
+          { probeCount: ctx.probeCount, maxProbes, deadlineMs, refPos },
+          'SiteSelector: budget/deadline reached mid-search',
+        );
+        if (bestSoFar) return bestSoFar;
+        throw new Error(
+          `site selection timed out after ${deadlineMs}ms (no usable candidate near ${refX},${refZ})`,
+        );
+      }
+
+      const cand = await evaluateCandidate(probe, refX + dx, refZ + dz, size, refY, refPos, flatTol, ctx);
+      if (cand && cand.score > 0) {
+        scored.push(cand);
+        if (!bestSoFar || cand.score > bestSoFar.score) bestSoFar = cand;
+      }
     }
+
     if (scored.length > 0) {
       scored.sort((a, b) => b.score - a.score);
       const best = scored[0];
@@ -258,6 +435,7 @@ export async function selectBuildSite(
         reasons: best.reasons,
         radius,
         considered: scored.length,
+        probeCount: ctx.probeCount,
       }, 'SiteSelector: chose site');
       return best;
     }

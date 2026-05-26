@@ -450,7 +450,7 @@ export function createAPIServer(
   });
 
   // ── Build & Supply Chain coordinators ──
-  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog);
+  const buildCoordinator = new BuildCoordinator(botManager, io, eventLog, config);
   const campaignManager = new CampaignManager(botManager, buildCoordinator, io, eventLog);
   const chainCoordinator = new ChainCoordinator(botManager, io, eventLog);
 

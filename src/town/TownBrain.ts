@@ -766,6 +766,15 @@ export class TownBrain {
         connectedNames,
         {
           originMode: 'auto-flat',
+          // Without these the chosen site is taken as-is. SiteSelector picks
+          // the flattest spot but natural terrain still has tree stumps,
+          // grass tufts, and small mounds inside the footprint. clearSite
+          // removes the obstacles; snapToGround flattens the foundation to
+          // a single Y so the schematic's first layer lands consistently.
+          // Required for autonomous overnight runs where there's no
+          // operator to pre-prep the ground.
+          clearSite: true,
+          snapToGround: true,
           townId: this.townId,
           buildingId: building.id,
           onStarted: (j) => {

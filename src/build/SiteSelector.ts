@@ -81,8 +81,14 @@ export type BlockProbe = (x: number, y: number, z: number) => Promise<ProbedBloc
 const DEFAULT_RADIUS = 24;
 const DEFAULT_FALLBACK_RADIUS = 48;
 const DEFAULT_STEP = 4;
-const DEFAULT_FLAT_TOL_SMALL = 2;
-const DEFAULT_FLAT_TOL_LARGE = 4;
+// Natural terrain (even "flat" overworld) commonly has 4-6 block variance over
+// a 30-block window, so the previous 2/4 tolerances rejected practically every
+// realistic candidate around an LLM-designed town capital. The pre-job
+// snapToGround + clearSite passes flatten the chosen site by up to ~4 blocks
+// anyway, so loosening these is safe — and the alternative is "TownBrain
+// rejects every candidate and the town never grows past hand-placed builds".
+const DEFAULT_FLAT_TOL_SMALL = 4;
+const DEFAULT_FLAT_TOL_LARGE = 8;
 const DEFAULT_MAX_CANDIDATES = 24;
 const DEFAULT_PROBE_TIMEOUT_MS = 1500;
 // Sized so a single town-scale schematic (19x23 footprint, 12 high) can

@@ -316,50 +316,62 @@ export class CodeExecutor {
           });
         });
       },
-      exploreUntil: async (direction: { x: number; y: number; z: number } | string, maxTime = 60, callback: () => any) => {
+      exploreUntil: async (direction: any, maxTime = 60, callback: () => any) => {
         throwIfInterrupted();
         const cleanupTrace = addMovementTrace('exploreUntil');
-        // Translate common string directions ('north', 'forward', etc.) into the {x,y,z} form.
-        // The LLM-generated skill library frequently passes strings here, and rejecting them
-        // breaks ~25% of the saved skills. Map known names; pick a random horizontal for unknowns.
-        if (typeof direction === 'string') {
-          const map: Record<string, { x: number; y: number; z: number }> = {
-            north: { x: 0, y: 0, z: -1 },
-            south: { x: 0, y: 0, z: 1 },
-            east: { x: 1, y: 0, z: 0 },
-            west: { x: -1, y: 0, z: 0 },
-            up: { x: 0, y: 1, z: 0 },
-            down: { x: 0, y: -1, z: 0 },
-            forward: { x: 1, y: 0, z: 0 },
-            backward: { x: -1, y: 0, z: 0 },
-            horizontal: { x: 1, y: 0, z: 0 },
-            outward: { x: 1, y: 0, z: 0 },
-          };
-          const key = direction.toLowerCase();
-          const mapped = map[key];
-          if (mapped) {
-            pushLog(`[primitive] exploreUntil: translated string direction "${direction}" to ${JSON.stringify(mapped)}`);
-            direction = mapped;
-          } else {
-            pushLog(`[primitive] exploreUntil: unknown string direction "${direction}", defaulting to {x:1,y:0,z:0}`);
-            direction = { x: 1, y: 0, z: 0 };
+        // LLM codegen produces wildly varied shapes here: strings ('north'),
+        // arrays ([1,0,0]), bare numbers, options-bag objects without xyz
+        // ({behavior:'vertical',maxDistance:32}), nested {direction:...}, etc.
+        // Coerce everything into a valid discrete {x,y,z} (each in {-1,0,1},
+        // not 0,0,0) and default to east on garbage rather than throwing —
+        // throwing makes the LLM regenerate the same wrong shape on retry.
+        const STRING_MAP: Record<string, { x: number; y: number; z: number }> = {
+          north: { x: 0, y: 0, z: -1 },
+          south: { x: 0, y: 0, z: 1 },
+          east: { x: 1, y: 0, z: 0 },
+          west: { x: -1, y: 0, z: 0 },
+          up: { x: 0, y: 1, z: 0 },
+          down: { x: 0, y: -1, z: 0 },
+          forward: { x: 1, y: 0, z: 0 },
+          backward: { x: -1, y: 0, z: 0 },
+          horizontal: { x: 1, y: 0, z: 0 },
+          outward: { x: 1, y: 0, z: 0 },
+          any: { x: 1, y: 0, z: 0 },
+          vertical: { x: 0, y: 1, z: 0 },
+        };
+        const FALLBACK = { x: 1, y: 0, z: 0 };
+        const isFiniteNum = (v: any): v is number => typeof v === 'number' && Number.isFinite(v);
+        const sign = (n: number): number => (n > 0 ? 1 : n < 0 ? -1 : 0);
+        const tryCoerce = (raw: any): { x: number; y: number; z: number } | null => {
+          if (typeof raw === 'string') return STRING_MAP[raw.toLowerCase()] ?? null;
+          if (Array.isArray(raw) && raw.length === 3 && raw.every(isFiniteNum)) {
+            return { x: sign(raw[0]), y: sign(raw[1]), z: sign(raw[2]) };
+          }
+          if (raw && typeof raw === 'object' && isFiniteNum(raw.x) && isFiniteNum(raw.y) && isFiniteNum(raw.z)) {
+            return { x: sign(raw.x), y: sign(raw.y), z: sign(raw.z) };
+          }
+          return null;
+        };
+        const original = direction;
+        let normalized = tryCoerce(direction);
+        // Unwrap one level of nesting if the first attempt failed and an inner key looks promising.
+        if (!normalized && direction && typeof direction === 'object') {
+          for (const key of ['direction', 'dir', 'vec', 'vector']) {
+            if (direction[key] !== undefined) {
+              normalized = tryCoerce(direction[key]);
+              if (normalized) break;
+            }
           }
         }
+        if (!normalized || (normalized.x === 0 && normalized.y === 0 && normalized.z === 0)) {
+          pushLog(`[primitive] exploreUntil: unrecognized direction ${JSON.stringify(original)}, defaulting to {x:1,y:0,z:0}`);
+          normalized = { ...FALLBACK };
+        } else if (typeof original !== 'object' || Array.isArray(original) || original.x !== normalized.x || original.y !== normalized.y || original.z !== normalized.z) {
+          pushLog(`[primitive] exploreUntil: coerced direction ${JSON.stringify(original)} -> ${JSON.stringify(normalized)}`);
+        }
+        direction = normalized;
         pushLog(`[primitive] exploreUntil(${JSON.stringify(direction)}, ${maxTime}s)`);
         pushEvent('primitive_start', 'exploreUntil started', { primitive: 'exploreUntil', direction, maxTime });
-        if (!direction || typeof direction.x !== 'number' || typeof direction.y !== 'number' || typeof direction.z !== 'number') {
-          pushLog(`[primitive] exploreUntil: invalid direction argument ${JSON.stringify(direction)}`);
-          pushEvent('primitive_failure', 'exploreUntil invalid direction', { primitive: 'exploreUntil', direction });
-          cleanupTrace();
-          throw new Error('exploreUntil requires direction { x, y, z }');
-        }
-        const validAxis = [direction.x, direction.y, direction.z].every((value) => value === -1 || value === 0 || value === 1);
-        if (!validAxis || (direction.x === 0 && direction.y === 0 && direction.z === 0)) {
-          pushLog(`[primitive] exploreUntil: invalid discrete direction ${JSON.stringify(direction)}`);
-          pushEvent('primitive_failure', 'exploreUntil invalid discrete direction', { primitive: 'exploreUntil', direction });
-          cleanupTrace();
-          throw new Error('exploreUntil direction must use only -1, 0, or 1 and cannot be 0,0,0');
-        }
         const startTime = Date.now();
         const dir = new Vec3(direction.x, direction.y, direction.z);
         return await new Promise<any>((resolve, reject) => {

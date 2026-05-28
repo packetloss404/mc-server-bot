@@ -40,7 +40,8 @@ const CREATE_STATEMENTS = [
     alliance_state TEXT,
     parent_town_id TEXT,
     style_seed TEXT,
-    config_json TEXT
+    config_json TEXT,
+    paused INTEGER DEFAULT 0
   )`,
   `CREATE TABLE IF NOT EXISTS residents (
     id TEXT PRIMARY KEY,
@@ -197,6 +198,18 @@ const MIGRATIONS: Array<(sqlite: Database.Database) => void> = [
   (sqlite) => {
     try {
       sqlite.exec(`ALTER TABLE approvals ADD COLUMN handler_descriptor_json TEXT`);
+    } catch (err: any) {
+      if (!/duplicate column/i.test(String(err?.message ?? ''))) throw err;
+    }
+  },
+  // 2026-05-28: persist TownBrain paused flag to the towns table so an
+  // operator-issued /api/towns/<id>/pause survives systemctl restart. Prior
+  // behaviour kept the flag in-memory only on the brain, so every restart
+  // resumed the brain and reopened any planning loops the pause was meant
+  // to stop.
+  (sqlite) => {
+    try {
+      sqlite.exec(`ALTER TABLE towns ADD COLUMN paused INTEGER DEFAULT 0`);
     } catch (err: any) {
       if (!/duplicate column/i.test(String(err?.message ?? ''))) throw err;
     }

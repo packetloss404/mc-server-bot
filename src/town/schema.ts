@@ -28,6 +28,8 @@ export const towns = sqliteTable('towns', {
   styleSeed: text('style_seed'),
   // serialised JSON: mayor info, sliders, etc.
   configJson: text('config_json'),
+  // TownBrain paused flag — persisted so an operator pause survives restart.
+  paused: integer('paused', { mode: 'boolean' }).default(false),
 });
 
 export const residents = sqliteTable('residents', {

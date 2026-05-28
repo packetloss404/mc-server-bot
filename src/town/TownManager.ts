@@ -501,25 +501,52 @@ export class TownManager {
       }
     }
     this.townBrains.set(townId, brain);
+    // If the operator paused this town in a previous process, the flag was
+    // persisted to the towns table — apply it BEFORE starting so the first
+    // tick is already paused and no planning runs in the gap.
+    if (this.getPersistedPaused(townId)) {
+      brain.pause();
+      logger.info({ townId }, 'startBrain: applied persisted paused flag');
+    }
     brain.start();
     return brain;
+  }
+
+  /** Read the persisted paused flag for a town. Returns false for unknown towns. */
+  private getPersistedPaused(townId: string): boolean {
+    const row = this.db
+      .select({ paused: schema.towns.paused })
+      .from(schema.towns)
+      .where(eq(schema.towns.id, townId))
+      .get();
+    return row?.paused === true;
   }
 
   /** Pause the brain for a town. Returns false when the town is unknown. */
   pauseTown(townId: string): boolean {
     if (!this.getTown(townId)) return false;
+    // Persist BEFORE touching the in-memory brain so a crash between the two
+    // doesn't leave the brain paused with a stale paused=false in the DB.
+    this.db
+      .update(schema.towns)
+      .set({ paused: true })
+      .where(eq(schema.towns.id, townId))
+      .run();
     const brain = this.townBrains.get(townId);
-    if (!brain) return false;
-    brain.pause();
+    if (brain) brain.pause();
     return true;
   }
 
   /** Resume a paused brain. Returns false when the town is unknown. */
   resumeTown(townId: string): boolean {
     if (!this.getTown(townId)) return false;
+    this.db
+      .update(schema.towns)
+      .set({ paused: false })
+      .where(eq(schema.towns.id, townId))
+      .run();
     const brain = this.townBrains.get(townId);
-    if (!brain) return false;
-    brain.resume();
+    if (brain) brain.resume();
     return true;
   }
 

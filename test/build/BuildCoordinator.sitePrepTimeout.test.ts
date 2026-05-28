@@ -177,22 +177,22 @@ describe('BuildCoordinator sitePrepTimeoutMs config plumbing', () => {
     expect((coord as any).sitePrepTimeoutMs).toBe(99_000);
   });
 
-  it('falls back to 150000 when config.build is absent', () => {
+  it('falls back to 240000 when config.build is absent', () => {
     const coord = new BuildCoordinator(
       makeBotManagerStub() as any,
       makeIoStub(),
       makeEventLogStub(),
     );
-    expect((coord as any).sitePrepTimeoutMs).toBe(150_000);
+    expect((coord as any).sitePrepTimeoutMs).toBe(240_000);
   });
 
-  it('falls back to 150000 when config is provided but build section is missing', () => {
+  it('falls back to 240000 when config is provided but build section is missing', () => {
     const coord = new BuildCoordinator(
       makeBotManagerStub() as any,
       makeIoStub(),
       makeEventLogStub(),
       { voyager: {} } as any,
     );
-    expect((coord as any).sitePrepTimeoutMs).toBe(150_000);
+    expect((coord as any).sitePrepTimeoutMs).toBe(240_000);
   });
 });

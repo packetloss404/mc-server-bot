@@ -139,7 +139,11 @@ const AUTOGATHER_DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
  * Overridden by `config.build.sitePrepTimeoutMs` or by the per-call
  * `options.sitePrepTimeoutMs` knob (lowest wins).
  */
-const SITE_PREP_DEFAULT_TIMEOUT_MS = 150_000; // 2.5 minutes
+const SITE_PREP_DEFAULT_TIMEOUT_MS = 240_000; // 4 minutes — matches the
+// raised SiteSelector deadline (180s) with headroom for the other pre-job
+// phases (resolveOrigin, sampleSurfaceY, prepareBunkerSite, optional
+// clearSite/snapToGround). Raised from 2.5min when SiteSelector's budget was
+// bumped to handle realistic town-scale (19x23+) schematic footprints.
 
 // ── Build Coordinator ───────────────────────────────────────
 

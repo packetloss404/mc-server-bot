@@ -85,8 +85,12 @@ const DEFAULT_FLAT_TOL_SMALL = 2;
 const DEFAULT_FLAT_TOL_LARGE = 4;
 const DEFAULT_MAX_CANDIDATES = 24;
 const DEFAULT_PROBE_TIMEOUT_MS = 1500;
-const DEFAULT_DEADLINE_MS = 60_000;
-const DEFAULT_MAX_PROBES = 4000;
+// Sized so a single town-scale schematic (19x23 footprint, 12 high) can
+// evaluate multiple candidates. 4000-probe / 60s budget was tuned when small
+// hand-authored .schem files were the norm; LLM-designed buildings routinely
+// exceed 400 columns and need ~10k probes per candidate evaluation.
+const DEFAULT_DEADLINE_MS = 180_000;
+const DEFAULT_MAX_PROBES = 20_000;
 
 const SKY_CLEARANCE = 2;
 const NEAR_FALLOFF = 12;
@@ -285,12 +289,18 @@ async function evaluateCandidate(
       if (top !== null) tops.push(top);
     }
   }
-  if (tops.length < (size.x * size.z) / 2) return null; // mostly void/cave
+  if (tops.length < (size.x * size.z) / 2) {
+    logger.debug({ seedX, seedZ, foundCols: tops.length, neededCols: Math.ceil((size.x * size.z) / 2), size, refY }, 'SiteSelector: candidate rejected — too few solid columns');
+    return null;
+  }
 
   const minY = Math.min(...tops);
   const maxY = Math.max(...tops);
   const range = maxY - minY;
-  if (range > flatTol) return null; // too uneven
+  if (range > flatTol) {
+    logger.debug({ seedX, seedZ, range, flatTol, minY, maxY, size }, 'SiteSelector: candidate rejected — too uneven');
+    return null;
+  }
 
   const originY = minY + 1; // build floor sits one above the dominant terrain Y
   const origin = { x: seedX, y: originY, z: seedZ };
@@ -348,6 +358,7 @@ async function evaluateCandidate(
   if (sunlit) reasons.push('open to sky');
 
   const confidence = Math.max(0, Math.min(1, (score - 50) / 100));
+  logger.debug({ origin, score, confidence, range, obstacles, size }, 'SiteSelector: candidate evaluated');
   return {
     origin,
     score: Math.max(0, score),

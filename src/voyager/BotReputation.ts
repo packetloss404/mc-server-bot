@@ -49,11 +49,18 @@ const DEFAULT_IMPACTS: Record<ReputationEvent['type'], number> = {
 
 const DECAY_HALF_LIFE_MS = 24 * 60 * 60 * 1000; // 24 hours
 const DEBOUNCE_MS = 2000;
+// Hard cap on events retained. ~5000 covers the 14-day decay window even at
+// elevated traffic (we observed ~70 events/hr). Without it the array grew to
+// 4,986 entries over 3 weeks because decay() was never called.
+const MAX_EVENTS_RETAINED = 5000;
+// How often to call decay() — drops events older than 14 days. Cheap O(N).
+const DECAY_INTERVAL_MS = 60 * 60 * 1000; // hourly
 
 export class BotReputation {
   private events: ReputationEvent[] = [];
   private filePath: string;
   private saveTimer: ReturnType<typeof setTimeout> | null = null;
+  private decayTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(dataDir: string) {
     this.filePath = path.join(dataDir, 'bot_reputation.json');
@@ -61,6 +68,15 @@ export class BotReputation {
       fs.mkdirSync(dataDir, { recursive: true });
     }
     this.load();
+    // Auto-schedule decay. The class had a decay() method since inception but
+    // no caller ever invoked it, so events accumulated indefinitely. unref()
+    // so the timer doesn't keep the process alive on shutdown.
+    this.decayTimer = setInterval(() => {
+      try { this.decay(); } catch (err: any) {
+        logger.warn({ err: err?.message }, '[Reputation] decay tick threw; continuing');
+      }
+    }, DECAY_INTERVAL_MS);
+    this.decayTimer.unref?.();
   }
 
   recordEvent(event: ReputationEvent): void {
@@ -74,6 +90,11 @@ export class BotReputation {
       event.timestamp = Date.now();
     }
     this.events.push(event);
+    // Hard cap defends against the case where decay's age filter can't keep
+    // up (e.g. a burst of failures). Trim to most-recent N when over.
+    if (this.events.length > MAX_EVENTS_RETAINED) {
+      this.events = this.events.slice(-MAX_EVENTS_RETAINED);
+    }
     logger.info(`[Reputation] ${event.botName}: ${event.type} (impact ${event.impact.toFixed(2)}) - ${event.description}`);
     this.scheduleSave();
   }

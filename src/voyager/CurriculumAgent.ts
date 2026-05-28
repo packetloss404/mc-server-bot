@@ -442,6 +442,14 @@ Propose the next task:`;
         logger.info({ task: proposedTask.description }, 'Curriculum proposed infeasible task, falling back to static');
         return this.proposeStaticTask(personality);
       }
+      // BlockerMemory records persistent failures across restarts. Suppress
+      // re-proposal once a task has failed >=2 times — otherwise the in-memory
+      // cooldown counter (proposalCounts) resets every restart and the LLM
+      // keeps re-proposing the same dead-end task forever.
+      if (this.blockerMemory.hasStrongBlocker(proposedTask)) {
+        logger.info({ task: proposedTask.description }, 'Curriculum: task has strong blocker (count>=2), falling back to static');
+        return this.proposeStaticTask(personality);
+      }
       if (this.isOnCooldown(proposedTask.description)) {
         logger.info({ task: proposedTask.description }, 'Curriculum: LLM-proposed task is on cooldown, falling back to static');
         return this.proposeStaticTask(personality);

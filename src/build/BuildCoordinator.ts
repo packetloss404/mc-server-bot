@@ -1246,6 +1246,10 @@ export class BuildCoordinator {
       }
     }
 
+    // Same delayed eviction as natural completion — a cancelled job's body
+    // (assignments + per-block arrays) still pins memory until evicted.
+    this.scheduleTerminalJobEviction(jobId);
+
     this.io.emit('build:cancelled', { jobId, placedBlocksAtCancel: placedAtCancel, totalBlocks: job.totalBlocks });
     this.eventLog.push({
       type: 'build:cancelled',
@@ -1595,6 +1599,29 @@ export class BuildCoordinator {
     // Cleanup cancellation & reassignment tracking
     this.cancelledJobs.delete(jobId);
     this.reassignQueues.delete(jobId);
+
+    // Schedule a delayed eviction of the terminal job + companion maps so the
+    // dashboard can still show "just finished" reads, but the job objects
+    // (which carry the full assignments/placedBlocks arrays — up to ~500KB
+    // each for a town hall) don't pin memory forever. 1h grace covers any
+    // realistic dashboard refresh window. Resumed jobs aren't affected: the
+    // hook runs only after a job reaches a terminal status.
+    this.scheduleTerminalJobEviction(jobId);
+  }
+
+  /** Drop a terminal job + all companion-map entries after the grace window. */
+  private scheduleTerminalJobEviction(jobId: string, graceMs: number = 60 * 60 * 1000): void {
+    const t = setTimeout(() => {
+      this.jobs.delete(jobId);
+      this.jobOptions.delete(jobId);
+      this.bunkerContext.delete(jobId);
+      this.gatherJobs.delete(jobId);
+      this.cancelledJobs.delete(jobId);
+      this.reassignQueues.delete(jobId);
+      this.persistJobs();
+      logger.debug({ jobId }, 'BuildCoordinator: evicted terminal job from in-memory maps');
+    }, graceMs);
+    t.unref?.();
   }
 
   /**

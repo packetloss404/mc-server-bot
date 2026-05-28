@@ -117,6 +117,29 @@ async function main() {
     botManager.getAffinityManager().decayTowardDefault();
   }, 60000);
 
+  // Global memory-maintenance loop. Runs the cheap GC passes that lower the
+  // baseline RSS regardless of any per-town state. Specifically required
+  // because BlackboardManager.gcTerminalTasks was previously only called from
+  // ScheduleManager.maybeRunGc → TownBrain.tick — and TownBrain.tick early-
+  // returns when the town is paused, so a paused town's GC never fires and
+  // the blackboard pile (4900+ terminal tasks observed pre-fix) stays in mem.
+  // 10min cadence is plenty for housekeeping; methods are idempotent so the
+  // ScheduleManager path can keep calling the same ones on an unpaused town.
+  const MAINT_INTERVAL_MS = 10 * 60 * 1000;
+  const MAINT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+  setInterval(() => {
+    try {
+      const bb = botManager.getBlackboardManager();
+      const stale = bb.gcStaleScheduleTasks?.(MAINT_MAX_AGE_MS) ?? 0;
+      const terminal = bb.gcTerminalTasks?.(MAINT_MAX_AGE_MS) ?? 0;
+      if (stale > 0 || terminal > 0) {
+        logger.info({ stale, terminal, maxAgeMs: MAINT_MAX_AGE_MS }, 'Maintenance: blackboard GC swept stale rows');
+      }
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'Maintenance: blackboard GC threw; continuing');
+    }
+  }, MAINT_INTERVAL_MS);
+
   // DungeonMaster: evaluate world state and generate events every 60s
   setInterval(() => {
     try {

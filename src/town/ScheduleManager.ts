@@ -261,6 +261,24 @@ export class ScheduleManager {
         'ScheduleManager: gcStaleScheduleTasks threw; continuing',
       );
     }
+    // Also GC terminal tasks (blocked/completed/failed) — these accumulate
+    // forever because blockTask/completeTask just flip status, nothing else
+    // evicts them. Without this the blackboard grows ~75 blocked rows/hr in
+    // steady state and getState() reads scale O(N) over the pile.
+    try {
+      const removed = this.blackboard.gcTerminalTasks?.(ScheduleManager.GC_MAX_AGE_MS) ?? 0;
+      if (removed > 0) {
+        logger.info(
+          { removed, maxAgeMs: ScheduleManager.GC_MAX_AGE_MS },
+          'ScheduleManager: GC removed terminal blackboard tasks',
+        );
+      }
+    } catch (err: any) {
+      logger.warn(
+        { err: err?.message },
+        'ScheduleManager: gcTerminalTasks threw; continuing',
+      );
+    }
   }
 
   /** Read-only — the task descriptions for a role/phase pair. */

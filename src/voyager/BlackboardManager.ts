@@ -253,7 +253,16 @@ export class BlackboardManager {
     this.persist();
   }
 
-  getState(): BlackboardState { return JSON.parse(JSON.stringify(this.state)); }
+  /**
+   * Returns the live state object. Treat as read-only — callers must NOT
+   * mutate the returned object or its nested arrays. The three current
+   * consumers (HTTP API serializer, worker-thread IPC, BlackboardProxy) all
+   * serialize the result for transport, so they don't need a defensive copy.
+   * The previous JSON.parse(JSON.stringify(...)) deep clone allocated ~5MB of
+   * transient garbage on every dashboard refresh when `state.tasks` grew to
+   * thousands of entries.
+   */
+  getState(): Readonly<BlackboardState> { return this.state; }
   getRecentMessages(limit = 20): BlackboardMessage[] { return this.state.messages.slice(-limit).reverse(); }
   getSwarmGoal(): BlackboardGoal | null { return this.state.swarmGoal; }
 
@@ -341,6 +350,46 @@ export class BlackboardManager {
     const removed = before - this.state.tasks.length;
     if (removed > 0) {
       this.postMessage('system', 'info', `GC removed ${removed} stale schedule task(s).`);
+      this.persist();
+    }
+    return removed;
+  }
+
+  /**
+   * GC tasks in terminal status (blocked/completed/failed) older than
+   * `maxAgeMs`. Caps the surviving terminal-task set at `maxTerminalRetained`
+   * (most-recent wins) so a sudden burst of failures doesn't outpace the age
+   * cutoff. Pending/claimed tasks are never touched here — they belong to
+   * `gcStaleScheduleTasks` / `releaseStale`. Returns the count removed.
+   *
+   * Without this GC the blackboard accumulated thousands of `blocked` rows
+   * (4,327 observed on 2026-05-28) since `blockTask` only flips status and
+   * nothing else evicts terminal entries. The pile bloats blackboard.json and
+   * makes every `getState()` read deep-walk the array, so the GC also helps
+   * lower per-read CPU.
+   */
+  gcTerminalTasks(maxAgeMs: number = 24 * 60 * 60 * 1000, maxTerminalRetained: number = 500): number {
+    const cutoff = Date.now() - maxAgeMs;
+    const isTerminal = (s: BlackboardTask['status']) =>
+      s === 'blocked' || s === 'completed';
+    const before = this.state.tasks.length;
+    this.state.tasks = this.state.tasks.filter((task) => {
+      if (!isTerminal(task.status)) return true;
+      return (task.updatedAt ?? task.createdAt) >= cutoff;
+    });
+    // Even after the age cutoff, cap the terminal-task set so a recent burst
+    // can't keep more than `maxTerminalRetained` in memory.
+    const terminal = this.state.tasks.filter((t) => isTerminal(t.status));
+    if (terminal.length > maxTerminalRetained) {
+      terminal.sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+      const keepIds = new Set(terminal.slice(0, maxTerminalRetained).map((t) => t.id));
+      this.state.tasks = this.state.tasks.filter((t) => !isTerminal(t.status) || keepIds.has(t.id));
+    }
+    const removed = before - this.state.tasks.length;
+    if (removed > 0) {
+      // Skip the postMessage chain here — gcTerminalTasks can prune hundreds
+      // of rows at once and posting a message per call would itself pollute
+      // the messages array. Just persist quietly.
       this.persist();
     }
     return removed;

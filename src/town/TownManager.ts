@@ -1205,6 +1205,13 @@ export class TownManager {
    */
   deleteBuilding(buildingId: string): void {
     try {
+      // style_observations has a FK to buildings(id); SQLite blocks the
+      // delete without cascade. Drop the child rows first. (Documented the
+      // hard way on 2026-05-26 when the manual cleanup pass kept failing.)
+      this.db
+        .delete(schema.styleObservations)
+        .where(eq(schema.styleObservations.buildingId, buildingId))
+        .run();
       this.db
         .delete(schema.buildings)
         .where(eq(schema.buildings.id, buildingId))

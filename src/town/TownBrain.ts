@@ -83,6 +83,16 @@ const DIPLOMACY_TRIGGER_COOLDOWN_MS = 10 * 60 * 1000;
 
 const TICK_INTERVAL_MS = 60_000;
 
+/**
+ * After N consecutive failures to start a build for the same kind in this
+ * town, wait min(N * BUILD_FAILURE_BASE_MS, BUILD_FAILURE_MAX_MS) before
+ * retrying that kind. Stops the buildLoop from re-firing every tick when a
+ * specific kind keeps failing (e.g. SiteSelector can't find flat ground near
+ * the capital for a town_hall). Cleared on a successful completion.
+ */
+const BUILD_FAILURE_COOLDOWN_BASE_MS = 5 * 60 * 1000;
+const BUILD_FAILURE_COOLDOWN_MAX_MS = 30 * 60 * 1000;
+
 export interface TownBrainStatus {
   townId: string;
   running: boolean;
@@ -107,6 +117,12 @@ export class TownBrain {
   private tickCount = 0;
   /** Prevent overlapping ticks if a tick runs longer than the interval. */
   private tickInFlight = false;
+  /**
+   * Per-kind cooldown for build-start failures. See BUILD_FAILURE_COOLDOWN_*
+   * above. Stays in memory only; a restart resets all counters, which is fine
+   * — restart is itself the most aggressive "try again" signal.
+   */
+  private buildFailureCooldown: Map<string, { until: number; consecutive: number }> = new Map();
   /**
    * Snapshot of the most recent resource shortages from the demand loop,
    * handed to the role loop on the same tick. Cleared each tick.
@@ -583,10 +599,55 @@ export class TownBrain {
       const have = haveCounts[item.kind] ?? 0;
       if (have >= item.count) continue;
       if (!item.required) continue;
+      if (this.isKindOnCooldown(item.kind)) {
+        logger.debug(
+          { townId: this.townId, kind: item.kind, cooldownMs: this.cooldownRemainingMs(item.kind) },
+          'TownBrain build: kind on cooldown after consecutive failures, skipping',
+        );
+        continue;
+      }
       await this.queuePlanItem(town, item, live);
       // ONE per tick — bail after we've queued the first gap.
       return;
     }
+  }
+
+  /**
+   * Record a build-start failure for a kind and arm an exponential cooldown
+   * (5min × consecutive, capped at 30min). The next buildLoop pass skips
+   * this kind until the cooldown expires. Cleared on a successful completion.
+   */
+  private recordBuildFailure(kind: string): void {
+    const existing = this.buildFailureCooldown.get(kind);
+    const consecutive = (existing?.consecutive ?? 0) + 1;
+    const delayMs = Math.min(consecutive * BUILD_FAILURE_COOLDOWN_BASE_MS, BUILD_FAILURE_COOLDOWN_MAX_MS);
+    this.buildFailureCooldown.set(kind, { until: Date.now() + delayMs, consecutive });
+    logger.warn(
+      { townId: this.townId, kind, consecutive, retryInMs: delayMs },
+      'TownBrain build: kind cooldown armed after consecutive failure',
+    );
+  }
+
+  private isKindOnCooldown(kind: string): boolean {
+    const entry = this.buildFailureCooldown.get(kind);
+    if (!entry) return false;
+    if (entry.until <= Date.now()) {
+      // Cooldown expired but we keep the `consecutive` count so a follow-up
+      // failure escalates from the same step rather than restarting at 5min.
+      // The map entry is only fully cleared on success.
+      return false;
+    }
+    return true;
+  }
+
+  private cooldownRemainingMs(kind: string): number {
+    const entry = this.buildFailureCooldown.get(kind);
+    if (!entry) return 0;
+    return Math.max(0, entry.until - Date.now());
+  }
+
+  private clearBuildFailureCooldown(kind: string): void {
+    this.buildFailureCooldown.delete(kind);
   }
 
   private getPlanForTown(town: Town): PlanItem[] {
@@ -719,6 +780,7 @@ export class TownBrain {
           onCompleted: (j) => {
             if (j.status === 'completed' || j.status === 'completed_with_errors') {
               this.townManager.updateBuildingStatus(building.id, 'complete');
+              this.clearBuildFailureCooldown(item.kind);
               logger.info(
                 { townId: this.townId, buildingId: building.id, jobId: j.id, status: j.status },
                 'TownBrain build: building row marked complete',
@@ -729,6 +791,7 @@ export class TownBrain {
                 'TownBrain build: build did not complete; deleting row for clean re-queue',
               );
               this.townManager.deleteBuilding(building.id);
+              this.recordBuildFailure(item.kind);
             }
           },
         },
@@ -753,8 +816,11 @@ export class TownBrain {
       );
       // startBuild threw before producing a job (or during pre-build site
       // prep). Delete the row so the kind is retried cleanly next tick instead
-      // of leaving a stuck planned/building row.
+      // of leaving a stuck planned/building row. Arm the per-kind cooldown so
+      // we don't burn worker cycles re-trying the same kind every minute when
+      // the failure is structural (e.g. SiteSelector can't find flat ground).
       this.townManager.deleteBuilding(building.id);
+      this.recordBuildFailure(item.kind);
     }
   }
 

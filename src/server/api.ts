@@ -2600,12 +2600,18 @@ export function createAPIServer(
     const maxY = parseInt(String(req.query.maxY ?? '320'));
     const minY = parseInt(String(req.query.minY ?? '-64'));
 
+    // Pick the connected bot closest to (x, z). bot.blockAt() returns null for
+    // chunks outside view distance, so a far-away probe makes the scan miss
+    // the surface and report height=null even when ground is clearly there.
     let probeHandle: any = null;
+    let bestDist = Infinity;
     for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
-        probeHandle = h;
-        break;
-      }
+      if (typeof h.isBotConnected !== 'function') continue;
+      if (!(await h.isBotConnected())) continue;
+      const pos = h.getCachedStatus?.()?.position;
+      if (!pos) { if (probeHandle === null) probeHandle = h; continue; }
+      const d = Math.hypot(pos.x - x, pos.z - z);
+      if (d < bestDist) { bestDist = d; probeHandle = h; }
     }
     if (!probeHandle) {
       res.status(503).json({ error: 'No connected bot available to scan terrain' });

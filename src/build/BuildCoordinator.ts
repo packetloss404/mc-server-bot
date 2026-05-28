@@ -798,13 +798,31 @@ export class BuildCoordinator {
     const sitePrepRemaining = (): number =>
       Math.max(1, sitePrepDeadline - Date.now());
 
-    // Find a connected bot handle EARLY so origin resolution can use it.
+    // Find the connected bot CLOSEST to the supplied origin as the probe.
+    // `bot.blockAt()` returns null for chunks outside the bot's view distance
+    // (~128-192 blocks), so a far-away probe makes every getBlockAt call read
+    // null — SiteSelector then can't find any solid ground and times out.
+    // Iterating in resident-list order would've used Greta (alphabetically
+    // first), who could be on the other side of the world from the build
+    // site. Pick by distance instead so the probe's chunks already cover the
+    // search area.
     let probeHandle: any = null;
+    let bestProbeDist = Infinity;
     for (const n of botNames) {
       const h = this.botManager.getWorker(n) as any;
-      if (h && typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
+      if (!h || typeof h.isBotConnected !== 'function') continue;
+      if (!(await h.isBotConnected())) continue;
+      const pos = h.getCachedStatus?.()?.position;
+      if (!pos) {
+        // Fall back to using a bot with unknown position only if nothing
+        // closer turns up — better than nothing.
+        if (probeHandle === null) probeHandle = h;
+        continue;
+      }
+      const d = Math.hypot(pos.x - origin.x, pos.z - origin.z);
+      if (d < bestProbeDist) {
+        bestProbeDist = d;
         probeHandle = h;
-        break;
       }
     }
 

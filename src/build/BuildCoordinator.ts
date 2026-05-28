@@ -2064,16 +2064,15 @@ export class BuildCoordinator {
         logger.warn('originMode auto-flat: no probe bot available, falling back to supplied origin');
         return fallbackOrigin;
       }
-      const status = probeHandle.getCachedStatus?.();
-      const refPos = status?.position;
-      if (!refPos) {
-        logger.warn('originMode auto-flat: probe has no cached position, falling back');
-        return fallbackOrigin;
-      }
+      // Seed the SiteSelector spiral at the CALLER's supplied origin (e.g. the
+      // town capital), not the probe bot's current position. Otherwise residents
+      // who wander far from the capital drag the search spiral with them, and
+      // SiteSelector can't find flat ground anywhere near the town centre.
+      // The probe is only used here as an IPC handle for reading blocks.
       const probe = (x: number, y: number, z: number) => probeHandle.getBlockAt(x, y, z);
-      const cand: SiteCandidate | null = await selectBuildSite(probe, refPos, schSize);
+      const cand: SiteCandidate | null = await selectBuildSite(probe, fallbackOrigin, schSize);
       if (!cand) {
-        logger.warn('originMode auto-flat: no acceptable site found near probe, using supplied origin');
+        logger.warn({ refPos: fallbackOrigin }, 'originMode auto-flat: no acceptable site found near supplied origin, using supplied origin');
         return fallbackOrigin;
       }
       logger.info({ origin: cand.origin, confidence: cand.confidence, reasons: cand.reasons }, 'Build: auto-flat site selected');

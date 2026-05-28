@@ -28,3 +28,6 @@ data/
 .claude/
 CLAUDE.md
 diagnostics/
+
+# Generated town schematics (per-town runtime artifacts)
+schematics/town_*/

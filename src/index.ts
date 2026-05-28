@@ -171,11 +171,37 @@ async function main() {
   };
 
   const startMemoryDiagnostics = () => {
+    // 60s interval — was 10s, which produced 6 log lines per minute (each ~3KB
+    // with the full bot dump) just for telemetry. 60s still gives enough
+    // resolution for drift detection without dominating the log volume.
     memoryInterval = setInterval(() => {
       const memory = process.memoryUsage();
       const heap = v8.getHeapStatistics();
       const diagnostics = botManager.getDiagnosticsSnapshot();
       const heapUsedMb = formatMb(memory.heapUsed);
+      // Best-effort collection sizes for leak hunting — wrap in try/catch so a
+      // missing manager doesn't break the diagnostic loop.
+      const collections: Record<string, number> = {};
+      try {
+        const bb = botManager.getBlackboardManager?.()?.getState?.();
+        if (bb) {
+          collections.blackboardTasks = bb.tasks?.length ?? 0;
+          collections.blackboardMessages = bb.messages?.length ?? 0;
+          collections.blackboardReservations = bb.reservations?.length ?? 0;
+        }
+        const repEvents = (botManager.getBotReputation?.() as any)?.events;
+        if (Array.isArray(repEvents)) collections.reputationEvents = repEvents.length;
+        const swm: any = botManager.getSharedWorldModel?.() ?? null;
+        if (swm) {
+          collections.exploredChunks = swm.exploredChunks?.size ?? 0;
+          collections.sharedResources = swm.resources?.length ?? 0;
+        }
+        // buildCoordinator is a local in this scope (destructured from createAPIServer).
+        const bc: any = buildCoordinator;
+        if (bc) {
+          collections.buildJobs = bc.jobs?.size ?? 0;
+        }
+      } catch { /* swallow — diagnostic must never throw */ }
 
       logger.info({
         rssMb: formatMb(memory.rss),
@@ -187,6 +213,7 @@ async function main() {
         totalHeapMb: formatMb(heap.total_heap_size),
         usedHeapMb: formatMb(heap.used_heap_size),
         totalBots: diagnostics.totalBots,
+        collections,
         bots: diagnostics.bots.map((bot: any) => ({
           name: bot.name,
           state: bot.state,
@@ -218,7 +245,7 @@ async function main() {
           captureHeapSnapshot(thresholdMb, heapUsedMb);
         }
       }
-    }, 10000);
+    }, 60_000);
   };
 
   startMemoryDiagnostics();

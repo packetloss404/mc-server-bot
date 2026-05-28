@@ -64,6 +64,13 @@ const CONFIDENCE_DECAY_PER_HOUR = 0.05;
 const STALE_RESOURCE_THRESHOLD = 0.05;
 const PERSIST_DEBOUNCE_MS = 2000;
 const MAX_RESOURCES = 500;
+/**
+ * FIFO cap on explored-chunk keys. 50k chunks * ~10 byte string = ~500KB raw
+ * + Set overhead, well above natural exploration footprints. Bots that roam
+ * past this cap evict their earliest seen chunks; the data is "we've been
+ * there" hint info, not authoritative state, so a stale window is fine.
+ */
+const MAX_EXPLORED_CHUNKS = 50_000;
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -167,6 +174,14 @@ export class SharedWorldModel {
     const key = `${chunkX},${chunkZ}`;
     if (!this.exploredChunks.has(key)) {
       this.exploredChunks.add(key);
+      // FIFO cap — Set preserves insertion order, so dropping the first key
+      // when over cap evicts the oldest seen chunk. Without this the set
+      // grew unbounded as bots roamed; 2,667 keys / ~50KB on disk observed
+      // on 2026-05-28 and there was no eviction policy at all.
+      if (this.exploredChunks.size > MAX_EXPLORED_CHUNKS) {
+        const oldest = this.exploredChunks.values().next().value;
+        if (oldest !== undefined) this.exploredChunks.delete(oldest);
+      }
       this.schedulePersist();
     }
   }

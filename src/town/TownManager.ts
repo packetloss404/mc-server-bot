@@ -29,6 +29,8 @@ import { DiplomacyManager } from './DiplomacyManager';
 import { clampTrust, DEFAULT_TRUST } from './diplomacy';
 import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
+import { ApprovalRepository } from './ApprovalRepository';
+import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
   clearFallbackFile,
@@ -56,18 +58,8 @@ type JournalRow = typeof schema.botJournals.$inferSelect;
 type ApprovalRow = typeof schema.approvals.$inferSelect;
 type RelationshipRow = typeof schema.relationships.$inferSelect;
 
-function genId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
-}
+// genId / safeJsonParse / rowToApproval now live in ./rows (shared by repos).
 
-function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
-  if (raw == null) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function rowToTown(row: TownRow): Town {
   const capital: Vec3 | null =
@@ -276,29 +268,6 @@ function rowToJournal(row: JournalRow): BotJournalEntry {
   };
 }
 
-function rowToApproval(row: ApprovalRow): Approval {
-  const votes = safeJsonParse<ApprovalVotes>(row.votesJson ?? null, { yes: [], no: [] });
-  // Defensive: an empty/legacy row may serialise as {} — normalise to arrays.
-  const safeVotes: ApprovalVotes = {
-    yes: Array.isArray(votes?.yes) ? votes.yes : [],
-    no: Array.isArray(votes?.no) ? votes.no : [],
-  };
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    kind: row.kind,
-    payload: safeJsonParse<unknown>(row.payloadJson ?? null, null),
-    status: (row.status as ApprovalStatus) ?? 'open',
-    createdAt: row.createdAt,
-    expiresAt: row.expiresAt,
-    mayorDecision:
-      row.mayorDecision === 'approved' || row.mayorDecision === 'denied'
-        ? row.mayorDecision
-        : null,
-    votes: safeVotes,
-  };
-}
-
 function rowToRelationship(row: RelationshipRow): Relationship {
   const events = safeJsonParse<RelationshipEvent[]>(row.eventsJson ?? null, []);
   return {
@@ -322,6 +291,8 @@ export class TownManager {
   private readonly dataDir: string;
   private readonly handle: TownDbHandle;
   private readonly db: TownDb;
+  /** Approvals persistence (extracted repository; TownManager delegates). */
+  private readonly approvals: ApprovalRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -374,6 +345,10 @@ export class TownManager {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
     this.handle = opts.handle ?? openTownDb(this.dataDir);
     this.db = this.handle.db;
+    this.approvals = new ApprovalRepository(
+      this.db,
+      (table, townId, row) => this.appendFallbackRow(table as FallbackKind, townId, row as Record<string, unknown>),
+    );
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -1810,6 +1785,7 @@ export class TownManager {
    * never drops a pending decision. Returns the canonical Approval — the
    * caller (ApprovalManager) registers a `resolveOnce` handler keyed by id.
    */
+  // Approvals persistence is delegated to ApprovalRepository (extracted).
   insertApproval(input: {
     townId: string;
     kind: ApprovalKind | string;
@@ -1818,60 +1794,9 @@ export class TownManager {
     expiresAt: number;
     status?: ApprovalStatus;
   }): Approval | null {
-    const id = genId('apv');
-    const status: ApprovalStatus = input.status ?? 'open';
-    const votes: ApprovalVotes = { yes: [], no: [] };
-    const approval: Approval = {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      payload: input.payload,
-      status,
-      createdAt: input.createdAt,
-      expiresAt: input.expiresAt,
-      mayorDecision: null,
-      votes,
-    };
-    try {
-      this.db
-        .insert(schema.approvals)
-        .values({
-          id,
-          townId: input.townId,
-          kind: input.kind,
-          payloadJson: input.payload == null ? null : JSON.stringify(input.payload),
-          status,
-          createdAt: input.createdAt,
-          expiresAt: input.expiresAt,
-          mayorDecision: null,
-          votesJson: JSON.stringify(votes),
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('approvals', input.townId, {
-        id,
-        townId: input.townId,
-        kind: input.kind,
-        payload: input.payload,
-        status,
-        createdAt: input.createdAt,
-        expiresAt: input.expiresAt,
-        mayorDecision: null,
-        votes,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, kind: input.kind },
-        'insertApproval: DB write failed; routed to fallback',
-      );
-    }
-    return approval;
+    return this.approvals.insertApproval(input);
   }
 
-  /**
-   * Patch an approval row. Only fields explicitly present in `patch` are
-   * touched. Returns true on a successful update, false when the row is
-   * missing or the DB write throws.
-   */
   updateApproval(
     approvalId: string,
     patch: {
@@ -1881,86 +1806,18 @@ export class TownManager {
       expiresAt?: number;
     },
   ): boolean {
-    try {
-      const current = this.db
-        .select()
-        .from(schema.approvals)
-        .where(eq(schema.approvals.id, approvalId))
-        .get();
-      if (!current) return false;
-      const fields: Partial<ApprovalRow> = {};
-      if (patch.status !== undefined) fields.status = patch.status;
-      if (patch.mayorDecision !== undefined) fields.mayorDecision = patch.mayorDecision;
-      if (patch.expiresAt !== undefined) fields.expiresAt = patch.expiresAt;
-      if (patch.votes !== undefined) {
-        fields.votesJson = JSON.stringify({
-          yes: Array.isArray(patch.votes.yes) ? patch.votes.yes : [],
-          no: Array.isArray(patch.votes.no) ? patch.votes.no : [],
-        });
-      }
-      if (Object.keys(fields).length === 0) return true;
-      this.db
-        .update(schema.approvals)
-        .set(fields)
-        .where(eq(schema.approvals.id, approvalId))
-        .run();
-      return true;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, approvalId },
-        'updateApproval: DB write failed',
-      );
-      return false;
-    }
+    return this.approvals.updateApproval(approvalId, patch);
   }
 
-  /**
-   * List approvals for a town. Filtered by status when provided; newest first
-   * by createdAt. Capped at 200 rows so a runaway queue can't blow up the
-   * response.
-   */
   listApprovals(
     townId: string,
     opts: { status?: ApprovalStatus | 'all'; limit?: number } = {},
   ): Approval[] {
-    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
-    try {
-      const whereExpr =
-        opts.status && opts.status !== 'all'
-          ? and(eq(schema.approvals.townId, townId), eq(schema.approvals.status, opts.status))
-          : eq(schema.approvals.townId, townId);
-      const rows = this.db
-        .select()
-        .from(schema.approvals)
-        .where(whereExpr)
-        .orderBy(desc(schema.approvals.createdAt))
-        .limit(limit)
-        .all();
-      return rows.map(rowToApproval);
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, townId, status: opts.status },
-        'listApprovals: read failed; returning empty list',
-      );
-      return [];
-    }
+    return this.approvals.listApprovals(townId, opts);
   }
 
   getApproval(approvalId: string): Approval | null {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.approvals)
-        .where(eq(schema.approvals.id, approvalId))
-        .get();
-      return row ? rowToApproval(row) : null;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, approvalId },
-        'getApproval: read failed',
-      );
-      return null;
-    }
+    return this.approvals.getApproval(approvalId);
   }
 
   /**

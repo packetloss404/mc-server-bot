@@ -53,6 +53,7 @@ import { registerRoutineRoutes } from './routes/routineRoutes';
 import { registerMissionCommandRoutes } from './routes/missionCommandRoutes';
 import { registerSkillRoutes } from './routes/skillRoutes';
 import { registerMetricsRoutes } from './routes/metricsRoutes';
+import { registerBuildRoutes } from './routes/buildRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -1476,147 +1477,8 @@ export function createAPIServer(
   registerSchematicRoutes(app, { buildCoordinator, schematicMatcher, schematicsDir });
 
   // List all build jobs
-  app.get('/api/builds', (_req: Request, res: Response) => {
-    res.json({ builds: buildCoordinator.getAllBuildJobs() });
-  });
-
-  // Create a new build job
-  app.post('/api/builds', asyncH(async (req: Request, res: Response) => {
-    const { schematicFile, origin, botNames, options } = req.body ?? {};
-    const originMode = options?.originMode ?? 'coords';
-    const originRequired = originMode === 'coords';
-    if (!schematicFile || !botNames || !Array.isArray(botNames) || botNames.length === 0) {
-      res.status(400).json({ error: 'schematicFile and botNames[] are required' });
-      return;
-    }
-    if (!isSafeFilename(schematicFile)) {
-      res.status(400).json({ error: 'invalid schematicFile' });
-      return;
-    }
-    if (originRequired && !origin) {
-      res.status(400).json({ error: 'origin {x,y,z} is required when originMode is "coords" (default)' });
-      return;
-    }
-    // Validate `mode` if present so a typo doesn't silently fall back to surface.
-    const requestedMode = options?.mode;
-    if (requestedMode !== undefined && requestedMode !== 'surface' && requestedMode !== 'underground') {
-      res.status(400).json({ error: `options.mode must be "surface" or "underground" (got: ${requestedMode})` });
-      return;
-    }
-    // Validate autoGather flags so a string in the body doesn't silently
-    // skip the pre-stage. autoGather must be a boolean and the timeout, if
-    // present, must be a positive number.
-    if (options?.autoGather !== undefined && typeof options.autoGather !== 'boolean') {
-      res.status(400).json({ error: 'options.autoGather must be a boolean' });
-      return;
-    }
-    if (options?.autoGatherTimeoutMs !== undefined &&
-      (typeof options.autoGatherTimeoutMs !== 'number' || options.autoGatherTimeoutMs <= 0)) {
-      res.status(400).json({ error: 'options.autoGatherTimeoutMs must be a positive number (ms)' });
-      return;
-    }
-    try {
-      // Placeholder origin for non-coords modes so resolveOrigin has a safe fallback.
-      const resolvedOrigin = origin ?? { x: 0, y: 64, z: 0 };
-      const startOptions = options
-        ? { ...options, mode: requestedMode as 'surface' | 'underground' | undefined }
-        : undefined;
-      const job = await buildCoordinator.startBuild(schematicFile, resolvedOrigin, botNames, startOptions);
-      res.status(201).json({ build: job });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to start build');
-      // Sanitize so an error originating in BuildCoordinator (which often
-      // includes absolute schematic paths in its messages) doesn't leak the
-      // server's filesystem layout to API callers.
-      res.status(400).json({ error: sanitizeErrorMessage(err, 'Failed to start build') });
-    }
-  }));
-
-  // Get a specific build job
-  app.get('/api/builds/:id', (req: Request, res: Response) => {
-    const job = buildCoordinator.getBuildJob(req.params.id as string);
-    if (!job) {
-      res.status(404).json({ error: 'Build not found' });
-      return;
-    }
-    res.json({ build: job });
-  });
-
-  // Cancel a build
-  app.post('/api/builds/:id/cancel', (req: Request, res: Response) => {
-    const success = buildCoordinator.cancelBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or already finished' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Pause a build
-  app.post('/api/builds/:id/pause', (req: Request, res: Response) => {
-    const success = buildCoordinator.pauseBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or not running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Resume a build
-  app.post('/api/builds/:id/resume', (req: Request, res: Response) => {
-    const success = buildCoordinator.resumeBuild(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Build not found or not paused' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Retry a failed (or completed_with_errors) build — re-runs incomplete
-  // assignments, resuming each bot from its already-placed blocks.
-  app.post('/api/builds/:id/retry', asyncH(async (req: Request, res: Response) => {
-    try {
-      const job = await buildCoordinator.retryBuild(req.params.id as string);
-      if (!job) {
-        res.status(404).json({ error: 'Build not found' });
-        return;
-      }
-      res.json({ success: true, build: job });
-    } catch (err: any) {
-      res.status(409).json({ error: err.message });
-    }
-  }));
-
-  // Demolish a build's footprint (chunked /fill air via an op bot). Use
-  // ?dryRun=true to preview the bounding box without clearing anything.
-  app.post('/api/builds/:id/demolish', asyncH(async (req: Request, res: Response) => {
-    try {
-      const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
-      const result = await buildCoordinator.demolishBuild(req.params.id as string, { dryRun });
-      if (!result) {
-        res.status(404).json({ error: 'Build not found' });
-        return;
-      }
-      res.json({ success: true, ...result });
-    } catch (err: any) {
-      res.status(409).json({ error: err.message });
-    }
-  }));
-
-  // Build the rail+walkway tunnel between the two town halls. Use ?dryRun=true
-  // to preview the planned route/boxes. The tunnel coordinates are hard-coded
-  // for the current town, so carving requires an explicit confirm:true (body or
-  // ?confirm=true) — without it the endpoint returns the plan with refused:true.
-  app.post('/api/tunnel', asyncH(async (req: Request, res: Response) => {
-    try {
-      const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
-      const confirm = req.query.confirm === 'true' || (req.body && req.body.confirm === true);
-      const result = await buildCoordinator.buildTunnel({ dryRun, confirm });
-      res.json({ success: true, ...result });
-    } catch (err: any) {
-      res.status(409).json({ error: err.message });
-    }
-  }));
+  // ── Build jobs + tunnel (extracted → routes/buildRoutes.ts) ──
+  registerBuildRoutes(app, { buildCoordinator });
 
   // ═══════════════════════════════════════
   //  CAMPAIGN ENDPOINTS

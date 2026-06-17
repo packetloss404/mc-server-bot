@@ -32,6 +32,7 @@ import * as schema from './schema';
 import { ApprovalRepository } from './ApprovalRepository';
 import { RelationshipRepository } from './RelationshipRepository';
 import { StyleObservationRepository } from './StyleObservationRepository';
+import { ChronicleRepository } from './ChronicleRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -247,29 +248,7 @@ export interface BotJournalInput {
   generatedAt?: number;
 }
 
-function rowToChronicle(row: ChronicleRow): ChronicleEntry {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    dayNumber: row.dayNumber,
-    kind: (row.kind as ChronicleEntry['kind']) ?? 'daily',
-    body: row.body,
-    generatedAt: row.generatedAt ?? null,
-    model: row.model ?? null,
-  };
-}
-
-function rowToJournal(row: JournalRow): BotJournalEntry {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    botName: row.botName,
-    dayNumber: row.dayNumber ?? null,
-    body: row.body,
-    generatedAt: row.generatedAt ?? null,
-  };
-}
-
+// rowToChronicle / rowToJournal now live in ./ChronicleRepository.
 // rowToRelationship now lives in ./rows (used by RelationshipRepository).
 
 export interface TownManagerOptions {
@@ -289,6 +268,8 @@ export class TownManager {
   private readonly relationships: RelationshipRepository;
   /** Style-observation persistence (extracted repository; TownManager delegates). */
   private readonly styleObservations: StyleObservationRepository;
+  /** Chronicle + bot-journal persistence (extracted repository; TownManager delegates). */
+  private readonly chronicles: ChronicleRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -346,6 +327,7 @@ export class TownManager {
     this.approvals = new ApprovalRepository(this.db, fallbackAppend);
     this.relationships = new RelationshipRepository(this.db, fallbackAppend);
     this.styleObservations = new StyleObservationRepository(this.db, fallbackAppend);
+    this.chronicles = new ChronicleRepository(this.db, fallbackAppend, (id) => this.getTown(id));
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -1402,171 +1384,35 @@ export class TownManager {
    * the JSONL fallback layer (kind='chronicle') so a wedged DB never drops
    * the day's narrative.
    */
+  // Chronicle + journal persistence is delegated to ChronicleRepository.
   insertChronicleEntry(input: ChronicleEntryInput): ChronicleEntry {
-    const id = genId('chr');
-    const generatedAt = input.generatedAt ?? Date.now();
-    const entry: ChronicleEntry = {
-      id,
-      townId: input.townId,
-      dayNumber: input.dayNumber,
-      kind: input.kind,
-      body: input.body,
-      generatedAt,
-      model: input.model ?? null,
-    };
-    try {
-      this.db
-        .insert(schema.chronicleEntries)
-        .values({
-          id,
-          townId: input.townId,
-          dayNumber: input.dayNumber,
-          kind: input.kind,
-          body: input.body,
-          generatedAt,
-          model: input.model ?? null,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('chronicle', input.townId, {
-        id,
-        townId: input.townId,
-        dayNumber: input.dayNumber,
-        kind: input.kind,
-        body: input.body,
-        generatedAt,
-        model: input.model ?? null,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, dayNumber: input.dayNumber },
-        'insertChronicleEntry: DB write failed; routed to fallback',
-      );
-    }
-    return entry;
+    return this.chronicles.insertChronicleEntry(input);
   }
 
-  /**
-   * List chronicle rows for a town. Newest-first by dayNumber, then by
-   * generatedAt — so a milestone written mid-day still surfaces on top.
-   * `kind` filter lets the dashboard separate daily from milestone feeds.
-   */
   listChronicleEntries(
     townId: string,
     opts: { limit?: number; kind?: ChronicleEntry['kind'] } = {},
   ): ChronicleEntry[] {
-    const limit = Math.min(Math.max(opts.limit ?? 7, 1), 100);
-    const whereExpr = opts.kind
-      ? and(eq(schema.chronicleEntries.townId, townId), eq(schema.chronicleEntries.kind, opts.kind))
-      : eq(schema.chronicleEntries.townId, townId);
-    const rows = this.db
-      .select()
-      .from(schema.chronicleEntries)
-      .where(whereExpr)
-      .orderBy(desc(schema.chronicleEntries.dayNumber), desc(schema.chronicleEntries.generatedAt))
-      .limit(limit)
-      .all();
-    return rows.map(rowToChronicle);
+    return this.chronicles.listChronicleEntries(townId, opts);
   }
 
-  /**
-   * Find the daily chronicle row for a specific day, or null. Used by the
-   * generator to short-circuit duplicate runs.
-   */
   getDailyChronicle(townId: string, dayNumber: number): ChronicleEntry | null {
-    const row = this.db
-      .select()
-      .from(schema.chronicleEntries)
-      .where(
-        and(
-          eq(schema.chronicleEntries.townId, townId),
-          eq(schema.chronicleEntries.dayNumber, dayNumber),
-          eq(schema.chronicleEntries.kind, 'daily'),
-        ),
-      )
-      .get();
-    return row ? rowToChronicle(row) : null;
+    return this.chronicles.getDailyChronicle(townId, dayNumber);
   }
 
-  /**
-   * Compute the chronicle day number for a town based on its foundedAt
-   * timestamp. One Minecraft day ≈ 20 real-time minutes (the spec's chosen
-   * cadence), so dayNumber = floor((now - foundedAt) / 20min). Day 1 is the
-   * first 20-minute window after founding. Returns null for missing towns.
-   */
   getChronicleDayNumber(townId: string, now: number = Date.now()): number | null {
-    const town = this.getTown(townId);
-    if (!town) return null;
-    const elapsed = Math.max(0, now - town.foundedAt);
-    const dayMs = 20 * 60 * 1000;
-    // Day 1 is the first window — clamp at 1 so a freshly-founded town still
-    // gets a "Day 1" chronicle on the first scheduler tick.
-    return Math.max(1, Math.floor(elapsed / dayMs) + 1);
+    return this.chronicles.getChronicleDayNumber(townId, now);
   }
 
-  /**
-   * Insert a per-bot journal row. Phase 4-B ships this as scaffolding —
-   * Chronicle Generator focuses on the daily town narrative; per-bot LLM
-   * journals are filed as a Phase-5 follow-up.
-   */
   insertBotJournal(input: BotJournalInput): BotJournalEntry {
-    const id = genId('jrn');
-    const generatedAt = input.generatedAt ?? Date.now();
-    const entry: BotJournalEntry = {
-      id,
-      townId: input.townId,
-      botName: input.botName,
-      dayNumber: input.dayNumber ?? null,
-      body: input.body,
-      generatedAt,
-    };
-    try {
-      this.db
-        .insert(schema.botJournals)
-        .values({
-          id,
-          townId: input.townId,
-          botName: input.botName,
-          dayNumber: input.dayNumber ?? null,
-          body: input.body,
-          generatedAt,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('journals', input.townId, {
-        id,
-        townId: input.townId,
-        botName: input.botName,
-        dayNumber: input.dayNumber ?? null,
-        body: input.body,
-        generatedAt,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, botName: input.botName },
-        'insertBotJournal: DB write failed; routed to fallback',
-      );
-    }
-    return entry;
+    return this.chronicles.insertBotJournal(input);
   }
 
   listBotJournals(
     townId: string,
     opts: { botName?: string; limit?: number } = {},
   ): BotJournalEntry[] {
-    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 200);
-    const whereExpr = opts.botName
-      ? and(
-          eq(schema.botJournals.townId, townId),
-          eq(schema.botJournals.botName, opts.botName),
-        )
-      : eq(schema.botJournals.townId, townId);
-    const rows = this.db
-      .select()
-      .from(schema.botJournals)
-      .where(whereExpr)
-      .orderBy(desc(schema.botJournals.generatedAt))
-      .limit(limit)
-      .all();
-    return rows.map(rowToJournal);
+    return this.chronicles.listBotJournals(townId, opts);
   }
 
   // ──────────────────────────────────────────────────────────────────────

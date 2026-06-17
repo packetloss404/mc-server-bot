@@ -1,12 +1,10 @@
-import express, { NextFunction, Request, RequestHandler, Response } from 'express';
+import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
 import http from 'http';
-import multer from 'multer';
 import path from 'path';
-import fs from 'fs';
 import { Server as SocketIOServer } from 'socket.io';
 import { BotManager } from '../bot/BotManager';
-import { Config, getSection } from '../config';
+import { Config } from '../config';
 import {
   persistConfig,
   PATCHABLE_SECTIONS,
@@ -20,17 +18,12 @@ import { CommanderService } from '../control/CommanderService';
 import { CommandCenter } from '../control/CommandCenter';
 import { MissionManager } from '../control/MissionManager';
 import { MarkerStore } from '../control/MarkerStore';
-import { townToDTO } from '../town/TownManager';
 import { HighlightStream } from '../town/HighlightStream';
 import type { TownEvent } from '../town/Town';
-import { ScheduleManager } from '../town/ScheduleManager';
 import { TOWN_ROLES, type TownRole } from '../town/RoleManager';
 import { loadObservedRole, inferObservedRole, type BotActionStats } from '../town/ObservedRoleModel';
-import { computeCivilizationMetrics } from '../town/CivilizationMetrics';
 import { ChronicleGenerator } from '../town/ChronicleGenerator';
 import { ChronicleScheduler } from '../town/ChronicleScheduler';
-import type { TownRule } from '../town/RuleStore';
-import { MAX_DECREE_TEXT_LENGTH } from '../town/DecreeManager';
 import { SquadManager } from '../control/SquadManager';
 import { RoleManager } from '../control/RoleManager';
 import { TemplateManager } from '../control/TemplateManager';
@@ -39,9 +32,8 @@ import { BuildCoordinator } from '../build/BuildCoordinator';
 import { CampaignManager } from '../build/BuildCampaign';
 import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
-import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { registerAdminRoutes } from './admin';
-import { isSafeBotName, isSafeFilename, asyncH, sanitizeErrorMessage } from './routes/helpers';
+import { sanitizeErrorMessage } from './routes/helpers';
 import { registerTerrainRoutes } from './routes/terrainRoutes';
 import { registerSchematicRoutes } from './routes/schematicRoutes';
 import { registerChainRoutes } from './routes/chainRoutes';
@@ -69,9 +61,6 @@ import {
   requirePluginAuth,
   registerAuthRoutes,
   setAuthConfig,
-  getSessionPlayerName,
-  isLegacyAuthRequested,
-  requireDev,
 } from './auth';
 import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';

@@ -33,6 +33,7 @@ import { ApprovalRepository } from './ApprovalRepository';
 import { RelationshipRepository } from './RelationshipRepository';
 import { StyleObservationRepository } from './StyleObservationRepository';
 import { ChronicleRepository } from './ChronicleRepository';
+import { DisasterRepository } from './DisasterRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -270,6 +271,8 @@ export class TownManager {
   private readonly styleObservations: StyleObservationRepository;
   /** Chronicle + bot-journal persistence (extracted repository; TownManager delegates). */
   private readonly chronicles: ChronicleRepository;
+  /** Disaster persistence (extracted repository; TownManager delegates). */
+  private readonly disasters: DisasterRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -328,6 +331,7 @@ export class TownManager {
     this.relationships = new RelationshipRepository(this.db, fallbackAppend);
     this.styleObservations = new StyleObservationRepository(this.db, fallbackAppend);
     this.chronicles = new ChronicleRepository(this.db, fallbackAppend, (id) => this.getTown(id));
+    this.disasters = new DisasterRepository(this.db, fallbackAppend, (id) => this.listResidents(id));
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -1475,6 +1479,7 @@ export class TownManager {
    * the Phoenix loop still surfaces every catastrophe even when the DB is
    * wedged. Returns the canonical Disaster (with the generated id).
    */
+  // Disaster persistence is delegated to DisasterRepository.
   insertDisaster(input: {
     townId: string;
     kind: string;
@@ -1482,141 +1487,21 @@ export class TownManager {
     summary?: string | null;
     memorialMarkerId?: string | null;
     occurredAt?: number;
-    /**
-     * Optional natural-key for idempotency across restarts. When provided,
-     * if a disaster with the same (townId, dedupeKey) already exists, that
-     * row is returned unchanged instead of inserting a duplicate.
-     */
     dedupeKey?: string | null;
   }): Disaster {
-    // Idempotency check: if the caller supplied a dedupeKey, see if a row
-    // already exists for this town and short-circuit with it. This is the
-    // restart-safety story for PhoenixManager — re-scanning the same dead
-    // resident never produces a fresh disaster row + monument duplicate.
-    if (input.dedupeKey) {
-      try {
-        const existing = this.db
-          .select()
-          .from(schema.disasters)
-          .where(
-            and(
-              eq(schema.disasters.townId, input.townId),
-              eq(schema.disasters.dedupeKey, input.dedupeKey),
-            ),
-          )
-          .limit(1)
-          .all();
-        if (existing.length > 0) {
-          const r = existing[0];
-          return {
-            id: r.id,
-            townId: r.townId ?? input.townId,
-            kind: r.kind ?? input.kind,
-            severity: r.severity ?? null,
-            occurredAt: r.occurredAt ?? null,
-            memorialMarkerId: r.memorialMarkerId ?? null,
-            summary: r.summary ?? null,
-            dedupeKey: r.dedupeKey ?? null,
-          };
-        }
-      } catch (err: any) {
-        // Dedup lookup failure is non-fatal — fall through to insert.
-        logger.warn(
-          { err: err?.message, townId: input.townId, dedupeKey: input.dedupeKey },
-          'insertDisaster: dedupe lookup failed; proceeding with insert',
-        );
-      }
-    }
-    const id = genId('dst');
-    const occurredAt = input.occurredAt ?? Date.now();
-    const row = {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      severity: input.severity ?? null,
-      occurredAt,
-      memorialMarkerId: input.memorialMarkerId ?? null,
-      summary: input.summary ?? null,
-      dedupeKey: input.dedupeKey ?? null,
-    };
-    try {
-      this.db.insert(schema.disasters).values(row).run();
-    } catch (err: any) {
-      this.appendFallbackRow('disasters', input.townId, row);
-      logger.warn(
-        { err: err?.message, townId: input.townId, kind: input.kind },
-        'insertDisaster: DB write failed; routed to fallback',
-      );
-    }
-    return {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      severity: input.severity ?? null,
-      occurredAt,
-      memorialMarkerId: input.memorialMarkerId ?? null,
-      summary: input.summary ?? null,
-      dedupeKey: input.dedupeKey ?? null,
-    };
+    return this.disasters.insertDisaster(input);
   }
 
-  /**
-   * Update the memorial marker reference on an existing disaster row. Called
-   * by the Phoenix loop once the Memorial Park places a monument — recording
-   * happens first (so the disaster is durable even if the park placement
-   * fails), then this back-fills the marker id.
-   */
   updateDisasterMemorialMarker(disasterId: string, markerId: string | null): void {
-    try {
-      this.db
-        .update(schema.disasters)
-        .set({ memorialMarkerId: markerId })
-        .where(eq(schema.disasters.id, disasterId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, disasterId, markerId },
-        'updateDisasterMemorialMarker: update failed',
-      );
-    }
+    this.disasters.updateDisasterMemorialMarker(disasterId, markerId);
   }
 
-  /**
-   * List disaster rows for a town, newest-first. `limit` defaults to 100 and
-   * is clamped to the same 1..1000 window the events table uses.
-   */
   listDisasters(townId: string, opts: { limit?: number } = {}): Disaster[] {
-    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
-    const rows = this.db
-      .select()
-      .from(schema.disasters)
-      .where(eq(schema.disasters.townId, townId))
-      .orderBy(desc(schema.disasters.occurredAt))
-      .limit(limit)
-      .all();
-    return rows.map((r): Disaster => ({
-      id: r.id,
-      townId: r.townId ?? townId,
-      kind: r.kind ?? '',
-      severity: r.severity ?? null,
-      occurredAt: r.occurredAt ?? null,
-      memorialMarkerId: r.memorialMarkerId ?? null,
-      summary: r.summary ?? null,
-      dedupeKey: r.dedupeKey ?? null,
-    }));
+    return this.disasters.listDisasters(townId, opts);
   }
 
-  /**
-   * Residents who entered the 'dead' status. Phase 5-A keeps this simple:
-   * status='dead' rows are filtered in-memory rather than via a timestamp
-   * column (the schema doesn't track diedAt). The Phoenix loop tracks
-   * already-handled ids in-memory so the `since` argument is advisory.
-   *
-   * Once the residents schema grows a diedAt column this should switch to a
-   * server-side filter — keep the signature stable so callers don't break.
-   */
-  getDeadResidentsSince(townId: string, _since: number): Resident[] {
-    return this.listResidents(townId).filter((r) => r.status === 'dead');
+  getDeadResidentsSince(townId: string, since: number): Resident[] {
+    return this.disasters.getDeadResidentsSince(townId, since);
   }
 
   // ──────────────────────────────────────────────────────────────────────

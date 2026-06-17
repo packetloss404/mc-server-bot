@@ -29,6 +29,14 @@ import { DiplomacyManager } from './DiplomacyManager';
 import { clampTrust, DEFAULT_TRUST } from './diplomacy';
 import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
+import { ApprovalRepository } from './ApprovalRepository';
+import { RelationshipRepository } from './RelationshipRepository';
+import { StyleObservationRepository } from './StyleObservationRepository';
+import { ChronicleRepository } from './ChronicleRepository';
+import { DisasterRepository } from './DisasterRepository';
+import { DistrictRepository } from './DistrictRepository';
+import { BuildingRepository } from './BuildingRepository';
+import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
   clearFallbackFile,
@@ -56,18 +64,8 @@ type JournalRow = typeof schema.botJournals.$inferSelect;
 type ApprovalRow = typeof schema.approvals.$inferSelect;
 type RelationshipRow = typeof schema.relationships.$inferSelect;
 
-function genId(prefix: string): string {
-  return `${prefix}_${Date.now().toString(36)}_${crypto.randomBytes(4).toString('hex')}`;
-}
+// genId / safeJsonParse / rowToApproval now live in ./rows (shared by repos).
 
-function safeJsonParse<T>(raw: string | null | undefined, fallback: T): T {
-  if (raw == null) return fallback;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return fallback;
-  }
-}
 
 function rowToTown(row: TownRow): Town {
   const capital: Vec3 | null =
@@ -145,17 +143,7 @@ export function townToDTO(
   };
 }
 
-function rowToDistrict(row: DistrictRow): District {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    name: row.name ?? null,
-    stylePreset: row.stylePreset,
-    bounds: safeJsonParse<unknown>(row.boundsJson ?? null, null),
-    foundedAt: row.foundedAt,
-    isDefault: row.isDefault === true,
-  };
-}
+// rowToDistrict now lives in ./DistrictRepository.
 
 function rowToResident(row: ResidentRow): Resident {
   return {
@@ -168,27 +156,7 @@ function rowToResident(row: ResidentRow): Resident {
   };
 }
 
-function rowToBuilding(row: BuildingRow): Building {
-  const origin: Vec3 | null =
-    row.originX != null && row.originY != null && row.originZ != null
-      ? { x: row.originX, y: row.originY, z: row.originZ }
-      : null;
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    districtId: row.districtId ?? null,
-    name: row.name ?? null,
-    schematicSource: row.schematicSource ?? null,
-    schematicRef: row.schematicRef ?? null,
-    origin,
-    width: row.width ?? null,
-    height: row.height ?? null,
-    depth: row.depth ?? null,
-    builtAt: row.builtAt ?? null,
-    destroyedAt: row.destroyedAt ?? null,
-    status: row.status ?? null,
-  };
-}
+// rowToBuilding now lives in ./BuildingRepository.
 
 function rowToEvent(row: EventRow): TownEvent {
   return {
@@ -253,63 +221,8 @@ export interface BotJournalInput {
   generatedAt?: number;
 }
 
-function rowToChronicle(row: ChronicleRow): ChronicleEntry {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    dayNumber: row.dayNumber,
-    kind: (row.kind as ChronicleEntry['kind']) ?? 'daily',
-    body: row.body,
-    generatedAt: row.generatedAt ?? null,
-    model: row.model ?? null,
-  };
-}
-
-function rowToJournal(row: JournalRow): BotJournalEntry {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    botName: row.botName,
-    dayNumber: row.dayNumber ?? null,
-    body: row.body,
-    generatedAt: row.generatedAt ?? null,
-  };
-}
-
-function rowToApproval(row: ApprovalRow): Approval {
-  const votes = safeJsonParse<ApprovalVotes>(row.votesJson ?? null, { yes: [], no: [] });
-  // Defensive: an empty/legacy row may serialise as {} — normalise to arrays.
-  const safeVotes: ApprovalVotes = {
-    yes: Array.isArray(votes?.yes) ? votes.yes : [],
-    no: Array.isArray(votes?.no) ? votes.no : [],
-  };
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    kind: row.kind,
-    payload: safeJsonParse<unknown>(row.payloadJson ?? null, null),
-    status: (row.status as ApprovalStatus) ?? 'open',
-    createdAt: row.createdAt,
-    expiresAt: row.expiresAt,
-    mayorDecision:
-      row.mayorDecision === 'approved' || row.mayorDecision === 'denied'
-        ? row.mayorDecision
-        : null,
-    votes: safeVotes,
-  };
-}
-
-function rowToRelationship(row: RelationshipRow): Relationship {
-  const events = safeJsonParse<RelationshipEvent[]>(row.eventsJson ?? null, []);
-  return {
-    townIdA: row.townIdA ?? '',
-    townIdB: row.townIdB ?? '',
-    state: ((row.state as RelationshipState) ?? 'neutral'),
-    trust: typeof row.trust === 'number' ? clampTrust(row.trust) : DEFAULT_TRUST,
-    lastInteractionAt: row.lastInteractionAt ?? 0,
-    events: Array.isArray(events) ? events : [],
-  };
-}
+// rowToChronicle / rowToJournal now live in ./ChronicleRepository.
+// rowToRelationship now lives in ./rows (used by RelationshipRepository).
 
 export interface TownManagerOptions {
   /** Override the data directory (defaults to `<cwd>/data`). Useful for tests. */
@@ -322,6 +235,20 @@ export class TownManager {
   private readonly dataDir: string;
   private readonly handle: TownDbHandle;
   private readonly db: TownDb;
+  /** Approvals persistence (extracted repository; TownManager delegates). */
+  private readonly approvals: ApprovalRepository;
+  /** Relationship-edge persistence (extracted repository; TownManager delegates). */
+  private readonly relationships: RelationshipRepository;
+  /** Style-observation persistence (extracted repository; TownManager delegates). */
+  private readonly styleObservations: StyleObservationRepository;
+  /** Chronicle + bot-journal persistence (extracted repository; TownManager delegates). */
+  private readonly chronicles: ChronicleRepository;
+  /** Disaster persistence (extracted repository; TownManager delegates). */
+  private readonly disasters: DisasterRepository;
+  /** District persistence (extracted repository; TownManager delegates). */
+  private readonly districts: DistrictRepository;
+  /** Building persistence (extracted repository; TownManager delegates). */
+  private readonly buildings: BuildingRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -374,6 +301,15 @@ export class TownManager {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
     this.handle = opts.handle ?? openTownDb(this.dataDir);
     this.db = this.handle.db;
+    const fallbackAppend = (table: string, townId: string, row: unknown) =>
+      this.appendFallbackRow(table as FallbackKind, townId, row as Record<string, unknown>);
+    this.approvals = new ApprovalRepository(this.db, fallbackAppend);
+    this.relationships = new RelationshipRepository(this.db, fallbackAppend);
+    this.styleObservations = new StyleObservationRepository(this.db, fallbackAppend);
+    this.chronicles = new ChronicleRepository(this.db, fallbackAppend, (id) => this.getTown(id));
+    this.disasters = new DisasterRepository(this.db, fallbackAppend, (id) => this.listResidents(id));
+    this.districts = new DistrictRepository(this.db, (id) => this.getTown(id));
+    this.buildings = new BuildingRepository(this.db, this.handle.sqlite);
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -702,7 +638,7 @@ export class TownManager {
       throw err;
     }
 
-    const district = this.createDefaultDistrict(id, input.capital, input.stylePreset, now);
+    const district = this.districts.createDefaultDistrict(id, input.capital, input.stylePreset, now);
 
     // Drop the founding style.json seed (medieval or mid-century) at
     // data/towns/<id>/style.json. Wrapped here AND inside writeStyle —
@@ -853,61 +789,11 @@ export class TownManager {
   //  Districts
   // ──────────────────────────────────────────────────────────────────────
 
-  private createDefaultDistrict(
-    townId: string,
-    capital: Vec3,
-    stylePreset: string,
-    foundedAt: number,
-  ): District {
-    const id = genId('dist');
-    const bounds = defaultDistrictBounds(capital);
-    try {
-      this.db
-        .insert(schema.districts)
-        .values({
-          id,
-          townId,
-          name: 'Old Town',
-          stylePreset,
-          boundsJson: JSON.stringify(bounds),
-          foundedAt,
-          isDefault: true,
-        })
-        .run();
-    } catch (err: any) {
-      logger.error({ err: err?.message, townId }, 'Failed to insert founding district');
-      throw err;
-    }
-    return {
-      id,
-      townId,
-      name: 'Old Town',
-      stylePreset,
-      bounds,
-      foundedAt,
-      isDefault: true,
-    };
-  }
-
+  // District persistence is delegated to DistrictRepository.
   listDistricts(townId: string): District[] {
-    const rows = this.db
-      .select()
-      .from(schema.districts)
-      .where(eq(schema.districts.townId, townId))
-      .all();
-    return rows.map(rowToDistrict);
+    return this.districts.listDistricts(townId);
   }
 
-  /**
-   * Phase 5-B — public district insertion. Used by DistrictManager when a
-   * town tier-ups or an admin manually adds a district. Caller supplies the
-   * style preset + a centerpoint; we derive a 64x64 default bounding box
-   * around the center the same way `defaultDistrictBounds` does for the
-   * founding district. `isDefault` defaults to false — only the founding
-   * "Old Town" carries the default flag.
-   *
-   * Returns null on DB failure so callers can decide whether to retry.
-   */
   createDistrict(input: {
     townId: string;
     name: string;
@@ -915,39 +801,7 @@ export class TownManager {
     center: Vec3;
     isDefault?: boolean;
   }): District | null {
-    if (!this.getTown(input.townId)) return null;
-    const id = genId('dist');
-    const foundedAt = Date.now();
-    const bounds = defaultDistrictBounds(input.center);
-    try {
-      this.db
-        .insert(schema.districts)
-        .values({
-          id,
-          townId: input.townId,
-          name: input.name,
-          stylePreset: input.stylePreset,
-          boundsJson: JSON.stringify(bounds),
-          foundedAt,
-          isDefault: input.isDefault === true,
-        })
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, townId: input.townId, name: input.name },
-        'createDistrict: insert failed',
-      );
-      return null;
-    }
-    return {
-      id,
-      townId: input.townId,
-      name: input.name,
-      stylePreset: input.stylePreset,
-      bounds,
-      foundedAt,
-      isDefault: input.isDefault === true,
-    };
+    return this.districts.createDistrict(input);
   }
 
   /**
@@ -1057,21 +911,11 @@ export class TownManager {
   //  Buildings
   // ──────────────────────────────────────────────────────────────────────
 
+  // Building persistence is delegated to BuildingRepository.
   listBuildings(townId: string): Building[] {
-    const rows = this.db
-      .select()
-      .from(schema.buildings)
-      .where(eq(schema.buildings.townId, townId))
-      .all();
-    return rows.map(rowToBuilding);
+    return this.buildings.listBuildings(townId);
   }
 
-  /**
-   * Insert a `planned` building row. Used by the Town Brain so the build loop
-   * is idempotent across ticks — listBuildings will see the planned row and
-   * skip the kind on the next tick. `name` is the brain's `kind:<n>` tag so
-   * countBuildingsByKind groups duplicates by kind.
-   */
   createPlannedBuilding(input: {
     townId: string;
     name: string;
@@ -1079,91 +923,20 @@ export class TownManager {
     schematicRef?: string | null;
     districtId?: string | null;
   }): Building {
-    const id = genId('bld');
-    const row = {
-      id,
-      townId: input.townId,
-      districtId: input.districtId ?? null,
-      name: input.name,
-      schematicSource: input.schematicSource ?? null,
-      schematicRef: input.schematicRef ?? null,
-      originX: null,
-      originY: null,
-      originZ: null,
-      width: null,
-      height: null,
-      depth: null,
-      builtAt: null,
-      destroyedAt: null,
-      status: 'planned',
-    };
-    try {
-      this.db.insert(schema.buildings).values(row).run();
-    } catch (err: any) {
-      // No JSONL fallback for buildings — the brain retries next tick.
-      logger.warn(
-        { err: err?.message, townId: input.townId, name: input.name },
-        'createPlannedBuilding: insert failed; brain will retry next tick',
-      );
-    }
-    return rowToBuilding(row as unknown as BuildingRow);
+    return this.buildings.createPlannedBuilding(input);
   }
 
-  /**
-   * Phase 5-B — attach a districtId to a building row. Used by the brain's
-   * district loop to back-fill the district once the planned row has been
-   * inserted. No-op when the row already has a districtId (idempotent).
-   */
   setBuildingDistrict(buildingId: string, districtId: string): boolean {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.buildings)
-        .where(eq(schema.buildings.id, buildingId))
-        .get();
-      if (!row) return false;
-      if (row.districtId === districtId) return true;
-      this.db
-        .update(schema.buildings)
-        .set({ districtId })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-      return true;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId, districtId },
-        'setBuildingDistrict: update failed',
-      );
-      return false;
-    }
+    return this.buildings.setBuildingDistrict(buildingId, districtId);
   }
 
-  /** Flip a planned/building row's status. Used when a build job resolves. */
   updateBuildingStatus(
     buildingId: string,
     status: 'planned' | 'building' | 'complete' | 'damaged' | 'destroyed',
   ): void {
-    try {
-      this.db
-        .update(schema.buildings)
-        .set({ status, builtAt: status === 'complete' ? Date.now() : undefined })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId, status },
-        'updateBuildingStatus: failed',
-      );
-    }
+    this.buildings.updateBuildingStatus(buildingId, status);
   }
 
-  /**
-   * Record where a planned building actually landed and flip it to 'building'
-   * (or straight to 'complete'). Called from TownBrain's build hooks once
-   * BuildCoordinator has resolved the (auto-flat) origin. Writing the origin
-   * here is what lets buildLoop's orphan reaper distinguish a live in-progress
-   * row (origin set) from a never-started orphan (origin null).
-   */
   recordBuildingPlacement(
     buildingId: string,
     placement: {
@@ -1174,58 +947,11 @@ export class TownManager {
       status?: 'building' | 'complete';
     },
   ): void {
-    try {
-      this.db
-        .update(schema.buildings)
-        .set({
-          originX: placement.origin.x,
-          originY: placement.origin.y,
-          originZ: placement.origin.z,
-          width: placement.width ?? undefined,
-          height: placement.height ?? undefined,
-          depth: placement.depth ?? undefined,
-          status: placement.status ?? 'building',
-          builtAt: placement.status === 'complete' ? Date.now() : undefined,
-        })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId },
-        'recordBuildingPlacement: failed',
-      );
-    }
+    this.buildings.recordBuildingPlacement(buildingId, placement);
   }
 
-  /**
-   * Hard-delete a building row. Used by TownBrain to clear a planned row whose
-   * build never started (resolve failure, no connected residents, startBuild
-   * throw) or whose job ended in failure/cancel — so the kind is re-queued next
-   * tick instead of the row holding the build loop's in-flight lock forever.
-   */
   deleteBuilding(buildingId: string): void {
-    try {
-      // style_observations has a FK to buildings(id); SQLite blocks the
-      // delete without cascade. Drop the child rows first. (Documented the
-      // hard way on 2026-05-26 when the manual cleanup pass kept failing.)
-      // Wrap both in a transaction so a crash between them can't leave the
-      // building deleted with orphaned style_observations (or vice-versa).
-      this.handle.sqlite.transaction(() => {
-        this.db
-          .delete(schema.styleObservations)
-          .where(eq(schema.styleObservations.buildingId, buildingId))
-          .run();
-        this.db
-          .delete(schema.buildings)
-          .where(eq(schema.buildings.id, buildingId))
-          .run();
-      })();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId },
-        'deleteBuilding: failed',
-      );
-    }
+    this.buildings.deleteBuilding(buildingId);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -1430,171 +1156,35 @@ export class TownManager {
    * the JSONL fallback layer (kind='chronicle') so a wedged DB never drops
    * the day's narrative.
    */
+  // Chronicle + journal persistence is delegated to ChronicleRepository.
   insertChronicleEntry(input: ChronicleEntryInput): ChronicleEntry {
-    const id = genId('chr');
-    const generatedAt = input.generatedAt ?? Date.now();
-    const entry: ChronicleEntry = {
-      id,
-      townId: input.townId,
-      dayNumber: input.dayNumber,
-      kind: input.kind,
-      body: input.body,
-      generatedAt,
-      model: input.model ?? null,
-    };
-    try {
-      this.db
-        .insert(schema.chronicleEntries)
-        .values({
-          id,
-          townId: input.townId,
-          dayNumber: input.dayNumber,
-          kind: input.kind,
-          body: input.body,
-          generatedAt,
-          model: input.model ?? null,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('chronicle', input.townId, {
-        id,
-        townId: input.townId,
-        dayNumber: input.dayNumber,
-        kind: input.kind,
-        body: input.body,
-        generatedAt,
-        model: input.model ?? null,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, dayNumber: input.dayNumber },
-        'insertChronicleEntry: DB write failed; routed to fallback',
-      );
-    }
-    return entry;
+    return this.chronicles.insertChronicleEntry(input);
   }
 
-  /**
-   * List chronicle rows for a town. Newest-first by dayNumber, then by
-   * generatedAt — so a milestone written mid-day still surfaces on top.
-   * `kind` filter lets the dashboard separate daily from milestone feeds.
-   */
   listChronicleEntries(
     townId: string,
     opts: { limit?: number; kind?: ChronicleEntry['kind'] } = {},
   ): ChronicleEntry[] {
-    const limit = Math.min(Math.max(opts.limit ?? 7, 1), 100);
-    const whereExpr = opts.kind
-      ? and(eq(schema.chronicleEntries.townId, townId), eq(schema.chronicleEntries.kind, opts.kind))
-      : eq(schema.chronicleEntries.townId, townId);
-    const rows = this.db
-      .select()
-      .from(schema.chronicleEntries)
-      .where(whereExpr)
-      .orderBy(desc(schema.chronicleEntries.dayNumber), desc(schema.chronicleEntries.generatedAt))
-      .limit(limit)
-      .all();
-    return rows.map(rowToChronicle);
+    return this.chronicles.listChronicleEntries(townId, opts);
   }
 
-  /**
-   * Find the daily chronicle row for a specific day, or null. Used by the
-   * generator to short-circuit duplicate runs.
-   */
   getDailyChronicle(townId: string, dayNumber: number): ChronicleEntry | null {
-    const row = this.db
-      .select()
-      .from(schema.chronicleEntries)
-      .where(
-        and(
-          eq(schema.chronicleEntries.townId, townId),
-          eq(schema.chronicleEntries.dayNumber, dayNumber),
-          eq(schema.chronicleEntries.kind, 'daily'),
-        ),
-      )
-      .get();
-    return row ? rowToChronicle(row) : null;
+    return this.chronicles.getDailyChronicle(townId, dayNumber);
   }
 
-  /**
-   * Compute the chronicle day number for a town based on its foundedAt
-   * timestamp. One Minecraft day ≈ 20 real-time minutes (the spec's chosen
-   * cadence), so dayNumber = floor((now - foundedAt) / 20min). Day 1 is the
-   * first 20-minute window after founding. Returns null for missing towns.
-   */
   getChronicleDayNumber(townId: string, now: number = Date.now()): number | null {
-    const town = this.getTown(townId);
-    if (!town) return null;
-    const elapsed = Math.max(0, now - town.foundedAt);
-    const dayMs = 20 * 60 * 1000;
-    // Day 1 is the first window — clamp at 1 so a freshly-founded town still
-    // gets a "Day 1" chronicle on the first scheduler tick.
-    return Math.max(1, Math.floor(elapsed / dayMs) + 1);
+    return this.chronicles.getChronicleDayNumber(townId, now);
   }
 
-  /**
-   * Insert a per-bot journal row. Phase 4-B ships this as scaffolding —
-   * Chronicle Generator focuses on the daily town narrative; per-bot LLM
-   * journals are filed as a Phase-5 follow-up.
-   */
   insertBotJournal(input: BotJournalInput): BotJournalEntry {
-    const id = genId('jrn');
-    const generatedAt = input.generatedAt ?? Date.now();
-    const entry: BotJournalEntry = {
-      id,
-      townId: input.townId,
-      botName: input.botName,
-      dayNumber: input.dayNumber ?? null,
-      body: input.body,
-      generatedAt,
-    };
-    try {
-      this.db
-        .insert(schema.botJournals)
-        .values({
-          id,
-          townId: input.townId,
-          botName: input.botName,
-          dayNumber: input.dayNumber ?? null,
-          body: input.body,
-          generatedAt,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('journals', input.townId, {
-        id,
-        townId: input.townId,
-        botName: input.botName,
-        dayNumber: input.dayNumber ?? null,
-        body: input.body,
-        generatedAt,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, botName: input.botName },
-        'insertBotJournal: DB write failed; routed to fallback',
-      );
-    }
-    return entry;
+    return this.chronicles.insertBotJournal(input);
   }
 
   listBotJournals(
     townId: string,
     opts: { botName?: string; limit?: number } = {},
   ): BotJournalEntry[] {
-    const limit = Math.min(Math.max(opts.limit ?? 20, 1), 200);
-    const whereExpr = opts.botName
-      ? and(
-          eq(schema.botJournals.townId, townId),
-          eq(schema.botJournals.botName, opts.botName),
-        )
-      : eq(schema.botJournals.townId, townId);
-    const rows = this.db
-      .select()
-      .from(schema.botJournals)
-      .where(whereExpr)
-      .orderBy(desc(schema.botJournals.generatedAt))
-      .limit(limit)
-      .all();
-    return rows.map(rowToJournal);
+    return this.chronicles.listBotJournals(townId, opts);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -1657,6 +1247,7 @@ export class TownManager {
    * the Phoenix loop still surfaces every catastrophe even when the DB is
    * wedged. Returns the canonical Disaster (with the generated id).
    */
+  // Disaster persistence is delegated to DisasterRepository.
   insertDisaster(input: {
     townId: string;
     kind: string;
@@ -1664,141 +1255,21 @@ export class TownManager {
     summary?: string | null;
     memorialMarkerId?: string | null;
     occurredAt?: number;
-    /**
-     * Optional natural-key for idempotency across restarts. When provided,
-     * if a disaster with the same (townId, dedupeKey) already exists, that
-     * row is returned unchanged instead of inserting a duplicate.
-     */
     dedupeKey?: string | null;
   }): Disaster {
-    // Idempotency check: if the caller supplied a dedupeKey, see if a row
-    // already exists for this town and short-circuit with it. This is the
-    // restart-safety story for PhoenixManager — re-scanning the same dead
-    // resident never produces a fresh disaster row + monument duplicate.
-    if (input.dedupeKey) {
-      try {
-        const existing = this.db
-          .select()
-          .from(schema.disasters)
-          .where(
-            and(
-              eq(schema.disasters.townId, input.townId),
-              eq(schema.disasters.dedupeKey, input.dedupeKey),
-            ),
-          )
-          .limit(1)
-          .all();
-        if (existing.length > 0) {
-          const r = existing[0];
-          return {
-            id: r.id,
-            townId: r.townId ?? input.townId,
-            kind: r.kind ?? input.kind,
-            severity: r.severity ?? null,
-            occurredAt: r.occurredAt ?? null,
-            memorialMarkerId: r.memorialMarkerId ?? null,
-            summary: r.summary ?? null,
-            dedupeKey: r.dedupeKey ?? null,
-          };
-        }
-      } catch (err: any) {
-        // Dedup lookup failure is non-fatal — fall through to insert.
-        logger.warn(
-          { err: err?.message, townId: input.townId, dedupeKey: input.dedupeKey },
-          'insertDisaster: dedupe lookup failed; proceeding with insert',
-        );
-      }
-    }
-    const id = genId('dst');
-    const occurredAt = input.occurredAt ?? Date.now();
-    const row = {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      severity: input.severity ?? null,
-      occurredAt,
-      memorialMarkerId: input.memorialMarkerId ?? null,
-      summary: input.summary ?? null,
-      dedupeKey: input.dedupeKey ?? null,
-    };
-    try {
-      this.db.insert(schema.disasters).values(row).run();
-    } catch (err: any) {
-      this.appendFallbackRow('disasters', input.townId, row);
-      logger.warn(
-        { err: err?.message, townId: input.townId, kind: input.kind },
-        'insertDisaster: DB write failed; routed to fallback',
-      );
-    }
-    return {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      severity: input.severity ?? null,
-      occurredAt,
-      memorialMarkerId: input.memorialMarkerId ?? null,
-      summary: input.summary ?? null,
-      dedupeKey: input.dedupeKey ?? null,
-    };
+    return this.disasters.insertDisaster(input);
   }
 
-  /**
-   * Update the memorial marker reference on an existing disaster row. Called
-   * by the Phoenix loop once the Memorial Park places a monument — recording
-   * happens first (so the disaster is durable even if the park placement
-   * fails), then this back-fills the marker id.
-   */
   updateDisasterMemorialMarker(disasterId: string, markerId: string | null): void {
-    try {
-      this.db
-        .update(schema.disasters)
-        .set({ memorialMarkerId: markerId })
-        .where(eq(schema.disasters.id, disasterId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, disasterId, markerId },
-        'updateDisasterMemorialMarker: update failed',
-      );
-    }
+    this.disasters.updateDisasterMemorialMarker(disasterId, markerId);
   }
 
-  /**
-   * List disaster rows for a town, newest-first. `limit` defaults to 100 and
-   * is clamped to the same 1..1000 window the events table uses.
-   */
   listDisasters(townId: string, opts: { limit?: number } = {}): Disaster[] {
-    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 1000);
-    const rows = this.db
-      .select()
-      .from(schema.disasters)
-      .where(eq(schema.disasters.townId, townId))
-      .orderBy(desc(schema.disasters.occurredAt))
-      .limit(limit)
-      .all();
-    return rows.map((r): Disaster => ({
-      id: r.id,
-      townId: r.townId ?? townId,
-      kind: r.kind ?? '',
-      severity: r.severity ?? null,
-      occurredAt: r.occurredAt ?? null,
-      memorialMarkerId: r.memorialMarkerId ?? null,
-      summary: r.summary ?? null,
-      dedupeKey: r.dedupeKey ?? null,
-    }));
+    return this.disasters.listDisasters(townId, opts);
   }
 
-  /**
-   * Residents who entered the 'dead' status. Phase 5-A keeps this simple:
-   * status='dead' rows are filtered in-memory rather than via a timestamp
-   * column (the schema doesn't track diedAt). The Phoenix loop tracks
-   * already-handled ids in-memory so the `since` argument is advisory.
-   *
-   * Once the residents schema grows a diedAt column this should switch to a
-   * server-side filter — keep the signature stable so callers don't break.
-   */
-  getDeadResidentsSince(townId: string, _since: number): Resident[] {
-    return this.listResidents(townId).filter((r) => r.status === 'dead');
+  getDeadResidentsSince(townId: string, since: number): Resident[] {
+    return this.disasters.getDeadResidentsSince(townId, since);
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -1810,6 +1281,7 @@ export class TownManager {
    * never drops a pending decision. Returns the canonical Approval — the
    * caller (ApprovalManager) registers a `resolveOnce` handler keyed by id.
    */
+  // Approvals persistence is delegated to ApprovalRepository (extracted).
   insertApproval(input: {
     townId: string;
     kind: ApprovalKind | string;
@@ -1818,60 +1290,9 @@ export class TownManager {
     expiresAt: number;
     status?: ApprovalStatus;
   }): Approval | null {
-    const id = genId('apv');
-    const status: ApprovalStatus = input.status ?? 'open';
-    const votes: ApprovalVotes = { yes: [], no: [] };
-    const approval: Approval = {
-      id,
-      townId: input.townId,
-      kind: input.kind,
-      payload: input.payload,
-      status,
-      createdAt: input.createdAt,
-      expiresAt: input.expiresAt,
-      mayorDecision: null,
-      votes,
-    };
-    try {
-      this.db
-        .insert(schema.approvals)
-        .values({
-          id,
-          townId: input.townId,
-          kind: input.kind,
-          payloadJson: input.payload == null ? null : JSON.stringify(input.payload),
-          status,
-          createdAt: input.createdAt,
-          expiresAt: input.expiresAt,
-          mayorDecision: null,
-          votesJson: JSON.stringify(votes),
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('approvals', input.townId, {
-        id,
-        townId: input.townId,
-        kind: input.kind,
-        payload: input.payload,
-        status,
-        createdAt: input.createdAt,
-        expiresAt: input.expiresAt,
-        mayorDecision: null,
-        votes,
-      });
-      logger.warn(
-        { err: err?.message, townId: input.townId, kind: input.kind },
-        'insertApproval: DB write failed; routed to fallback',
-      );
-    }
-    return approval;
+    return this.approvals.insertApproval(input);
   }
 
-  /**
-   * Patch an approval row. Only fields explicitly present in `patch` are
-   * touched. Returns true on a successful update, false when the row is
-   * missing or the DB write throws.
-   */
   updateApproval(
     approvalId: string,
     patch: {
@@ -1881,86 +1302,18 @@ export class TownManager {
       expiresAt?: number;
     },
   ): boolean {
-    try {
-      const current = this.db
-        .select()
-        .from(schema.approvals)
-        .where(eq(schema.approvals.id, approvalId))
-        .get();
-      if (!current) return false;
-      const fields: Partial<ApprovalRow> = {};
-      if (patch.status !== undefined) fields.status = patch.status;
-      if (patch.mayorDecision !== undefined) fields.mayorDecision = patch.mayorDecision;
-      if (patch.expiresAt !== undefined) fields.expiresAt = patch.expiresAt;
-      if (patch.votes !== undefined) {
-        fields.votesJson = JSON.stringify({
-          yes: Array.isArray(patch.votes.yes) ? patch.votes.yes : [],
-          no: Array.isArray(patch.votes.no) ? patch.votes.no : [],
-        });
-      }
-      if (Object.keys(fields).length === 0) return true;
-      this.db
-        .update(schema.approvals)
-        .set(fields)
-        .where(eq(schema.approvals.id, approvalId))
-        .run();
-      return true;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, approvalId },
-        'updateApproval: DB write failed',
-      );
-      return false;
-    }
+    return this.approvals.updateApproval(approvalId, patch);
   }
 
-  /**
-   * List approvals for a town. Filtered by status when provided; newest first
-   * by createdAt. Capped at 200 rows so a runaway queue can't blow up the
-   * response.
-   */
   listApprovals(
     townId: string,
     opts: { status?: ApprovalStatus | 'all'; limit?: number } = {},
   ): Approval[] {
-    const limit = Math.min(Math.max(opts.limit ?? 100, 1), 200);
-    try {
-      const whereExpr =
-        opts.status && opts.status !== 'all'
-          ? and(eq(schema.approvals.townId, townId), eq(schema.approvals.status, opts.status))
-          : eq(schema.approvals.townId, townId);
-      const rows = this.db
-        .select()
-        .from(schema.approvals)
-        .where(whereExpr)
-        .orderBy(desc(schema.approvals.createdAt))
-        .limit(limit)
-        .all();
-      return rows.map(rowToApproval);
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, townId, status: opts.status },
-        'listApprovals: read failed; returning empty list',
-      );
-      return [];
-    }
+    return this.approvals.listApprovals(townId, opts);
   }
 
   getApproval(approvalId: string): Approval | null {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.approvals)
-        .where(eq(schema.approvals.id, approvalId))
-        .get();
-      return row ? rowToApproval(row) : null;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, approvalId },
-        'getApproval: read failed',
-      );
-      return null;
-    }
+    return this.approvals.getApproval(approvalId);
   }
 
   /**
@@ -2010,111 +1363,21 @@ export class TownManager {
    * events array) so a wedged DB doesn't lose history. drainFallback's
    * replay re-runs the same INSERT ... ON CONFLICT path.
    */
+  // Relationship-edge persistence is delegated to RelationshipRepository.
   upsertRelationshipEdge(edge: Relationship): boolean {
-    const trust = clampTrust(edge.trust);
-    const eventsJson = JSON.stringify(edge.events ?? []);
-    try {
-      // Look up the existing row to preserve the surrogate id (uniqueness is
-      // on the pair, not the id, so a re-insert would otherwise generate a
-      // new id every tick). Falls through to INSERT when absent.
-      const existing = this.db
-        .select()
-        .from(schema.relationships)
-        .where(
-          and(
-            eq(schema.relationships.townIdA, edge.townIdA),
-            eq(schema.relationships.townIdB, edge.townIdB),
-          ),
-        )
-        .get();
-      if (existing) {
-        this.db
-          .update(schema.relationships)
-          .set({
-            state: edge.state,
-            trust,
-            lastInteractionAt: edge.lastInteractionAt,
-            eventsJson,
-          })
-          .where(eq(schema.relationships.id, existing.id))
-          .run();
-      } else {
-        const id = genId('rel');
-        this.db
-          .insert(schema.relationships)
-          .values({
-            id,
-            townIdA: edge.townIdA,
-            townIdB: edge.townIdB,
-            state: edge.state,
-            trust,
-            lastInteractionAt: edge.lastInteractionAt,
-            eventsJson,
-          })
-          .run();
-      }
-      return true;
-    } catch (err: any) {
-      this.appendFallbackRow('relationships', edge.townIdA, {
-        townIdA: edge.townIdA,
-        townIdB: edge.townIdB,
-        state: edge.state,
-        trust,
-        lastInteractionAt: edge.lastInteractionAt,
-        events: edge.events ?? [],
-      });
-      logger.warn(
-        { err: err?.message, a: edge.townIdA, b: edge.townIdB },
-        'upsertRelationshipEdge: DB write failed; routed to fallback',
-      );
-      return false;
-    }
+    return this.relationships.upsertRelationshipEdge(edge);
   }
 
-  /** Single directed edge `a -> b`, or null when no edge exists. */
   getRelationshipEdge(a: string, b: string): Relationship | null {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.relationships)
-        .where(
-          and(
-            eq(schema.relationships.townIdA, a),
-            eq(schema.relationships.townIdB, b),
-          ),
-        )
-        .get();
-      return row ? rowToRelationship(row) : null;
-    } catch (err: any) {
-      logger.warn({ err: err?.message, a, b }, 'getRelationshipEdge: read failed');
-      return null;
-    }
+    return this.relationships.getRelationshipEdge(a, b);
   }
 
-  /** All outgoing edges from a town. Used by the dashboard + diplomacy loop. */
   listRelationshipsFrom(townId: string): Relationship[] {
-    try {
-      const rows = this.db
-        .select()
-        .from(schema.relationships)
-        .where(eq(schema.relationships.townIdA, townId))
-        .all();
-      return rows.map(rowToRelationship);
-    } catch (err: any) {
-      logger.warn({ err: err?.message, townId }, 'listRelationshipsFrom: read failed');
-      return [];
-    }
+    return this.relationships.listRelationshipsFrom(townId);
   }
 
-  /** Every edge in the table — used by GET /api/relationships. */
   listAllRelationships(): Relationship[] {
-    try {
-      const rows = this.db.select().from(schema.relationships).all();
-      return rows.map(rowToRelationship);
-    } catch (err: any) {
-      logger.warn({ err: err?.message }, 'listAllRelationships: read failed');
-      return [];
-    }
+    return this.relationships.listAllRelationships();
   }
 
   // ──────────────────────────────────────────────────────────────────────
@@ -2130,63 +1393,13 @@ export class TownManager {
    * Failures route to the JSONL fallback so the feedback loop survives a
    * wedged DB.
    */
-  insertStyleObservation(
-    townId: string,
-    input: { buildingId: string | null; palette: unknown },
-  ): void {
-    const id = genId('sob');
-    const recordedAt = Date.now();
-    try {
-      this.db
-        .insert(schema.styleObservations)
-        .values({
-          id,
-          townId,
-          buildingId: input.buildingId,
-          paletteJson: input.palette == null ? null : JSON.stringify(input.palette),
-          recordedAt,
-          included: true,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('style_observations', townId, {
-        id,
-        townId,
-        buildingId: input.buildingId,
-        palette: input.palette,
-        recordedAt,
-        included: true,
-      });
-      logger.warn(
-        { err: err?.message, townId, buildingId: input.buildingId },
-        'insertStyleObservation: DB write failed; routed to fallback',
-      );
-    }
+  // Style-observation persistence is delegated to StyleObservationRepository.
+  insertStyleObservation(townId: string, input: { buildingId: string | null; palette: unknown }): void {
+    this.styleObservations.insertStyleObservation(townId, input);
   }
 
-  /** Read every style observation for a town, newest-first. */
-  getStyleObservations(townId: string): Array<{
-    id: string;
-    townId: string;
-    buildingId: string | null;
-    palette: unknown;
-    recordedAt: number | null;
-    included: boolean;
-  }> {
-    const rows = this.db
-      .select()
-      .from(schema.styleObservations)
-      .where(eq(schema.styleObservations.townId, townId))
-      .orderBy(desc(schema.styleObservations.recordedAt))
-      .all();
-    return rows.map((row) => ({
-      id: row.id,
-      townId: row.townId ?? townId,
-      buildingId: row.buildingId ?? null,
-      palette: safeJsonParse<unknown>(row.paletteJson ?? null, null),
-      recordedAt: row.recordedAt ?? null,
-      included: row.included !== false,
-    }));
+  getStyleObservations(townId: string) {
+    return this.styleObservations.getStyleObservations(townId);
   }
 
   /**

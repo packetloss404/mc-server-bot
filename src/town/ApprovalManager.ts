@@ -49,8 +49,6 @@
  * sensible falsy/null value so the brain's runLoopSafe wrapper never crashes
  * a tick on a wedged DB.
  */
-import path from 'path';
-import Database from 'better-sqlite3';
 import type { TownManager } from './TownManager';
 import type { Approval, ApprovalKind, ApprovalMode, ApprovalStatus, ApprovalVotes } from './Approval';
 import { voteFor } from './VoteHeuristic';
@@ -146,10 +144,9 @@ export class ApprovalManager {
    */
   private readonly rehydrators: Map<string, ApprovalRehydrator> = new Map();
   private rehydrated = false;
-  /** Dedicated sqlite handle for handler-descriptor reads/writes. Lazy. */
-  private descriptorDb: Database.Database | null = null;
-  /** True once we've tried (and failed) to open the descriptor DB. */
-  private descriptorDbFailed = false;
+  /** Shared in-flight rehydrate promise so concurrent callers dedupe onto one
+   *  pass and async callers can await completion (not just kick it off). */
+  private rehydratePromise: Promise<number> | null = null;
 
   constructor(townManager: TownManager) {
     this.townManager = townManager;
@@ -238,7 +235,7 @@ export class ApprovalManager {
    * here; a mayor decision overrides any in-flight votes.
    */
   async mayorDecide(approvalId: string, choice: 'approved' | 'denied'): Promise<Approval | null> {
-    this.ensureRehydrated();
+    await this.ensureRehydratedAsync();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -282,7 +279,7 @@ export class ApprovalManager {
    * changed.
    */
   async tally(approvalId: string): Promise<Approval | null> {
-    this.ensureRehydrated();
+    await this.ensureRehydratedAsync();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -478,24 +475,21 @@ export class ApprovalManager {
    * descriptors successfully rehydrated.
    */
   async rehydrate(): Promise<number> {
-    this.rehydrated = true;
-    const db = this.openDescriptorDb();
-    if (!db) return 0;
-    let rows: Array<{ id: string; town_id: string | null; handler_descriptor_json: string | null }> = [];
+    // Dedupe concurrent callers onto a single in-flight pass.
+    if (this.rehydratePromise) return this.rehydratePromise;
+    this.rehydratePromise = this.doRehydrate();
+    return this.rehydratePromise;
+  }
+
+  private async doRehydrate(): Promise<number> {
+    // `rehydrated` is set in the finally — only AFTER all handlers have been
+    // re-attached — so an awaiting caller (tally/mayorDecide) never fires an
+    // approval handler before the resolveOnce hooks are back in place.
     try {
-      rows = db
-        .prepare(
-          `SELECT id, town_id, handler_descriptor_json FROM approvals WHERE status = 'open' AND handler_descriptor_json IS NOT NULL`,
-        )
-        .all() as typeof rows;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ err: msg }, 'ApprovalManager.rehydrate: query failed; skipping');
-      return 0;
-    }
+    const rows = this.townManager.listOpenApprovalsWithDescriptor();
     let restored = 0;
     for (const row of rows) {
-      const descriptor = this.parseDescriptor(row.handler_descriptor_json);
+      const descriptor = this.parseDescriptor(row.descriptorJson);
       if (!descriptor) continue;
       const ok = await this.dispatchRehydrate(row.id, descriptor);
       if (ok) restored++;
@@ -504,6 +498,9 @@ export class ApprovalManager {
       logger.info({ restored }, 'ApprovalManager.rehydrate: re-registered handlers');
     }
     return restored;
+    } finally {
+      this.rehydrated = true;
+    }
   }
 
   /**
@@ -512,22 +509,8 @@ export class ApprovalManager {
    * run, so a late-registered ExpansionManager still picks up its rows.
    */
   private async rehydrateForKind(kind: string): Promise<void> {
-    const db = this.openDescriptorDb();
-    if (!db) return;
-    let rows: Array<{ id: string; handler_descriptor_json: string | null }> = [];
-    try {
-      rows = db
-        .prepare(
-          `SELECT id, handler_descriptor_json FROM approvals WHERE status = 'open' AND handler_descriptor_json IS NOT NULL`,
-        )
-        .all() as typeof rows;
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ err: msg, kind }, 'ApprovalManager.rehydrateForKind: query failed');
-      return;
-    }
-    for (const row of rows) {
-      const descriptor = this.parseDescriptor(row.handler_descriptor_json);
+    for (const row of this.townManager.listOpenApprovalsWithDescriptor()) {
+      const descriptor = this.parseDescriptor(row.descriptorJson);
       if (!descriptor || descriptor.kind !== kind) continue;
       if (this.pendingHandlers.has(row.id)) continue;
       await this.dispatchRehydrate(row.id, descriptor);
@@ -600,11 +583,19 @@ export class ApprovalManager {
     }
   }
 
-  /** Lazy rehydrate — called from any public path that benefits from it. */
+  /** Lazy rehydrate for SYNC callers (listOpen/castHeuristicVotes) that don't
+   *  fire approval handlers — kicks off the shared pass without awaiting. */
   private ensureRehydrated(): void {
     if (this.rehydrated) return;
-    // Fire-and-forget; rehydrate sets the flag synchronously up-front.
     void this.rehydrate();
+  }
+
+  /** Lazy rehydrate for ASYNC callers that DO fire resolveOnce handlers
+   *  (tally/mayorDecide). Awaits completion so a handler can never fire before
+   *  its resolveOnce hook has been re-attached after a restart. */
+  private async ensureRehydratedAsync(): Promise<void> {
+    if (this.rehydrated) return;
+    try { await this.rehydrate(); } catch { /* rehydrate is failure-isolated */ }
   }
 
   private async dispatchRehydrate(
@@ -666,59 +657,11 @@ export class ApprovalManager {
    * Best-effort — failures are logged and ignored.
    */
   private clearDescriptor(approvalId: string): void {
-    const db = this.openDescriptorDb();
-    if (!db) return;
-    try {
-      db.prepare(`UPDATE approvals SET handler_descriptor_json = NULL WHERE id = ?`).run(approvalId);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn({ err: msg, approvalId }, 'ApprovalManager.clearDescriptor: UPDATE failed');
-    }
+    this.townManager.setApprovalDescriptor(approvalId, null);
   }
 
   private persistDescriptor(approvalId: string, descriptor: HandlerDescriptor): void {
-    const db = this.openDescriptorDb();
-    if (!db) return;
-    try {
-      db.prepare(`UPDATE approvals SET handler_descriptor_json = ? WHERE id = ?`).run(
-        JSON.stringify(descriptor),
-        approvalId,
-      );
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(
-        { err: msg, approvalId, kind: descriptor.kind },
-        'ApprovalManager.persistDescriptor: UPDATE failed',
-      );
-    }
-  }
-
-  /**
-   * Open a dedicated better-sqlite3 handle to the same town.db file the
-   * TownManager owns, just for handler_descriptor_json reads/writes. Multiple
-   * connections to the same file are safe under SQLite's WAL mode (which
-   * TownManager already enables). Failure is sticky (descriptorDbFailed) so
-   * we don't thrash retry on a broken DB.
-   */
-  private openDescriptorDb(): Database.Database | null {
-    if (this.descriptorDb) return this.descriptorDb;
-    if (this.descriptorDbFailed) return null;
-    try {
-      const dataDir = this.townManager.getDataDir();
-      const dbPath = path.join(dataDir, 'town.db');
-      const handle = new Database(dbPath);
-      handle.pragma('journal_mode = WAL');
-      this.descriptorDb = handle;
-      return handle;
-    } catch (err: unknown) {
-      this.descriptorDbFailed = true;
-      const msg = err instanceof Error ? err.message : String(err);
-      logger.warn(
-        { err: msg },
-        'ApprovalManager.openDescriptorDb: failed to open companion handle; handler persistence disabled for this process',
-      );
-      return null;
-    }
+    this.townManager.setApprovalDescriptor(approvalId, JSON.stringify(descriptor));
   }
 }
 

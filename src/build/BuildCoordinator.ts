@@ -13,21 +13,18 @@ import type { Config } from '../config';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
 import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
 import { intersectsProtectedZone } from '../actions/geofence';
+import { SchematicStore } from './SchematicStore';
+import type { SchematicInfo, CachedSchematic } from './SchematicStore';
+import { GatherPlanner, normalizeResource } from './GatherPlanner';
+import type { GatherPlanEntry, SkillChunk } from './GatherPlanner';
+
+// Re-exported so existing importers of these types from BuildCoordinator keep working.
+export type { SchematicInfo, CachedSchematic } from './SchematicStore';
+export type { GatherPlanEntry } from './GatherPlanner';
 
 // ── Interfaces ──────────────────────────────────────────────
 
-export interface SchematicInfo {
-  filename: string;
-  size: { x: number; y: number; z: number };
-  blockCount: number;
-  /**
-   * Optional per-block-type count map (block name → number of blocks of that
-   * type in the schematic). Only populated for schematics small enough to
-   * parse without estimation — large schematics (size-estimated or
-   * volume > 200k) omit this since we don't iterate the full block list.
-   */
-  palette?: Record<string, number>;
-}
+// SchematicInfo / CachedSchematic now live in ./SchematicStore (re-exported above).
 
 export interface BuildJob {
   id: string;
@@ -68,17 +65,7 @@ export interface BuildJob {
   buildingId?: string;
 }
 
-/**
- * One queued gather task in the autoGather pre-stage. Each entry corresponds
- * to a single chunk of material the bot needs to fetch before placement.
- */
-export interface GatherPlanEntry {
-  botName: string;
-  resource: string;
-  chunkSize: number;
-  description: string;
-  skillFile: string;
-}
+// GatherPlanEntry now lives in ./GatherPlanner (re-exported above).
 
 export interface BotAssignment {
   botName: string;
@@ -100,25 +87,7 @@ interface BlockEntry {
   localY: number;
 }
 
-interface CachedSchematic {
-  size: { x: number; y: number; z: number };
-  /** Blocks in schematic-local coordinates (relative to start). */
-  blocks: Array<{ rx: number; ry: number; rz: number; name: string; stateStr: string }>;
-}
-
-/**
- * A discovered gather-skill entry. For a given resource (normalized canonical
- * name like `cobblestone`, `oak_log`), pick the LARGEST chunk size available
- * in the skill cache so a shortfall of 32 becomes 4 chunks of 8 rather than
- * 32 chunks of 1.
- */
-interface SkillChunk {
-  resource: string;
-  chunkSize: number;
-  skillFile: string;
-  /** Original token used for the human description, e.g. "Mine 8 cobblestone". */
-  description: string;
-}
+// SkillChunk + AUTOGATHER_MAX_CHUNKS now live in ./GatherPlanner.
 
 /**
  * Minecraft 1.18+ overworld build-height range. The world below -64 and above
@@ -128,8 +97,6 @@ interface SkillChunk {
 const MIN_BUILD_Y = -64;
 const MAX_BUILD_Y = 320;
 
-/** Upper bound on chunks queued across all bots for a single build. */
-const AUTOGATHER_MAX_CHUNKS = 50;
 /** Polling interval while waiting for bots to clear the inventory bar. */
 const AUTOGATHER_POLL_INTERVAL_MS = 5_000;
 /** Default upper time bound for the whole gather phase. */
@@ -186,13 +153,13 @@ export class BuildCoordinator {
    */
   private reassignQueues = new Map<string, Map<string, BlockEntry[]>>();
   /** Parsed-schematic cache, keyed by filename. Invalidated when file mtime changes. */
-  private schematicCache = new Map<string, { mtimeMs: number; data: CachedSchematic }>();
+  private schematicStore!: SchematicStore;
   /**
    * Per-resource gather-skill catalog. Discovered lazily from `skills/` the
    * first time autoGather runs (and re-discovered if the dir is cleared).
    * Key: normalized resource name (e.g. `cobblestone`, `oak_log`).
    */
-  private skillChunkCatalog: Map<string, SkillChunk> | null = null;
+  private gatherPlanner!: GatherPlanner;
   /** Per-job autoGather context, populated when options.autoGather is true. */
   private gatherJobs = new Map<string, { plan: GatherPlanEntry[]; timeoutMs: number }>();
   /** Override for unit tests — when set, skipped wall-clock polling delays. */
@@ -203,6 +170,8 @@ export class BuildCoordinator {
     this.io = io;
     this.eventLog = eventLog;
     this.schematicsDir = path.join(process.cwd(), 'schematics');
+    this.schematicStore = new SchematicStore(this.schematicsDir, () => this.getBotVersion());
+    this.gatherPlanner = new GatherPlanner((botName) => this.getBotInventory(botName));
     this.persistPath = path.join(process.cwd(), 'data', 'builds.json');
     this.sitePrepTimeoutMs =
       config?.build?.sitePrepTimeoutMs ?? SITE_PREP_DEFAULT_TIMEOUT_MS;
@@ -563,39 +532,11 @@ export class BuildCoordinator {
    * Result is cached by filename+mtime so repeated startBuild/resumeJob calls
    * for the same file skip the NBT parse + triple-nested iteration.
    */
-  private async loadSchematicCached(filename: string): Promise<CachedSchematic> {
-    const fullPath = path.join(this.schematicsDir, filename);
-    const mtimeMs = fs.statSync(fullPath).mtimeMs;
-    const cached = this.schematicCache.get(filename);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.data;
-
-    const { Schematic } = require('prismarine-schematic');
-    const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer, await this.getBotVersion());
-    const start = schematic.start();
-    const end = schematic.end();
-    const sx = start.x, sy = start.y, sz = start.z;
-    const size = schematic.size;
-
-    const blocks: CachedSchematic['blocks'] = [];
-    const tempPos = new Vec3(0, 0, 0);
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          tempPos.x = x; tempPos.y = y; tempPos.z = z;
-          const block = schematic.getBlock(tempPos);
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            const props = block.getProperties ? block.getProperties() : {};
-            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
-            blocks.push({ rx: x - sx, ry: y - sy, rz: z - sz, name: block.name, stateStr });
-          }
-        }
-      }
-    }
-
-    const data: CachedSchematic = { size: { x: size.x, y: size.y, z: size.z }, blocks };
-    this.schematicCache.set(filename, { mtimeMs, data });
-    return data;
+  // Thin delegate to the extracted SchematicStore. Kept as an instance method
+  // (not inlined at call sites) so test subclasses/stubs that override
+  // `loadSchematicCached` continue to intercept resume/build schematic loads.
+  protected async loadSchematicCached(filename: string): Promise<CachedSchematic> {
+    return this.schematicStore.load(filename);
   }
 
   // ── Schematic listing ───────────────────────────────────
@@ -611,73 +552,13 @@ export class BuildCoordinator {
     return '1.21.11';
   }
 
+  // Listing/metadata delegate to the extracted SchematicStore.
   async listSchematics(): Promise<SchematicInfo[]> {
-    if (!fs.existsSync(this.schematicsDir)) return [];
-
-    const files = fs.readdirSync(this.schematicsDir).filter(
-      (f) => f.endsWith('.schem') || f.endsWith('.schematic'),
-    );
-
-    const results: SchematicInfo[] = [];
-    for (const filename of files) {
-      try {
-        // Skip files larger than 1MB to avoid OOM on huge schematics
-        const filePath = path.join(this.schematicsDir, filename);
-        const stat = fs.statSync(filePath);
-        if (stat.size > 10_000_000) {
-          results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
-          logger.info({ filename, sizeBytes: stat.size }, 'Skipping large schematic metadata load');
-          continue;
-        }
-        const info = await this.getSchematicInfoSafe(filename);
-        if (info) results.push(info);
-      } catch (err: any) {
-        logger.warn({ filename, err: err.message }, 'Failed to read schematic metadata');
-        results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
-      }
-    }
-    return results;
-  }
-
-  /** Safe metadata loader — gets dimensions without holding the full schematic in memory */
-  private async getSchematicInfoSafe(filename: string): Promise<SchematicInfo | null> {
-    const fullPath = path.join(this.schematicsDir, filename);
-    if (!fs.existsSync(fullPath)) return null;
-
-    // Heuristic: compressed .schem files typically have ~100:1 to ~200:1 ratio.
-    // Files over 50KB compressed likely decompress to millions of voxels — skip parsing entirely.
-    const fileSize = fs.statSync(fullPath).size;
-    if (fileSize > 50_000) {
-      logger.info({ filename, fileSize }, 'Large schematic — estimating dimensions from file size');
-      // Rough estimate: compressed size * 150 gives approx total voxels, cube-root for dimensions
-      const estVoxels = fileSize * 150;
-      const estDim = Math.round(Math.cbrt(estVoxels));
-      return { filename, size: { x: estDim, y: Math.round(estDim * 0.6), z: estDim }, blockCount: Math.round(estVoxels * 0.15) };
-    }
-
-    try {
-      const cached = await this.loadSchematicCached(filename);
-      const size = cached.size;
-      const volume = size.x * size.y * size.z;
-      // For very large schematics, estimate block count and skip iteration
-      if (volume > 200_000) {
-        return { filename, size, blockCount: Math.round(volume * 0.15) };
-      }
-      // Tally palette counts so the dashboard can render a material list.
-      // Cheap: cached.blocks is already in memory, this is one pass.
-      const palette: Record<string, number> = {};
-      for (const b of cached.blocks) {
-        palette[b.name] = (palette[b.name] ?? 0) + 1;
-      }
-      return { filename, size, blockCount: cached.blocks.length, palette };
-    } catch (err: any) {
-      logger.warn({ filename, err: err.message }, 'Failed to parse schematic');
-      return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };
-    }
+    return this.schematicStore.listSchematics();
   }
 
   async getSchematicInfoAsync(filename: string): Promise<SchematicInfo | null> {
-    return this.getSchematicInfoSafe(filename);
+    return this.schematicStore.getSchematicInfo(filename);
   }
 
   // ── Build job management ────────────────────────────────
@@ -2335,110 +2216,15 @@ export class BuildCoordinator {
 
   // ── autoGather pre-stage ────────────────────────────────
 
-  /**
-   * Strip a `minecraft:` namespace prefix and normalize to lowercase. Used to
-   * align schematic palette keys (`minecraft:cobblestone`) with inventory and
-   * skill resource names (`cobblestone`).
-   */
-  private normalizeResource(name: string): string {
-    if (!name) return '';
-    const n = name.toLowerCase();
-    return n.startsWith('minecraft:') ? n.slice('minecraft:'.length) : n;
-  }
-
-  /**
-   * Discover gather-skill chunk sizes by reading `skills/` filenames.
-   *
-   * Each filename matching `(mine|craft)_<N>_<resource>(_suffix)?.js` is
-   * parsed; resources are normalized by stripping common suffix words and
-   * collapsed-token variants (e.g. `oakplanks` → `oak_planks`). We retain
-   * the LARGEST chunk size per resource so a 32-block shortfall produces 4
-   * tasks of 8 rather than 32 tasks of 1.
-   *
-   * The catalog is cached in-memory; pass `force` to re-scan.
-   */
+  // Gather-planning delegates to the extracted GatherPlanner. Kept as instance
+  // methods so the autoGather tests (which subclass + call these through `this`
+  // and override getBotInventory) still intercept.
   protected getSkillChunkCatalog(force = false): Map<string, SkillChunk> {
-    if (this.skillChunkCatalog && !force) return this.skillChunkCatalog;
-
-    const catalog = new Map<string, SkillChunk>();
-    const skillsDir = path.join(process.cwd(), 'skills');
-    let files: string[] = [];
-    try {
-      files = fs.readdirSync(skillsDir).filter((f) => f.endsWith('.js'));
-    } catch (err: any) {
-      logger.warn({ err: err.message, skillsDir }, 'autoGather: skills/ unreadable, catalog empty');
-      this.skillChunkCatalog = catalog;
-      return catalog;
-    }
-
-    // Filenames like `mine_8_cobblestone.js`, `craft_4_oak_planks_using.js`.
-    // Capture verb, N, and the meaningful resource token(s).
-    const re = /^(mine|craft)_(\d+)_([a-z0-9_]+?)(?:_(?:from|using|to|at|the|in|near|with|nearby|more|of|by)(?:_.*)?)?\.js$/;
-    for (const file of files) {
-      const m = re.exec(file);
-      if (!m) continue;
-      const verb = m[1];
-      const n = parseInt(m[2], 10);
-      if (!Number.isFinite(n) || n <= 0) continue;
-      let resource = m[3];
-
-      // Normalize collapsed-token variants by inserting underscores between
-      // recognized "<wood>planks" / "<wood>log" / similar fused words.
-      resource = resource.replace(/^(oak|spruce|birch|jungle|acacia|dark_oak|cherry|mangrove)(planks|log|logs|door|fence|stairs|slab)$/,
-        (_full, wood, suffix) => `${wood}_${suffix}`);
-
-      // Strip trailing `_blocks` (e.g. `mine_10_andesite_blocks` → `andesite`).
-      resource = resource.replace(/_blocks?$/, '');
-
-      // Drop leading filler tokens that aren't part of the resource name.
-      // `blocks_of_stone` → `stone`; `more_cobblestone` → `cobblestone`.
-      resource = resource.replace(/^(blocks?_of_|more_)/, '');
-
-      // Add the bare resource plus a plural/singular variant so a schematic
-      // key of `oak_log` aligns with a skill of `mine_3_oak_logs`.
-      const variants = new Set<string>([resource]);
-      if (resource.endsWith('s') && !resource.endsWith('ss')) {
-        variants.add(resource.slice(0, -1));
-      } else {
-        variants.add(`${resource}s`);
-      }
-
-      for (const r of variants) {
-        const existing = catalog.get(r);
-        if (!existing || existing.chunkSize < n) {
-          const verbWord = verb === 'mine' ? 'Mine' : 'Craft';
-          catalog.set(r, {
-            resource: r,
-            chunkSize: n,
-            skillFile: file,
-            description: `${verbWord} ${n} ${resource}`,
-          });
-        }
-      }
-    }
-
-    this.skillChunkCatalog = catalog;
-    logger.info(
-      { resources: catalog.size },
-      'autoGather: skill chunk catalog built',
-    );
-    return catalog;
+    return this.gatherPlanner.getSkillChunkCatalog(force);
   }
 
-  /**
-   * Compute the per-material requirement for a schematic from its block list.
-   * Returns a map keyed by NORMALIZED block name (no `minecraft:` prefix).
-   */
-  private computeMaterialRequirement(
-    blocks: ReadonlyArray<{ name: string }>,
-  ): Map<string, number> {
-    const req = new Map<string, number>();
-    for (const b of blocks) {
-      const key = this.normalizeResource(b.name);
-      if (!key) continue;
-      req.set(key, (req.get(key) ?? 0) + 1);
-    }
-    return req;
+  private computeMaterialRequirement(blocks: ReadonlyArray<{ name: string }>): Map<string, number> {
+    return this.gatherPlanner.computeMaterialRequirement(blocks);
   }
 
   /**
@@ -2460,13 +2246,13 @@ export class BuildCoordinator {
     if (Array.isArray(inv)) {
       for (const item of inv) {
         if (!item || typeof item.name !== 'string') continue;
-        const key = this.normalizeResource(item.name);
+        const key = normalizeResource(item.name);
         const count = typeof item.count === 'number' ? item.count : 0;
         out.set(key, (out.get(key) ?? 0) + count);
       }
     } else if (inv && typeof inv === 'object') {
       for (const [k, v] of Object.entries(inv as Record<string, unknown>)) {
-        const key = this.normalizeResource(k);
+        const key = normalizeResource(k);
         const count = typeof v === 'number' ? v : 0;
         out.set(key, (out.get(key) ?? 0) + count);
       }
@@ -2487,64 +2273,7 @@ export class BuildCoordinator {
     botNames: string[],
     requirement: Map<string, number>,
   ): { plan: GatherPlanEntry[]; perBotTarget: Map<string, Map<string, number>> } {
-    const catalog = this.getSkillChunkCatalog();
-    const plan: GatherPlanEntry[] = [];
-    const perBotTarget = new Map<string, Map<string, number>>();
-    if (botNames.length === 0) return { plan, perBotTarget };
-
-    // Each bot is responsible for an even share of every material.
-    const share = (total: number, n: number) => Math.ceil(total / Math.max(1, n));
-
-    for (const bot of botNames) {
-      perBotTarget.set(bot, new Map());
-    }
-    for (const [material, total] of requirement.entries()) {
-      const per = share(total, botNames.length);
-      for (const bot of botNames) {
-        perBotTarget.get(bot)!.set(material, per);
-      }
-    }
-
-    let queued = 0;
-    for (const bot of botNames) {
-      if (queued >= AUTOGATHER_MAX_CHUNKS) break;
-      const inv = this.getBotInventory(bot);
-      const targets = perBotTarget.get(bot)!;
-      for (const [material, target] of targets.entries()) {
-        if (queued >= AUTOGATHER_MAX_CHUNKS) break;
-        const have = inv.get(material) ?? 0;
-        const shortage = target - have;
-        if (shortage <= 0) continue;
-        // Match resource against the catalog, trying the bare key and a
-        // common plural/singular variant.
-        const chunk =
-          catalog.get(material) ??
-          (material.endsWith('s')
-            ? catalog.get(material.slice(0, -1))
-            : catalog.get(`${material}s`));
-        if (!chunk) {
-          logger.debug(
-            { bot, material, shortage },
-            'autoGather: no skill chunk found for material — skipping',
-          );
-          continue;
-        }
-        const chunks = Math.floor(shortage / chunk.chunkSize) + 1;
-        for (let i = 0; i < chunks; i++) {
-          if (queued >= AUTOGATHER_MAX_CHUNKS) break;
-          plan.push({
-            botName: bot,
-            resource: chunk.resource,
-            chunkSize: chunk.chunkSize,
-            description: chunk.description,
-            skillFile: chunk.skillFile,
-          });
-          queued++;
-        }
-      }
-    }
-
-    return { plan, perBotTarget };
+    return this.gatherPlanner.planGather(botNames, requirement);
   }
 
   /**

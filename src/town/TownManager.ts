@@ -1208,14 +1208,18 @@ export class TownManager {
       // style_observations has a FK to buildings(id); SQLite blocks the
       // delete without cascade. Drop the child rows first. (Documented the
       // hard way on 2026-05-26 when the manual cleanup pass kept failing.)
-      this.db
-        .delete(schema.styleObservations)
-        .where(eq(schema.styleObservations.buildingId, buildingId))
-        .run();
-      this.db
-        .delete(schema.buildings)
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
+      // Wrap both in a transaction so a crash between them can't leave the
+      // building deleted with orphaned style_observations (or vice-versa).
+      this.handle.sqlite.transaction(() => {
+        this.db
+          .delete(schema.styleObservations)
+          .where(eq(schema.styleObservations.buildingId, buildingId))
+          .run();
+        this.db
+          .delete(schema.buildings)
+          .where(eq(schema.buildings.id, buildingId))
+          .run();
+      })();
     } catch (err: any) {
       logger.warn(
         { err: err?.message, buildingId },
@@ -1956,6 +1960,36 @@ export class TownManager {
         'getApproval: read failed',
       );
       return null;
+    }
+  }
+
+  /**
+   * Set (or clear, with null) an approval row's handler_descriptor_json. Owns
+   * the column so ApprovalManager no longer opens its own second connection to
+   * town.db (review #10 — connection consolidation + leak fix). Best-effort.
+   */
+  setApprovalDescriptor(approvalId: string, descriptorJson: string | null): void {
+    try {
+      this.handle.sqlite
+        .prepare(`UPDATE approvals SET handler_descriptor_json = ? WHERE id = ?`)
+        .run(descriptorJson, approvalId);
+    } catch (err: any) {
+      logger.warn({ err: err?.message, approvalId }, 'setApprovalDescriptor: UPDATE failed');
+    }
+  }
+
+  /** Open approval rows that carry a persisted handler descriptor (for rehydrate). */
+  listOpenApprovalsWithDescriptor(): Array<{ id: string; townId: string | null; descriptorJson: string | null }> {
+    try {
+      const rows = this.handle.sqlite
+        .prepare(
+          `SELECT id, town_id, handler_descriptor_json FROM approvals WHERE status = 'open' AND handler_descriptor_json IS NOT NULL`,
+        )
+        .all() as Array<{ id: string; town_id: string | null; handler_descriptor_json: string | null }>;
+      return rows.map((r) => ({ id: r.id, townId: r.town_id, descriptorJson: r.handler_descriptor_json }));
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'listOpenApprovalsWithDescriptor: query failed');
+      return [];
     }
   }
 

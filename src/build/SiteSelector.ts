@@ -96,7 +96,22 @@ const DEFAULT_PROBE_TIMEOUT_MS = 1500;
 // hand-authored .schem files were the norm; LLM-designed buildings routinely
 // exceed 400 columns and need ~10k probes per candidate evaluation.
 const DEFAULT_DEADLINE_MS = 180_000;
-const DEFAULT_MAX_PROBES = 20_000;
+// Per-candidate probing is now sparse (see COL_SAMPLE_TARGET), so each candidate
+// costs ~1-2k probes instead of ~20k. Raise the global cap so the spiral can
+// actually evaluate dozens of candidates and reach empty ground at the town
+// periphery rather than giving up after one site on top of existing buildings.
+const DEFAULT_MAX_PROBES = 60_000;
+
+// Town-scale schematics have hundreds of footprint columns; probing every
+// column over the full build height costs ~20k probes per candidate and blows
+// the entire search budget on a single site (which, at a town capital, is
+// usually on top of existing buildings). Instead, sample a sparse grid of
+// ~COL_SAMPLE_TARGET columns and cap the obstacle scan to the first few blocks
+// above the surface. Flatness and obstacle signals survive sampling, and the
+// pre-job snapToGround + clearSite passes flatten/clear the chosen site anyway.
+// Small footprints (area <= target) keep stride 1 → unchanged exhaustive scan.
+const COL_SAMPLE_TARGET = 80;
+const OBSTACLE_SCAN_HEIGHT = 6;
 
 const SKY_CLEARANCE = 2;
 const NEAR_FALLOFF = 12;
@@ -286,17 +301,29 @@ async function evaluateCandidate(
   flatTol: number,
   ctx: SearchContext,
 ): Promise<SiteCandidate | null> {
-  // 1. Probe column tops across the footprint.
-  const tops: number[] = [];
-  for (let dx = 0; dx < size.x; dx++) {
-    for (let dz = 0; dz < size.z; dz++) {
-      if (budgetExceeded(ctx)) return null;
-      const top = await topSolidY(probe, seedX + dx, seedZ + dz, refY, ctx);
-      if (top !== null) tops.push(top);
+  // Sample a sparse grid of footprint columns rather than every column. For a
+  // small footprint (area <= COL_SAMPLE_TARGET) stride is 1 → exhaustive, same
+  // as before. For a town-scale footprint stride grows so we probe ~80 columns
+  // regardless of size, keeping per-candidate cost roughly constant.
+  const footprintCols = size.x * size.z;
+  const colStride = Math.max(1, Math.round(Math.sqrt(footprintCols / COL_SAMPLE_TARGET)));
+  const cols: Array<{ dx: number; dz: number }> = [];
+  for (let dx = 0; dx < size.x; dx += colStride) {
+    for (let dz = 0; dz < size.z; dz += colStride) {
+      cols.push({ dx, dz });
     }
   }
-  if (tops.length < (size.x * size.z) / 2) {
-    logger.debug({ seedX, seedZ, foundCols: tops.length, neededCols: Math.ceil((size.x * size.z) / 2), size, refY }, 'SiteSelector: candidate rejected — too few solid columns');
+  const obstacleScanHeight = Math.min(size.y, OBSTACLE_SCAN_HEIGHT);
+
+  // 1. Probe column tops across the sampled footprint.
+  const tops: number[] = [];
+  for (const { dx, dz } of cols) {
+    if (budgetExceeded(ctx)) return null;
+    const top = await topSolidY(probe, seedX + dx, seedZ + dz, refY, ctx);
+    if (top !== null) tops.push(top);
+  }
+  if (tops.length < cols.length / 2) {
+    logger.debug({ seedX, seedZ, foundCols: tops.length, sampledCols: cols.length, neededCols: Math.ceil(cols.length / 2), size, refY }, 'SiteSelector: candidate rejected — too few solid columns');
     return null;
   }
 
@@ -314,37 +341,39 @@ async function evaluateCandidate(
   let penalty = 0;
   const obstacles = { vegetation: 0, logs: 0, fluid: 0, artificial: 0 };
 
-  // 2. Inspect the footprint volume and the ground layer.
-  for (let dx = 0; dx < size.x; dx++) {
-    for (let dz = 0; dz < size.z; dz++) {
+  // 2. Inspect the sampled footprint columns and the ground layer. The vertical
+  // obstacle scan is capped at obstacleScanHeight — trees, water and existing
+  // builds are all detectable in the first few blocks above the surface, and
+  // scanning the full schematic height would multiply cost by ~size.y for no
+  // extra signal.
+  for (const { dx, dz } of cols) {
+    if (budgetExceeded(ctx)) return null;
+
+    // Ground layer just below the floor.
+    const ground = await timedProbe(probe, origin.x + dx, originY - 1, origin.z + dz, ctx);
+    if (isLog(ground)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
+    else if (isVeg(ground)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
+    if (isFluid(ground)) { obstacles.fluid++; penalty += FLUID_PENALTY; }
+    if (isPlayerBuilt(ground)) { obstacles.artificial++; penalty += ARTIFICIAL_PENALTY; }
+
+    // Column inside the footprint — looking for trees / spawners / player builds.
+    for (let dy = 0; dy < obstacleScanHeight; dy++) {
       if (budgetExceeded(ctx)) return null;
+      const b = await timedProbe(probe, origin.x + dx, originY + dy, origin.z + dz, ctx);
+      if (!b || b.name === 'air' || b.name === 'cave_air') continue;
+      if (isLog(b)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
+      else if (isVeg(b)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
+      if (isFluid(b)) { obstacles.fluid++; penalty += FLUID_PENALTY; }
+      if (b.name === 'spawner' || b.name === 'monster_egg') penalty += SPAWNER_PENALTY;
+      if (isPlayerBuilt(b)) { obstacles.artificial++; penalty += ARTIFICIAL_PENALTY; }
+    }
 
-      // Ground layer just below the floor.
-      const ground = await timedProbe(probe, origin.x + dx, originY - 1, origin.z + dz, ctx);
-      if (isLog(ground)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
-      else if (isVeg(ground)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
-      if (isFluid(ground)) { obstacles.fluid++; penalty += FLUID_PENALTY; }
-      if (isPlayerBuilt(ground)) { obstacles.artificial++; penalty += ARTIFICIAL_PENALTY; }
-
-      // Column inside the footprint — looking for trees / spawners / player builds.
-      for (let dy = 0; dy < size.y; dy++) {
-        if (budgetExceeded(ctx)) return null;
-        const b = await timedProbe(probe, origin.x + dx, originY + dy, origin.z + dz, ctx);
-        if (!b || b.name === 'air' || b.name === 'cave_air') continue;
-        if (isLog(b)) { obstacles.logs++; penalty += VEG_PENALTY * 2; }
-        else if (isVeg(b)) { obstacles.vegetation++; penalty += VEG_PENALTY; }
-        if (isFluid(b)) { obstacles.fluid++; penalty += FLUID_PENALTY; }
-        if (b.name === 'spawner' || b.name === 'monster_egg') penalty += SPAWNER_PENALTY;
-        if (isPlayerBuilt(b)) { obstacles.artificial++; penalty += ARTIFICIAL_PENALTY; }
-      }
-
-      // Sky clearance — partial roofing / cave ceilings penalised.
-      for (let dy = 0; dy < SKY_CLEARANCE; dy++) {
-        if (budgetExceeded(ctx)) break;
-        const top = await timedProbe(probe, origin.x + dx, originY + size.y + dy, origin.z + dz, ctx);
-        if (top && top.name !== 'air' && top.name !== 'cave_air') {
-          penalty += ROOF_PENALTY;
-        }
+    // Sky clearance — partial roofing / cave ceilings penalised.
+    for (let dy = 0; dy < SKY_CLEARANCE; dy++) {
+      if (budgetExceeded(ctx)) break;
+      const top = await timedProbe(probe, origin.x + dx, originY + size.y + dy, origin.z + dz, ctx);
+      if (top && top.name !== 'air' && top.name !== 'cave_air') {
+        penalty += ROOF_PENALTY;
       }
     }
   }
@@ -397,7 +426,10 @@ export async function selectBuildSite(
   const large = size.x > 16 || size.z > 16;
   const flatTol = options.maxYDelta ?? (large ? DEFAULT_FLAT_TOL_LARGE : DEFAULT_FLAT_TOL_SMALL);
   const step = options.step ?? DEFAULT_STEP;
-  const maxCandidates = options.maxCandidates ?? (large ? 12 : DEFAULT_MAX_CANDIDATES);
+  // Large (town-scale) builds need to evaluate MORE candidates, not fewer — the
+  // capital centre is usually built up, so the search must spiral outward to
+  // empty ground. Sparse per-candidate sampling makes this affordable.
+  const maxCandidates = options.maxCandidates ?? (large ? 48 : DEFAULT_MAX_CANDIDATES);
   const radius1 = options.radius ?? DEFAULT_RADIUS;
   const radius2 = options.fallbackRadius ?? DEFAULT_FALLBACK_RADIUS;
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;

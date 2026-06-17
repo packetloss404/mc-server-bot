@@ -35,6 +35,7 @@ import { StyleObservationRepository } from './StyleObservationRepository';
 import { ChronicleRepository } from './ChronicleRepository';
 import { DisasterRepository } from './DisasterRepository';
 import { DistrictRepository } from './DistrictRepository';
+import { BuildingRepository } from './BuildingRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -155,27 +156,7 @@ function rowToResident(row: ResidentRow): Resident {
   };
 }
 
-function rowToBuilding(row: BuildingRow): Building {
-  const origin: Vec3 | null =
-    row.originX != null && row.originY != null && row.originZ != null
-      ? { x: row.originX, y: row.originY, z: row.originZ }
-      : null;
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    districtId: row.districtId ?? null,
-    name: row.name ?? null,
-    schematicSource: row.schematicSource ?? null,
-    schematicRef: row.schematicRef ?? null,
-    origin,
-    width: row.width ?? null,
-    height: row.height ?? null,
-    depth: row.depth ?? null,
-    builtAt: row.builtAt ?? null,
-    destroyedAt: row.destroyedAt ?? null,
-    status: row.status ?? null,
-  };
-}
+// rowToBuilding now lives in ./BuildingRepository.
 
 function rowToEvent(row: EventRow): TownEvent {
   return {
@@ -266,6 +247,8 @@ export class TownManager {
   private readonly disasters: DisasterRepository;
   /** District persistence (extracted repository; TownManager delegates). */
   private readonly districts: DistrictRepository;
+  /** Building persistence (extracted repository; TownManager delegates). */
+  private readonly buildings: BuildingRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -326,6 +309,7 @@ export class TownManager {
     this.chronicles = new ChronicleRepository(this.db, fallbackAppend, (id) => this.getTown(id));
     this.disasters = new DisasterRepository(this.db, fallbackAppend, (id) => this.listResidents(id));
     this.districts = new DistrictRepository(this.db, (id) => this.getTown(id));
+    this.buildings = new BuildingRepository(this.db, this.handle.sqlite);
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -927,21 +911,11 @@ export class TownManager {
   //  Buildings
   // ──────────────────────────────────────────────────────────────────────
 
+  // Building persistence is delegated to BuildingRepository.
   listBuildings(townId: string): Building[] {
-    const rows = this.db
-      .select()
-      .from(schema.buildings)
-      .where(eq(schema.buildings.townId, townId))
-      .all();
-    return rows.map(rowToBuilding);
+    return this.buildings.listBuildings(townId);
   }
 
-  /**
-   * Insert a `planned` building row. Used by the Town Brain so the build loop
-   * is idempotent across ticks — listBuildings will see the planned row and
-   * skip the kind on the next tick. `name` is the brain's `kind:<n>` tag so
-   * countBuildingsByKind groups duplicates by kind.
-   */
   createPlannedBuilding(input: {
     townId: string;
     name: string;
@@ -949,91 +923,20 @@ export class TownManager {
     schematicRef?: string | null;
     districtId?: string | null;
   }): Building {
-    const id = genId('bld');
-    const row = {
-      id,
-      townId: input.townId,
-      districtId: input.districtId ?? null,
-      name: input.name,
-      schematicSource: input.schematicSource ?? null,
-      schematicRef: input.schematicRef ?? null,
-      originX: null,
-      originY: null,
-      originZ: null,
-      width: null,
-      height: null,
-      depth: null,
-      builtAt: null,
-      destroyedAt: null,
-      status: 'planned',
-    };
-    try {
-      this.db.insert(schema.buildings).values(row).run();
-    } catch (err: any) {
-      // No JSONL fallback for buildings — the brain retries next tick.
-      logger.warn(
-        { err: err?.message, townId: input.townId, name: input.name },
-        'createPlannedBuilding: insert failed; brain will retry next tick',
-      );
-    }
-    return rowToBuilding(row as unknown as BuildingRow);
+    return this.buildings.createPlannedBuilding(input);
   }
 
-  /**
-   * Phase 5-B — attach a districtId to a building row. Used by the brain's
-   * district loop to back-fill the district once the planned row has been
-   * inserted. No-op when the row already has a districtId (idempotent).
-   */
   setBuildingDistrict(buildingId: string, districtId: string): boolean {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.buildings)
-        .where(eq(schema.buildings.id, buildingId))
-        .get();
-      if (!row) return false;
-      if (row.districtId === districtId) return true;
-      this.db
-        .update(schema.buildings)
-        .set({ districtId })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-      return true;
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId, districtId },
-        'setBuildingDistrict: update failed',
-      );
-      return false;
-    }
+    return this.buildings.setBuildingDistrict(buildingId, districtId);
   }
 
-  /** Flip a planned/building row's status. Used when a build job resolves. */
   updateBuildingStatus(
     buildingId: string,
     status: 'planned' | 'building' | 'complete' | 'damaged' | 'destroyed',
   ): void {
-    try {
-      this.db
-        .update(schema.buildings)
-        .set({ status, builtAt: status === 'complete' ? Date.now() : undefined })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId, status },
-        'updateBuildingStatus: failed',
-      );
-    }
+    this.buildings.updateBuildingStatus(buildingId, status);
   }
 
-  /**
-   * Record where a planned building actually landed and flip it to 'building'
-   * (or straight to 'complete'). Called from TownBrain's build hooks once
-   * BuildCoordinator has resolved the (auto-flat) origin. Writing the origin
-   * here is what lets buildLoop's orphan reaper distinguish a live in-progress
-   * row (origin set) from a never-started orphan (origin null).
-   */
   recordBuildingPlacement(
     buildingId: string,
     placement: {
@@ -1044,58 +947,11 @@ export class TownManager {
       status?: 'building' | 'complete';
     },
   ): void {
-    try {
-      this.db
-        .update(schema.buildings)
-        .set({
-          originX: placement.origin.x,
-          originY: placement.origin.y,
-          originZ: placement.origin.z,
-          width: placement.width ?? undefined,
-          height: placement.height ?? undefined,
-          depth: placement.depth ?? undefined,
-          status: placement.status ?? 'building',
-          builtAt: placement.status === 'complete' ? Date.now() : undefined,
-        })
-        .where(eq(schema.buildings.id, buildingId))
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId },
-        'recordBuildingPlacement: failed',
-      );
-    }
+    this.buildings.recordBuildingPlacement(buildingId, placement);
   }
 
-  /**
-   * Hard-delete a building row. Used by TownBrain to clear a planned row whose
-   * build never started (resolve failure, no connected residents, startBuild
-   * throw) or whose job ended in failure/cancel — so the kind is re-queued next
-   * tick instead of the row holding the build loop's in-flight lock forever.
-   */
   deleteBuilding(buildingId: string): void {
-    try {
-      // style_observations has a FK to buildings(id); SQLite blocks the
-      // delete without cascade. Drop the child rows first. (Documented the
-      // hard way on 2026-05-26 when the manual cleanup pass kept failing.)
-      // Wrap both in a transaction so a crash between them can't leave the
-      // building deleted with orphaned style_observations (or vice-versa).
-      this.handle.sqlite.transaction(() => {
-        this.db
-          .delete(schema.styleObservations)
-          .where(eq(schema.styleObservations.buildingId, buildingId))
-          .run();
-        this.db
-          .delete(schema.buildings)
-          .where(eq(schema.buildings.id, buildingId))
-          .run();
-      })();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, buildingId },
-        'deleteBuilding: failed',
-      );
-    }
+    this.buildings.deleteBuilding(buildingId);
   }
 
   // ──────────────────────────────────────────────────────────────────────

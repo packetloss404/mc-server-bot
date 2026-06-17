@@ -101,6 +101,7 @@ export async function prepareBunkerSite(
   probeHandle: BunkerHandle,
   origin: { x: number; y: number; z: number },
   schSize: { x: number; y: number; z: number },
+  signal?: AbortSignal,
 ): Promise<PrepareBunkerSiteResult> {
   const warnings: string[] = [];
 
@@ -126,6 +127,14 @@ export async function prepareBunkerSite(
   const slabThickness = Math.max(1, Math.floor(32768 / Math.max(1, area)));
   let slabs = 0;
   for (let ySlabStart = yBase; ySlabStart <= yTop; ySlabStart += slabThickness) {
+    // Cancellation (review #5a): withTimeout only rejects the caller — without
+    // this the excavation keeps issuing destructive /fill slabs after the
+    // deadline. Stop emitting fills as soon as the caller aborts.
+    if (signal?.aborted) {
+      warnings.push('prepareBunkerSite: aborted (timeout) before finishing excavation');
+      logger.warn({ slabs }, 'prepareBunkerSite: aborted mid-excavation — stopping /fill slabs');
+      return { excavated: area * slabThickness * slabs, warnings };
+    }
     const ySlabEnd = Math.min(ySlabStart + slabThickness - 1, yTop);
     const cmd = `/fill ${x1} ${ySlabStart} ${z1} ${x2} ${ySlabEnd} ${z2} air destroy`;
     try {
@@ -135,6 +144,13 @@ export async function prepareBunkerSite(
       warnings.push(`fill slab failed: ${err?.message ?? err}`);
     }
     await sleep(200);
+  }
+
+  // If the abort fired during the post-fill settle, skip the (read-only but
+  // slow) bedrock/flood probes and return promptly.
+  if (signal?.aborted) {
+    warnings.push('prepareBunkerSite: aborted (timeout) after excavation, before validation');
+    return { excavated: area * (yTop - yBase + 1), warnings };
   }
 
   // Give the server a moment to apply the fills before probing.

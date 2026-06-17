@@ -915,8 +915,8 @@ export class BuildCoordinator {
 
       // Excavate the pit. Throws if bedrock or nearby liquid would break the build.
       // CRITICAL: propagate a timeout so the caller can clean up.
-      const bunkerResult = await withTimeout(
-        prepareBunkerSite(probeHandle, origin, schSize),
+      const bunkerResult = await this.withCancelableTimeout(
+        (signal) => prepareBunkerSite(probeHandle, origin, schSize, signal),
         sitePrepRemaining(),
         'startBuild prepareBunkerSite',
       );
@@ -959,12 +959,12 @@ export class BuildCoordinator {
         const clearanceHeight = Math.max(schSize.y, 12);
         // BEST-EFFORT: a timeout here is caught by the outer try/catch just
         // like any other runClearSite failure — we log and continue.
-        const clearResult = await withTimeout(
-          this.runClearSite(probeHandle, {
+        const clearResult = await this.withCancelableTimeout(
+          (signal) => this.runClearSite(probeHandle, {
             footprintMin,
             footprintMax,
             clearanceHeight,
-          }),
+          }, signal),
           sitePrepRemaining(),
           'startBuild runClearSite',
         );
@@ -2246,6 +2246,27 @@ export class BuildCoordinator {
    * `/fill ... air destroy` commands from the probe bot. Commands are issued
    * one Y-slab at a time so we never exceed Minecraft's 32768-block fill cap.
    */
+  /**
+   * Race `run` against a deadline AND give it an AbortSignal so a timed-out
+   * destructive op (clearSite/excavation) actually stops mutating the world
+   * instead of running on in the background (review #5a). withTimeout only
+   * rejects the caller; here we abort the signal on timeout/any rejection so
+   * the op can break out of its fill/dig loop.
+   */
+  private async withCancelableTimeout<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    ms: number,
+    label: string,
+  ): Promise<T> {
+    const controller = new AbortController();
+    try {
+      return await withTimeout(run(controller.signal), ms, label);
+    } catch (err) {
+      controller.abort();
+      throw err;
+    }
+  }
+
   private async runClearSite(
     probeHandle: any,
     opts: {
@@ -2253,6 +2274,7 @@ export class BuildCoordinator {
       footprintMax: { x: number; y: number; z: number };
       clearanceHeight?: number;
     },
+    signal?: AbortSignal,
   ): Promise<{ cleared: number; errors: string[]; skipped: number }> {
     const errors: string[] = [];
     const { footprintMin, footprintMax } = opts;
@@ -2273,6 +2295,12 @@ export class BuildCoordinator {
     let skipped = 0;
 
     for (let ySlabStart = yBase; ySlabStart <= yTop; ySlabStart += slabThickness) {
+      // Cancellation (review #5a): stop emitting destructive fills once the
+      // caller's deadline has aborted us — don't keep clearing after timeout.
+      if (signal?.aborted) {
+        logger.warn({ cleared: slabs, skipped }, 'Site-prep clearSite: aborted (timeout) — stopping further /fill slabs');
+        break;
+      }
       const ySlabEnd = Math.min(ySlabStart + slabThickness - 1, yTop);
       // Geofence guard. `/fill ... air destroy` is an op command and bypasses
       // the per-block `bot.dig` geofence, so without this a clearSite (enabled

@@ -18,8 +18,11 @@ export function setupSocketEvents(
   const prevStates = new Map<string, string>();
   const prevInventory = new Map<string, string>();
 
-  // Poll cached bot state every 1 second and emit changes
+  // Poll cached bot state every 1 second and emit changes.
+  // Wrapped in try/catch: an uncaught throw inside a setInterval callback
+  // becomes an unhandled exception that crashes the process.
   setInterval(() => {
+   try {
     const workers = botManager.getAllWorkers();
     for (const handle of workers) {
       const detailed = handle.getCachedDetailedStatus();
@@ -71,6 +74,9 @@ export function setupSocketEvents(
         }
       }
     }
+   } catch (err: any) {
+     logger.warn({ err: err?.message }, 'socketEvents poll tick threw; continuing');
+   }
   }, 1000);
 
   // (Previously emitted `world:time` every 30s, but no frontend listener exists.

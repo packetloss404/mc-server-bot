@@ -300,8 +300,12 @@ export class LLMSettings {
       const dir = path.dirname(SETTINGS_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       const tmpPath = SETTINGS_PATH + '.tmp';
-      fs.writeFileSync(tmpPath, JSON.stringify(this.settings, null, 2));
+      // mode 0o600: this file holds plaintext provider API keys. Restrict to
+      // owner read/write so other local users can't read the credentials.
+      // writeFileSync sets the mode on create; rename preserves it.
+      fs.writeFileSync(tmpPath, JSON.stringify(this.settings, null, 2), { mode: 0o600 });
       fs.renameSync(tmpPath, SETTINGS_PATH);
+      try { fs.chmodSync(SETTINGS_PATH, 0o600); } catch { /* best-effort on pre-existing file */ }
     } catch (err: any) {
       logger.error({ err: err.message }, 'Failed to save LLM settings');
     }

@@ -764,6 +764,11 @@ export class VoyagerLoop {
   private async runOneCycle(): Promise<void> {
     if (this.paused) return;
 
+    // bot.entity is null in the death→respawn window. Several hot paths below
+    // (computeSurvivalGoal, build origin resolution) dereference it; bail this
+    // cycle if we're not embodied yet. scheduleNext() still re-arms the loop.
+    if (!this.bot?.entity) return;
+
     // Pull current difficulty modifiers up front so they shape this cycle's cadence
     // (cooldown for the *next* schedule) and gate proactive chat below. Failures here
     // are non-fatal — bots without a balancer keep their previous (neutral) defaults.

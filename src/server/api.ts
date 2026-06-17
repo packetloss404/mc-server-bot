@@ -700,7 +700,7 @@ export function createAPIServer(
   }));
 
   // Remove single bot
-  app.delete('/api/bots/:name', async (req: Request, res: Response) => {
+  app.delete('/api/bots/:name', asyncH(async (req: Request, res: Response) => {
     const removed = await botManager.removeBot(req.params.name as string);
     if (!removed) {
       res.status(404).json({ error: 'Bot not found' });
@@ -713,13 +713,13 @@ export function createAPIServer(
     io.emit('activity', event);
 
     res.json({ success: true });
-  });
+  }));
 
   // Remove all bots
-  app.delete('/api/bots', async (_req: Request, res: Response) => {
+  app.delete('/api/bots', asyncH(async (_req: Request, res: Response) => {
     const count = await botManager.removeAllBots();
     res.json({ success: true, count });
-  });
+  }));
 
   // Toggle mode
   app.post('/api/bots/:name/mode', (req: Request, res: Response) => {
@@ -1463,6 +1463,13 @@ export function createAPIServer(
   // Single skill with code — read from disk
   app.get('/api/skills/:name', (req: Request, res: Response) => {
     const skillName = req.params.name as string;
+    // Path-traversal guard: req.params is URL-decoded, so without this a name
+    // like `..%2f..%2fdist%2fconfig` would escape the skills/ dir and read any
+    // .js file on disk. Mirrors the isSafeSkillName check used by PUT/DELETE.
+    if (!/^[a-zA-Z0-9_-]+$/.test(skillName)) {
+      res.status(400).json({ error: 'Invalid skill name' });
+      return;
+    }
     const skillPath = path.join(process.cwd(), 'skills', `${skillName}.js`);
     if (!fs.existsSync(skillPath)) {
       res.status(404).json({ error: 'Skill not found' });

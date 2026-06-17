@@ -1579,7 +1579,7 @@ export class BuildCoordinator {
         }
         logger.info(
           { jobId, checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing,
-            sample: sweep.sampleMisses.slice(0, 8) },
+            preserved: sweep.preserved, sample: sweep.sampleMisses.slice(0, 8) },
           'Build verify-and-repair sweep complete',
         );
       } catch (err: any) {
@@ -1713,6 +1713,24 @@ export class BuildCoordinator {
    * Returns the number of targets checked, how many were repaired, and the
    * residual miss count (true holes) plus a sample of their coords.
    */
+  /** AIR-equivalent block names the verify sweep treats as "empty". */
+  private static readonly VERIFY_AIR_NAMES = new Set(['air', 'cave_air', 'void_air']);
+
+  /**
+   * Classify a verify read (holes-only repair, review #5d):
+   *   'ok'       — current block matches the target, nothing to do.
+   *   'preserve' — a DIFFERENT non-air block is here (almost always a player
+   *                edit / legit terrain). Leave it; do NOT /setblock replace.
+   *   'repair'   — air or unreadable-empty: a genuine dropped placement to
+   *                re-place.
+   * `got` is the normalized (minecraft:-stripped) world block name, or null.
+   */
+  private classifyVerifyRead(got: string | null, target: string): 'ok' | 'preserve' | 'repair' {
+    if (got === target) return 'ok';
+    if (got && !BuildCoordinator.VERIFY_AIR_NAMES.has(got)) return 'preserve';
+    return 'repair';
+  }
+
   private async verifyAndRepairJob(
     jobId: string,
     job: BuildJob,
@@ -1722,6 +1740,7 @@ export class BuildCoordinator {
     checked: number;
     repaired: number;
     missing: number;
+    preserved: number;
     sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
   }> {
     // loadSchematicCached already excludes air, so every entry is a solid target.
@@ -1741,15 +1760,16 @@ export class BuildCoordinator {
     checked: number;
     repaired: number;
     missing: number;
+    preserved: number;
     sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
   }> {
     const isCancelled = () => label !== null && this.cancelledJobs.has(label);
-    if (targets.length === 0) return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+    if (targets.length === 0) return { checked: 0, repaired: 0, missing: 0, preserved: 0, sampleMisses: [] };
 
     let verifier = await this.pickConnectedBot(preferredBots);
     if (!verifier) {
       logger.warn({ label }, 'Verify sweep skipped — no connected bot available to read the world back');
-      return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+      return { checked: 0, repaired: 0, missing: 0, preserved: 0, sampleMisses: [] };
     }
 
     const norm = (n: string | undefined): string | null =>
@@ -1783,6 +1803,7 @@ export class BuildCoordinator {
     let toCheck = targets;
     let missing: BlockEntry[] = [];
     let initialMissing = -1; // miss count on the first read, before any repair
+    let preservedTotal = 0;  // non-air mismatches left intact (likely player edits)
     const sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }> = [];
 
     try {
@@ -1809,8 +1830,9 @@ export class BuildCoordinator {
           arr.push(b);
         }
 
-        const roundMisses: BlockEntry[] = [];   // read as wrong → re-place + re-check
+        const roundMisses: BlockEntry[] = [];   // read as air/empty → re-place + re-check
         const unverified: BlockEntry[] = [];     // chunk never loaded → re-check only
+        const preservedMods: BlockEntry[] = [];  // non-air mismatch → left intact (player edit)
         for (const bucket of buckets.values()) {
           if (isCancelled()) break;
 
@@ -1843,7 +1865,18 @@ export class BuildCoordinator {
             for (let j = 0; j < slice.length; j++) {
               const b = slice[j];
               const got = norm(reads[j]?.name);
-              if (got !== b.name) roundMisses.push(b);
+              const verdict = this.classifyVerifyRead(got, b.name);
+              if (verdict === 'ok') continue;
+              if (verdict === 'preserve') {
+                // A different non-air block sits here — almost always a player
+                // edit (or legit terrain variation), not a dropped placement.
+                // Overwriting it with /setblock replace would silently revert
+                // player builds on every completion + re-run. Preserve it.
+                preservedMods.push(b);
+                continue;
+              }
+              // air / unreadable-empty → genuine dropped placement → re-place.
+              roundMisses.push(b);
             }
           }
         }
@@ -1857,12 +1890,14 @@ export class BuildCoordinator {
           await this.sleep(PLACE_PACE_MS);
         }
 
+        preservedTotal += preservedMods.length;
         const residual = roundMisses.concat(unverified);
         missing = residual;
         if (initialMissing < 0) initialMissing = residual.length;
         logger.info(
           { label, round: round + 1, checkedThisRound: toCheck.length,
-            confirmedMissing: roundMisses.length, unverified: unverified.length },
+            confirmedMissing: roundMisses.length, unverified: unverified.length,
+            preserved: preservedMods.length },
           'Verify sweep round complete',
         );
         if (residual.length === 0) break;
@@ -1882,6 +1917,7 @@ export class BuildCoordinator {
       checked: targets.length,
       repaired: initialMissing < 0 ? 0 : Math.max(0, initialMissing - missing.length),
       missing: missing.length,
+      preserved: preservedTotal,
       sampleMisses,
     };
   }

@@ -41,6 +41,7 @@ import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { registerAdminRoutes } from './admin';
+import { isSafeBotName, isSafeFilename, asyncH, sanitizeErrorMessage } from './routes/helpers';
 import { registerTerrainRoutes } from './routes/terrainRoutes';
 import { logger } from '../util/logger';
 import {
@@ -58,57 +59,8 @@ import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
 import { atomicWriteJsonSync, atomicWriteTextSync } from '../util/atomicWrite';
 
-// ── Input validation helpers ─────────────────────────────────────────
-// Bot names become filenames (e.g. `data/<name>.json`) and worker thread
-// names; Minecraft usernames are `[A-Za-z0-9_]{3,16}` so we enforce that.
-const BOT_NAME_RE = /^[A-Za-z0-9_]{3,16}$/;
-function isSafeBotName(name: unknown): name is string {
-  return typeof name === 'string' && BOT_NAME_RE.test(name);
-}
-
-// Filenames used in `path.join(schematicsDir, name)` — reject anything that
-// would escape the directory (path separators, `..`, NUL bytes, etc.).
-function isSafeFilename(name: unknown): name is string {
-  if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
-  if (name.includes('\0') || name.includes('..')) return false;
-  // basename() strips any path components; equality means there were none.
-  return path.basename(name) === name;
-}
-
-/**
- * Wraps an async Express handler so rejected promises are forwarded to the
- * error-handling middleware instead of crashing the process. Wraps only the
- * handlers identified by the API audit as containing un-caught awaits —
- * notably `POST /api/bots`, `POST /api/swarm`, `POST /api/missions`, and
- * `POST /api/builds`. Other endpoints that already wrap their work in
- * try/catch don't need it.
- */
-const asyncH = (
-  fn: (req: Request, res: Response, next: NextFunction) => unknown | Promise<unknown>,
-): RequestHandler => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
-
-/**
- * Strip absolute file paths and stack-trace style noise out of an error
- * message before sending it back to the client. Without this, validation
- * failures from deep inside `BuildCoordinator` etc. can leak server filesystem
- * layout (e.g. `/opt/mc-server-bot/data/...`) into JSON responses. We keep the
- * leading message — everything before the first absolute path — and replace
- * the offending segment with `<path>`.
- */
-function sanitizeErrorMessage(input: unknown, fallback = 'Internal error'): string {
-  const raw = input instanceof Error
-    ? input.message
-    : (typeof input === 'string' ? input : (input != null ? String(input) : ''));
-  if (!raw) return fallback;
-  // Replace any POSIX-style absolute path (and the immediately following
-  // path-like characters) with a placeholder. Conservative: only strips
-  // segments that look like real paths, not arbitrary slashes in text.
-  let cleaned = raw.replace(/\/(?:[\w.@+-]+\/)+[\w.@+-]+/g, '<path>');
-  // Also collapse newlines (occasional stack-trace bleed-through).
-  cleaned = cleaned.split('\n')[0]!.trim();
-  return cleaned || fallback;
-}
+// Input-validation + response helpers now live in ./routes/helpers (shared with
+// the extracted route modules). Re-imported below.
 
 /**
  * Minimal worker-handle shape consumed by `createGrantHandler`. Defined

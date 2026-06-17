@@ -12,6 +12,7 @@ import { withTimeout } from '../util/withTimeout';
 import type { Config } from '../config';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
 import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
+import { intersectsProtectedZone } from '../actions/geofence';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -932,7 +933,7 @@ export class BuildCoordinator {
           'startBuild runClearSite',
         );
         logger.info(
-          { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length, clearanceHeight },
+          { clearedSlabs: clearResult.cleared, skippedProtected: clearResult.skipped, errors: clearResult.errors.length, clearanceHeight },
           'Site-prep: cleared footprint ahead of snap-to-ground',
         );
       } catch (err: any) {
@@ -2180,7 +2181,7 @@ export class BuildCoordinator {
       footprintMax: { x: number; y: number; z: number };
       clearanceHeight?: number;
     },
-  ): Promise<{ cleared: number; errors: string[] }> {
+  ): Promise<{ cleared: number; errors: string[]; skipped: number }> {
     const errors: string[] = [];
     const { footprintMin, footprintMax } = opts;
     const x1 = Math.min(footprintMin.x, footprintMax.x);
@@ -2192,14 +2193,32 @@ export class BuildCoordinator {
     const yTop = yBase + height - 1;
 
     const area = (x2 - x1 + 1) * (z2 - z1 + 1);
-    if (area <= 0) return { cleared: 0, errors };
+    if (area <= 0) return { cleared: 0, errors, skipped: 0 };
 
     // Fill cap is 32768 blocks. Slab size per Y is `area` — slice Y to stay under cap.
     const slabThickness = Math.max(1, Math.floor(32768 / Math.max(1, area)));
     let slabs = 0;
+    let skipped = 0;
 
     for (let ySlabStart = yBase; ySlabStart <= yTop; ySlabStart += slabThickness) {
       const ySlabEnd = Math.min(ySlabStart + slabThickness - 1, yTop);
+      // Geofence guard. `/fill ... air destroy` is an op command and bypasses
+      // the per-block `bot.dig` geofence, so without this a clearSite (enabled
+      // by default, and forced on for town builds) would wipe any protected
+      // build that overlaps the footprint+clearance. Skip slabs that intersect
+      // a protected zone rather than destroying it.
+      const hit = intersectsProtectedZone(
+        { x: x1, y: ySlabStart, z: z1 },
+        { x: x2, y: ySlabEnd, z: z2 },
+      );
+      if (hit) {
+        skipped++;
+        logger.warn(
+          { zone: hit.name ?? 'unnamed', ySlabStart, ySlabEnd, x1, x2, z1, z2 },
+          'Site-prep clearSite: slab intersects a protected zone — skipping /fill air destroy',
+        );
+        continue;
+      }
       const cmd = `/fill ${x1} ${ySlabStart} ${z1} ${x2} ${ySlabEnd} ${z2} air destroy`;
       try {
         probeHandle.chat(cmd);
@@ -2211,7 +2230,7 @@ export class BuildCoordinator {
       await this.sleep(200);
     }
 
-    return { cleared: slabs, errors };
+    return { cleared: slabs, errors, skipped };
   }
 
   // ── autoGather pre-stage ────────────────────────────────

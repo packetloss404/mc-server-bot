@@ -48,6 +48,7 @@ import { registerChainRoutes } from './routes/chainRoutes';
 import { registerControlRoutes } from './routes/controlRoutes';
 import { registerCommanderRoutes } from './routes/commanderRoutes';
 import { registerCampaignRoutes } from './routes/campaignRoutes';
+import { registerConfigRoutes } from './routes/configRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -2452,100 +2453,8 @@ export function createAPIServer(
   //       are still persisted but reported back as `restartRequiredFields`
   //       because they're captured at construction / setInterval time.
   // ═══════════════════════════════════════════════════════════════
-  const isPatchableSection = (name: string): name is PatchableSection =>
-    (PATCHABLE_SECTIONS as readonly string[]).includes(name);
-
-  app.get('/api/config', (_req: Request, res: Response) => {
-    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
-    const sections: Record<string, unknown> = {};
-    for (const name of PATCHABLE_SECTIONS) {
-      sections[name] = getSection(config, name);
-    }
-    res.json({ sections });
-  });
-
-  app.get('/api/config/:section', (req: Request, res: Response) => {
-    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
-    const section = req.params.section as string;
-    if (!isPatchableSection(section)) {
-      return res.status(400).json({
-        error: `Unknown or non-patchable section '${section}'. Allowed: ${PATCHABLE_SECTIONS.join(', ')}`,
-      });
-    }
-    res.json({
-      section,
-      values: getSection(config, section),
-      restartRequired: Array.from(RESTART_REQUIRED_FIELDS[section]),
-    });
-  });
-
-  app.patch('/api/config/:section', (req: Request, res: Response) => {
-    if (!config) return res.status(503).json({ error: 'Config not wired into API server' });
-    const section = req.params.section as string;
-    if (!isPatchableSection(section)) {
-      return res.status(400).json({
-        error: `Unknown or non-patchable section '${section}'. Allowed: ${PATCHABLE_SECTIONS.join(', ')}`,
-      });
-    }
-    const body = req.body ?? {};
-    const incoming = body.values;
-    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) {
-      return res.status(400).json({ error: 'body must be { values: { ... } }' });
-    }
-
-    const validated = validatePatch(section, incoming as Record<string, unknown>);
-    if (!validated.ok) {
-      return res.status(400).json({
-        error: 'Invalid patch values',
-        details: validated.errors,
-      });
-    }
-
-    const current = getSection(config, section) as Record<string, unknown>;
-    // Shallow merge in place so any MAIN-THREAD subsystem holding a reference
-    // (AffinityManager) sees new values on the next read.
-    for (const [key, value] of Object.entries(validated.values)) {
-      current[key] = value;
-    }
-
-    try {
-      persistConfig(config);
-    } catch (err: any) {
-      logger.error({ err: err.message, section }, 'Failed to persist config.yml');
-      return res.status(500).json({ error: `Failed to persist config.yml: ${err.message}` });
-    }
-
-    // Broadcast the patch to every live worker so cross-thread subsystems
-    // (BotInstance / VoyagerLoop / InstinctsManager) hot-reload without a
-    // restart. postConfigPatch is fire-and-forget and silently no-ops on
-    // dead/disconnected workers.
-    let workersNotified = 0;
-    try {
-      for (const handle of botManager.getAllWorkers()) {
-        handle.postConfigPatch(section, validated.values);
-        workersNotified++;
-      }
-    } catch (err: any) {
-      // Defensive: don't fail the PATCH response just because broadcast hiccuped.
-      logger.warn(
-        { err: err?.message, section },
-        'Config patch broadcast partially failed; some workers may be stale until restart',
-      );
-    }
-
-    const restartRequiredFields = findRestartRequiredFields(section, validated.values);
-    logger.info(
-      { section, fields: Object.keys(validated.values), restartRequiredFields, workersNotified, droppedFields: validated.errors },
-      'Runtime config patched',
-    );
-    res.json({
-      section,
-      values: current,
-      restartRequiredFields,
-      // Fields that the validator dropped or coerced — surface them to the UI.
-      warnings: validated.errors,
-    });
-  });
+  // ── Runtime config (extracted → routes/configRoutes.ts) ──
+  registerConfigRoutes(app, { config, botManager });
 
   // ═══════════════════════════════════════════════════════════════
   //  LLM trace timeline — AgentOps-style waterfall for one bot

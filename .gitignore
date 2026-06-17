@@ -24,6 +24,13 @@ npm-debug.log*
 # Data
 data/
 
+# Timestamped backups of data/ and config — these can contain real secrets
+# (e.g. data.backup-*/llm-settings.json holds plaintext provider API keys).
+# Never let `git add -A` stage them.
+data.backup-*/
+config.yml.bak-*
+*.bak-*
+
 # Claude
 .claude/
 CLAUDE.md

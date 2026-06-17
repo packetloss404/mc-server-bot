@@ -80,6 +80,31 @@ export function isProtected(x: number, y: number, z: number): boolean {
   return false;
 }
 
+/**
+ * Returns the first protected zone whose AABB overlaps the given box, or null
+ * when the box is clear. Used by destructive op-command paths (e.g. the build
+ * engine's `clearSite` / `/fill ... air destroy`) that bypass the per-block
+ * `bot.dig` geofence: they can check a whole slab/box up front and refuse to
+ * wipe a protected build. Inclusive bounds on both boxes.
+ */
+export function intersectsProtectedZone(
+  min: { x: number; y: number; z: number },
+  max: { x: number; y: number; z: number },
+): ProtectedZone | null {
+  const lo = { x: Math.min(min.x, max.x), y: Math.min(min.y, max.y), z: Math.min(min.z, max.z) };
+  const hi = { x: Math.max(min.x, max.x), y: Math.max(min.y, max.y), z: Math.max(min.z, max.z) };
+  for (const z of load().protectedZones) {
+    if (
+      lo.x <= z.maxX && hi.x >= z.minX &&
+      lo.y <= z.maxY && hi.y >= z.minY &&
+      lo.z <= z.maxZ && hi.z >= z.minZ
+    ) {
+      return z;
+    }
+  }
+  return null;
+}
+
 /** The designated communal mine site, or null if none configured. */
 export function getMineSite(): MineSite | null {
   return load().mineSite;

@@ -409,7 +409,9 @@ export class BotInstance {
     });
 
     this.bot.on('entityHurt', (entity: any, source: any) => {
-      if (!this.bot || !entity || entity.id !== this.bot.entity.id) return;
+      // bot.entity is null during the death→respawn window; guard before
+      // dereferencing .id so a hit landing in that window doesn't crash.
+      if (!this.bot?.entity || !entity || entity.id !== this.bot.entity.id) return;
 
       // Track player hits for affinity and social memory
       if (source?.type === 'player' && source.username) {

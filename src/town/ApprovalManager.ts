@@ -265,6 +265,7 @@ export class ApprovalManager {
       // Denied — drop the handler so a later restart can't fire it.
       this.pendingHandlers.delete(approvalId);
     }
+    this.clearDescriptor(approvalId);
     await this.fireSettledHandler(updated);
     return updated;
   }
@@ -302,6 +303,7 @@ export class ApprovalManager {
         highlightScore: 25,
       });
       this.pendingHandlers.delete(approvalId);
+      this.clearDescriptor(approvalId);
       await this.fireSettledHandler(updated);
       return updated;
     }
@@ -332,6 +334,7 @@ export class ApprovalManager {
     } else {
       this.pendingHandlers.delete(approvalId);
     }
+    this.clearDescriptor(approvalId);
     await this.fireSettledHandler(updated);
     return updated;
   }
@@ -651,6 +654,25 @@ export class ApprovalManager {
       const msg = err instanceof Error ? err.message : String(err);
       logger.warn({ err: msg }, 'ApprovalManager.parseDescriptor: invalid JSON');
       return null;
+    }
+  }
+
+  /**
+   * Null out the persisted handler descriptor once an approval reaches a
+   * terminal state (approved/denied/expired). Defence-in-depth: rehydrate()
+   * only matches status='open' rows, but clearing the descriptor on settle
+   * guarantees a settled row can never be reconsidered by any future
+   * rehydrate path, and stops the column accumulating stale blobs.
+   * Best-effort — failures are logged and ignored.
+   */
+  private clearDescriptor(approvalId: string): void {
+    const db = this.openDescriptorDb();
+    if (!db) return;
+    try {
+      db.prepare(`UPDATE approvals SET handler_descriptor_json = NULL WHERE id = ?`).run(approvalId);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.warn({ err: msg, approvalId }, 'ApprovalManager.clearDescriptor: UPDATE failed');
     }
   }
 

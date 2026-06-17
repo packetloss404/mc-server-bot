@@ -353,6 +353,28 @@ export class ExpansionManager {
     if (!proposal.autoApprove) {
       return { childTown: null, ok: false, reason: 'requires approval' };
     }
+    // Idempotency guard. A resolveOnce handler is meant to fire exactly once,
+    // but rehydrate replays, retries, or any future double-dispatch could call
+    // this twice for the same approval. Child names are deterministic
+    // (`${parent}-${direction}`), so an existing child with this exact name
+    // under this parent means we already founded it — return that town instead
+    // of creating a duplicate. createTown enforces no name uniqueness itself.
+    try {
+      const existing = this.townManager
+        .getChildTowns(proposal.parentTownId)
+        .find((c) => c.name === proposal.childName);
+      if (existing) {
+        logger.warn(
+          { parentTownId: proposal.parentTownId, childName: proposal.childName, childTownId: existing.id },
+          'ExpansionManager.executeProposal: child already exists; skipping duplicate founding',
+        );
+        return { childTown: existing, ok: true, reason: 'already exists' };
+      }
+    } catch (err: unknown) {
+      // Read-only check; if it throws, fall through and let createTown decide.
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.debug({ err: msg, parentTownId: proposal.parentTownId }, 'executeProposal: child-existence check failed; proceeding');
+    }
     try {
       const result = this.townManager.createTown({
         name: proposal.childName,

@@ -12,6 +12,7 @@ import { withTimeout } from '../util/withTimeout';
 import type { Config } from '../config';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
 import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
+import { intersectsProtectedZone } from '../actions/geofence';
 
 // ── Interfaces ──────────────────────────────────────────────
 
@@ -257,12 +258,32 @@ export class BuildCoordinator {
    * Must be called after the bot workers have had time to connect.
    */
   async resumePendingJobs(): Promise<void> {
-    const toResume = [...this.jobs.values()].filter(
+    const all = [...this.jobs.values()];
+    const toResume = all.filter(
       (j) => j.status === 'running'
-        || j.status === 'paused'
         || j.status === 'gathering'
         || j.status === 'placing',
     );
+    // Jobs persisted as 'paused' must NOT silently resume building on restart —
+    // pausing is an explicit operator action. But the in-memory pause flag and
+    // the execution loop are both gone after a restart, so resumeBuild() (which
+    // only clears the flag to unblock a *running* loop) couldn't restart them.
+    // Re-park them: re-arm pausedJobs and relaunch the loop so it blocks at the
+    // pause-wait (placing nothing) and a later resumeBuild() unblocks it.
+    const toRepark = all.filter((j) => j.status === 'paused');
+    for (const job of toRepark) {
+      try {
+        logger.info(
+          { jobId: job.id, schematic: job.schematicFile, placed: job.placedBlocks, total: job.totalBlocks },
+          'Re-parking paused build job (stays paused across restart)',
+        );
+        await this.resumeJob(job, { keepPaused: true });
+      } catch (err: any) {
+        logger.error({ jobId: job.id, err: err.message }, 'Failed to re-park paused build job');
+        job.status = 'failed';
+        this.schedulePersist();
+      }
+    }
     for (const job of toResume) {
       try {
         logger.info(
@@ -278,7 +299,7 @@ export class BuildCoordinator {
     }
   }
 
-  private async resumeJob(job: BuildJob): Promise<void> {
+  private async resumeJob(job: BuildJob, opts: { keepPaused?: boolean } = {}): Promise<void> {
     const fullPath = path.join(this.schematicsDir, job.schematicFile);
     if (!fs.existsSync(fullPath)) {
       throw new Error(`Schematic file missing for resume: ${job.schematicFile}`);
@@ -292,8 +313,15 @@ export class BuildCoordinator {
       localY: b.ry,
     }));
 
-    job.status = 'running';
-    this.io.emit('build:started', job);
+    if (opts.keepPaused) {
+      // Re-arm the in-memory pause flag and keep status 'paused'. executeBuild
+      // (launched without gatherOpts, so no autoGather re-run) parks at the
+      // per-block pause-wait before placing anything; resumeBuild() unblocks it.
+      this.pausedJobs.add(job.id);
+    } else {
+      job.status = 'running';
+      this.io.emit('build:started', job);
+    }
     this.executeBuild(job.id, blocks, job.assignments).catch((err) => {
       logger.error({ jobId: job.id, err }, 'Resumed build execution failed');
       job.status = 'failed';
@@ -404,7 +432,7 @@ export class BuildCoordinator {
    * so a re-run after a mid-build bot drop just resumes harmlessly. dryRun
    * returns the plan without touching the world.
    */
-  async buildTunnel(opts: { dryRun?: boolean } = {}): Promise<{ plan: any; executed: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
+  async buildTunnel(opts: { dryRun?: boolean; confirm?: boolean } = {}): Promise<{ plan: any; executed: boolean; refused?: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
     // Geometry: floor block at y50, walkable air y51-55 (5 tall), ceiling y56.
     const FLOOR = 50, AIR1 = 51, AIR2 = 55, CEIL = 56, HALL_Y = 64;
     // Rail centerline forms an L sharing corner block (railX, railZ).
@@ -423,6 +451,15 @@ export class BuildCoordinator {
       poweredRailEvery: 8, ceilingLightEvery: 5, stairwells: stairs,
     };
     if (opts.dryRun) return { plan, executed: false };
+    // Safety guard (review #5c): the geometry above is HARD-CODED to the current
+    // town's hall coordinates (railX=1225, halls at fixed x/z, y50/64). Running
+    // it for any other town/world would /fill stone through whatever sits at
+    // those absolute coords. Require an explicit confirm so it can't be carved
+    // accidentally; without it, behave like dryRun and return the plan.
+    if (!opts.confirm) {
+      logger.warn('buildTunnel: refused to carve — coordinates are hard-coded for the current town layout; pass confirm:true to execute');
+      return { plan, executed: false, refused: true };
+    }
 
     // Re-acquire a connected op bot if the current one drops mid-build.
     const opBot = async (): Promise<any> => {
@@ -878,8 +915,8 @@ export class BuildCoordinator {
 
       // Excavate the pit. Throws if bedrock or nearby liquid would break the build.
       // CRITICAL: propagate a timeout so the caller can clean up.
-      const bunkerResult = await withTimeout(
-        prepareBunkerSite(probeHandle, origin, schSize),
+      const bunkerResult = await this.withCancelableTimeout(
+        (signal) => prepareBunkerSite(probeHandle, origin, schSize, signal),
         sitePrepRemaining(),
         'startBuild prepareBunkerSite',
       );
@@ -922,17 +959,17 @@ export class BuildCoordinator {
         const clearanceHeight = Math.max(schSize.y, 12);
         // BEST-EFFORT: a timeout here is caught by the outer try/catch just
         // like any other runClearSite failure — we log and continue.
-        const clearResult = await withTimeout(
-          this.runClearSite(probeHandle, {
+        const clearResult = await this.withCancelableTimeout(
+          (signal) => this.runClearSite(probeHandle, {
             footprintMin,
             footprintMax,
             clearanceHeight,
-          }),
+          }, signal),
           sitePrepRemaining(),
           'startBuild runClearSite',
         );
         logger.info(
-          { clearedSlabs: clearResult.cleared, errors: clearResult.errors.length, clearanceHeight },
+          { clearedSlabs: clearResult.cleared, skippedProtected: clearResult.skipped, errors: clearResult.errors.length, clearanceHeight },
           'Site-prep: cleared footprint ahead of snap-to-ground',
         );
       } catch (err: any) {
@@ -1551,7 +1588,7 @@ export class BuildCoordinator {
         }
         logger.info(
           { jobId, checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing,
-            sample: sweep.sampleMisses.slice(0, 8) },
+            preserved: sweep.preserved, sample: sweep.sampleMisses.slice(0, 8) },
           'Build verify-and-repair sweep complete',
         );
       } catch (err: any) {
@@ -1685,6 +1722,24 @@ export class BuildCoordinator {
    * Returns the number of targets checked, how many were repaired, and the
    * residual miss count (true holes) plus a sample of their coords.
    */
+  /** AIR-equivalent block names the verify sweep treats as "empty". */
+  private static readonly VERIFY_AIR_NAMES = new Set(['air', 'cave_air', 'void_air']);
+
+  /**
+   * Classify a verify read (holes-only repair, review #5d):
+   *   'ok'       — current block matches the target, nothing to do.
+   *   'preserve' — a DIFFERENT non-air block is here (almost always a player
+   *                edit / legit terrain). Leave it; do NOT /setblock replace.
+   *   'repair'   — air or unreadable-empty: a genuine dropped placement to
+   *                re-place.
+   * `got` is the normalized (minecraft:-stripped) world block name, or null.
+   */
+  private classifyVerifyRead(got: string | null, target: string): 'ok' | 'preserve' | 'repair' {
+    if (got === target) return 'ok';
+    if (got && !BuildCoordinator.VERIFY_AIR_NAMES.has(got)) return 'preserve';
+    return 'repair';
+  }
+
   private async verifyAndRepairJob(
     jobId: string,
     job: BuildJob,
@@ -1694,6 +1749,7 @@ export class BuildCoordinator {
     checked: number;
     repaired: number;
     missing: number;
+    preserved: number;
     sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
   }> {
     // loadSchematicCached already excludes air, so every entry is a solid target.
@@ -1713,15 +1769,16 @@ export class BuildCoordinator {
     checked: number;
     repaired: number;
     missing: number;
+    preserved: number;
     sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }>;
   }> {
     const isCancelled = () => label !== null && this.cancelledJobs.has(label);
-    if (targets.length === 0) return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+    if (targets.length === 0) return { checked: 0, repaired: 0, missing: 0, preserved: 0, sampleMisses: [] };
 
     let verifier = await this.pickConnectedBot(preferredBots);
     if (!verifier) {
       logger.warn({ label }, 'Verify sweep skipped — no connected bot available to read the world back');
-      return { checked: 0, repaired: 0, missing: 0, sampleMisses: [] };
+      return { checked: 0, repaired: 0, missing: 0, preserved: 0, sampleMisses: [] };
     }
 
     const norm = (n: string | undefined): string | null =>
@@ -1755,6 +1812,7 @@ export class BuildCoordinator {
     let toCheck = targets;
     let missing: BlockEntry[] = [];
     let initialMissing = -1; // miss count on the first read, before any repair
+    let preservedTotal = 0;  // non-air mismatches left intact (likely player edits)
     const sampleMisses: Array<{ x: number; y: number; z: number; want: string; got: string }> = [];
 
     try {
@@ -1781,8 +1839,9 @@ export class BuildCoordinator {
           arr.push(b);
         }
 
-        const roundMisses: BlockEntry[] = [];   // read as wrong → re-place + re-check
+        const roundMisses: BlockEntry[] = [];   // read as air/empty → re-place + re-check
         const unverified: BlockEntry[] = [];     // chunk never loaded → re-check only
+        const preservedMods: BlockEntry[] = [];  // non-air mismatch → left intact (player edit)
         for (const bucket of buckets.values()) {
           if (isCancelled()) break;
 
@@ -1815,7 +1874,18 @@ export class BuildCoordinator {
             for (let j = 0; j < slice.length; j++) {
               const b = slice[j];
               const got = norm(reads[j]?.name);
-              if (got !== b.name) roundMisses.push(b);
+              const verdict = this.classifyVerifyRead(got, b.name);
+              if (verdict === 'ok') continue;
+              if (verdict === 'preserve') {
+                // A different non-air block sits here — almost always a player
+                // edit (or legit terrain variation), not a dropped placement.
+                // Overwriting it with /setblock replace would silently revert
+                // player builds on every completion + re-run. Preserve it.
+                preservedMods.push(b);
+                continue;
+              }
+              // air / unreadable-empty → genuine dropped placement → re-place.
+              roundMisses.push(b);
             }
           }
         }
@@ -1829,12 +1899,14 @@ export class BuildCoordinator {
           await this.sleep(PLACE_PACE_MS);
         }
 
+        preservedTotal += preservedMods.length;
         const residual = roundMisses.concat(unverified);
         missing = residual;
         if (initialMissing < 0) initialMissing = residual.length;
         logger.info(
           { label, round: round + 1, checkedThisRound: toCheck.length,
-            confirmedMissing: roundMisses.length, unverified: unverified.length },
+            confirmedMissing: roundMisses.length, unverified: unverified.length,
+            preserved: preservedMods.length },
           'Verify sweep round complete',
         );
         if (residual.length === 0) break;
@@ -1854,6 +1926,7 @@ export class BuildCoordinator {
       checked: targets.length,
       repaired: initialMissing < 0 ? 0 : Math.max(0, initialMissing - missing.length),
       missing: missing.length,
+      preserved: preservedTotal,
       sampleMisses,
     };
   }
@@ -2173,6 +2246,27 @@ export class BuildCoordinator {
    * `/fill ... air destroy` commands from the probe bot. Commands are issued
    * one Y-slab at a time so we never exceed Minecraft's 32768-block fill cap.
    */
+  /**
+   * Race `run` against a deadline AND give it an AbortSignal so a timed-out
+   * destructive op (clearSite/excavation) actually stops mutating the world
+   * instead of running on in the background (review #5a). withTimeout only
+   * rejects the caller; here we abort the signal on timeout/any rejection so
+   * the op can break out of its fill/dig loop.
+   */
+  private async withCancelableTimeout<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    ms: number,
+    label: string,
+  ): Promise<T> {
+    const controller = new AbortController();
+    try {
+      return await withTimeout(run(controller.signal), ms, label);
+    } catch (err) {
+      controller.abort();
+      throw err;
+    }
+  }
+
   private async runClearSite(
     probeHandle: any,
     opts: {
@@ -2180,7 +2274,8 @@ export class BuildCoordinator {
       footprintMax: { x: number; y: number; z: number };
       clearanceHeight?: number;
     },
-  ): Promise<{ cleared: number; errors: string[] }> {
+    signal?: AbortSignal,
+  ): Promise<{ cleared: number; errors: string[]; skipped: number }> {
     const errors: string[] = [];
     const { footprintMin, footprintMax } = opts;
     const x1 = Math.min(footprintMin.x, footprintMax.x);
@@ -2192,14 +2287,38 @@ export class BuildCoordinator {
     const yTop = yBase + height - 1;
 
     const area = (x2 - x1 + 1) * (z2 - z1 + 1);
-    if (area <= 0) return { cleared: 0, errors };
+    if (area <= 0) return { cleared: 0, errors, skipped: 0 };
 
     // Fill cap is 32768 blocks. Slab size per Y is `area` — slice Y to stay under cap.
     const slabThickness = Math.max(1, Math.floor(32768 / Math.max(1, area)));
     let slabs = 0;
+    let skipped = 0;
 
     for (let ySlabStart = yBase; ySlabStart <= yTop; ySlabStart += slabThickness) {
+      // Cancellation (review #5a): stop emitting destructive fills once the
+      // caller's deadline has aborted us — don't keep clearing after timeout.
+      if (signal?.aborted) {
+        logger.warn({ cleared: slabs, skipped }, 'Site-prep clearSite: aborted (timeout) — stopping further /fill slabs');
+        break;
+      }
       const ySlabEnd = Math.min(ySlabStart + slabThickness - 1, yTop);
+      // Geofence guard. `/fill ... air destroy` is an op command and bypasses
+      // the per-block `bot.dig` geofence, so without this a clearSite (enabled
+      // by default, and forced on for town builds) would wipe any protected
+      // build that overlaps the footprint+clearance. Skip slabs that intersect
+      // a protected zone rather than destroying it.
+      const hit = intersectsProtectedZone(
+        { x: x1, y: ySlabStart, z: z1 },
+        { x: x2, y: ySlabEnd, z: z2 },
+      );
+      if (hit) {
+        skipped++;
+        logger.warn(
+          { zone: hit.name ?? 'unnamed', ySlabStart, ySlabEnd, x1, x2, z1, z2 },
+          'Site-prep clearSite: slab intersects a protected zone — skipping /fill air destroy',
+        );
+        continue;
+      }
       const cmd = `/fill ${x1} ${ySlabStart} ${z1} ${x2} ${ySlabEnd} ${z2} air destroy`;
       try {
         probeHandle.chat(cmd);
@@ -2211,7 +2330,7 @@ export class BuildCoordinator {
       await this.sleep(200);
     }
 
-    return { cleared: slabs, errors };
+    return { cleared: slabs, errors, skipped };
   }
 
   // ── autoGather pre-stage ────────────────────────────────

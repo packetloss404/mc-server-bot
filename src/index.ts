@@ -43,6 +43,27 @@ async function main() {
 
   const config = loadConfig();
 
+  // Fail-open auth warning. The API gates mutating routes behind
+  // DASHBOARD_AUTH_SECRET / PLUGIN_AUTH_TOKEN, but both are opt-in: when unset
+  // the dashboard + plugin relay are wide open. On a non-loopback bind that is
+  // a publicly-reachable, unauthenticated control plane (spawn/delete bots,
+  // trigger builds, run server commands). Surface it loudly at boot so an
+  // operator can't miss it. (Left as a warning rather than refuse-to-start to
+  // avoid taking down an existing deployment that relies on the open default.)
+  const boundHost = config.api.host;
+  const isLoopbackBind = boundHost === '127.0.0.1' || boundHost === 'localhost' || boundHost === '::1';
+  if (!process.env.DASHBOARD_AUTH_SECRET && !isLoopbackBind) {
+    logger.warn(
+      { host: boundHost, port: config.api.port },
+      'SECURITY: DASHBOARD_AUTH_SECRET is unset and the API is bound to a non-loopback address — ' +
+        'all mutating /api routes are UNAUTHENTICATED and reachable from the network. ' +
+        'Set DASHBOARD_AUTH_SECRET (and PLUGIN_AUTH_TOKEN) or bind api.host to 127.0.0.1.',
+    );
+  }
+  if (!process.env.PLUGIN_AUTH_TOKEN && !isLoopbackBind) {
+    logger.warn('SECURITY: PLUGIN_AUTH_TOKEN is unset — /api/events/* (chat→build relay) is unauthenticated.');
+  }
+
   // LLMSettings is the source of truth for /settings UI and supports the full
   // provider lineup (gemini/anthropic/openai/minimax/voyage/ollama). Prefer
   // its router at boot so the routes the user configured in /settings actually

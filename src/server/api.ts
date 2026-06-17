@@ -41,6 +41,7 @@ import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { registerAdminRoutes } from './admin';
+import { registerTerrainRoutes } from './routes/terrainRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -2573,71 +2574,9 @@ export function createAPIServer(
   });
 
   // ═══════════════════════════════════════
-  //  TERRAIN ENDPOINTS
+  //  TERRAIN ENDPOINTS (extracted → routes/terrainRoutes.ts)
   // ═══════════════════════════════════════
-
-  // Scan blocks in a region around a position
-  // Height-map probe around (cx, cz). Returns the top non-air block name at
-  // each grid cell as a flat string[], matching the TerrainData frontend shape.
-  app.get('/api/terrain', async (req: Request, res: Response) => {
-    const cx = parseInt(String(req.query.cx ?? req.query.x ?? '0'));
-    const cz = parseInt(String(req.query.cz ?? req.query.z ?? '0'));
-    const radius = Math.min(parseInt(String(req.query.radius ?? '16')), 64);
-    const step = Math.max(parseInt(String(req.query.step ?? '1')), 1);
-
-    let probeHandle: any = null;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
-        probeHandle = h;
-        break;
-      }
-    }
-    if (!probeHandle) {
-      res.status(503).json({ error: 'No connected bot available to scan terrain' });
-      return;
-    }
-
-    const size = Math.floor((2 * radius) / step) + 1;
-    // Single IPC call — the worker iterates the grid internally for speed.
-    const blocks = (await probeHandle.getTerrainGrid(cx, cz, radius, step, 120, -60)) ?? [];
-    res.json({ cx, cz, radius, step, size, blocks });
-  });
-
-  // Get terrain height at a specific (x, z) column
-  app.get('/api/terrain/height', async (req: Request, res: Response) => {
-    const x = parseInt(String(req.query.x ?? '0'));
-    const z = parseInt(String(req.query.z ?? '0'));
-    const maxY = parseInt(String(req.query.maxY ?? '320'));
-    const minY = parseInt(String(req.query.minY ?? '-64'));
-
-    // Pick the connected bot closest to (x, z). bot.blockAt() returns null for
-    // chunks outside view distance, so a far-away probe makes the scan miss
-    // the surface and report height=null even when ground is clearly there.
-    let probeHandle: any = null;
-    let bestDist = Infinity;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected !== 'function') continue;
-      if (!(await h.isBotConnected())) continue;
-      const pos = h.getCachedStatus?.()?.position;
-      if (!pos) { if (probeHandle === null) probeHandle = h; continue; }
-      const d = Math.hypot(pos.x - x, pos.z - z);
-      if (d < bestDist) { bestDist = d; probeHandle = h; }
-    }
-    if (!probeHandle) {
-      res.status(503).json({ error: 'No connected bot available to scan terrain' });
-      return;
-    }
-
-    // Scan downward to find the first solid block
-    for (let y = maxY; y >= minY; y--) {
-      const block = await probeHandle.getBlockAt(x, y, z);
-      if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-        res.json({ x, z, height: y, surfaceBlock: block.name });
-        return;
-      }
-    }
-    res.json({ x, z, height: null, surfaceBlock: null });
-  });
+  registerTerrainRoutes(app, { botManager });
 
   // ═══════════════════════════════════════
   //  CONTROL PLATFORM ENDPOINTS

@@ -258,12 +258,32 @@ export class BuildCoordinator {
    * Must be called after the bot workers have had time to connect.
    */
   async resumePendingJobs(): Promise<void> {
-    const toResume = [...this.jobs.values()].filter(
+    const all = [...this.jobs.values()];
+    const toResume = all.filter(
       (j) => j.status === 'running'
-        || j.status === 'paused'
         || j.status === 'gathering'
         || j.status === 'placing',
     );
+    // Jobs persisted as 'paused' must NOT silently resume building on restart —
+    // pausing is an explicit operator action. But the in-memory pause flag and
+    // the execution loop are both gone after a restart, so resumeBuild() (which
+    // only clears the flag to unblock a *running* loop) couldn't restart them.
+    // Re-park them: re-arm pausedJobs and relaunch the loop so it blocks at the
+    // pause-wait (placing nothing) and a later resumeBuild() unblocks it.
+    const toRepark = all.filter((j) => j.status === 'paused');
+    for (const job of toRepark) {
+      try {
+        logger.info(
+          { jobId: job.id, schematic: job.schematicFile, placed: job.placedBlocks, total: job.totalBlocks },
+          'Re-parking paused build job (stays paused across restart)',
+        );
+        await this.resumeJob(job, { keepPaused: true });
+      } catch (err: any) {
+        logger.error({ jobId: job.id, err: err.message }, 'Failed to re-park paused build job');
+        job.status = 'failed';
+        this.schedulePersist();
+      }
+    }
     for (const job of toResume) {
       try {
         logger.info(
@@ -279,7 +299,7 @@ export class BuildCoordinator {
     }
   }
 
-  private async resumeJob(job: BuildJob): Promise<void> {
+  private async resumeJob(job: BuildJob, opts: { keepPaused?: boolean } = {}): Promise<void> {
     const fullPath = path.join(this.schematicsDir, job.schematicFile);
     if (!fs.existsSync(fullPath)) {
       throw new Error(`Schematic file missing for resume: ${job.schematicFile}`);
@@ -293,8 +313,15 @@ export class BuildCoordinator {
       localY: b.ry,
     }));
 
-    job.status = 'running';
-    this.io.emit('build:started', job);
+    if (opts.keepPaused) {
+      // Re-arm the in-memory pause flag and keep status 'paused'. executeBuild
+      // (launched without gatherOpts, so no autoGather re-run) parks at the
+      // per-block pause-wait before placing anything; resumeBuild() unblocks it.
+      this.pausedJobs.add(job.id);
+    } else {
+      job.status = 'running';
+      this.io.emit('build:started', job);
+    }
     this.executeBuild(job.id, blocks, job.assignments).catch((err) => {
       logger.error({ jobId: job.id, err }, 'Resumed build execution failed');
       job.status = 'failed';

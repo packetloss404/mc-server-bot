@@ -44,6 +44,7 @@ import { registerAdminRoutes } from './admin';
 import { isSafeBotName, isSafeFilename, asyncH, sanitizeErrorMessage } from './routes/helpers';
 import { registerTerrainRoutes } from './routes/terrainRoutes';
 import { registerSchematicRoutes } from './routes/schematicRoutes';
+import { registerChainRoutes } from './routes/chainRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -2351,81 +2352,8 @@ export function createAPIServer(
   //  SUPPLY CHAIN ENDPOINTS
   // ═══════════════════════════════════════
 
-  // List chain templates
-  app.get('/api/chains/templates', (_req: Request, res: Response) => {
-    res.json({ templates: chainCoordinator.getTemplates() });
-  });
-
-  // List all chains
-  app.get('/api/chains', (_req: Request, res: Response) => {
-    res.json({ chains: chainCoordinator.getAllChains() });
-  });
-
-  // Create a new chain
-  app.post('/api/chains', (req: Request, res: Response) => {
-    const { name, description, templateId, stages, loop, botAssignments, chestLocations } = req.body;
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
-    }
-    try {
-      const chain = chainCoordinator.createChain({ name, description, templateId, stages, loop, botAssignments, chestLocations });
-      res.status(201).json({ chain });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to create chain');
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Get a specific chain
-  app.get('/api/chains/:id', (req: Request, res: Response) => {
-    const chain = chainCoordinator.getChain(req.params.id as string);
-    if (!chain) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ chain });
-  });
-
-  // Start a chain
-  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
-    const success = chainCoordinator.startChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or already running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Pause a chain
-  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
-    const success = chainCoordinator.pauseChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or not running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Cancel a chain
-  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
-    const success = chainCoordinator.cancelChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Delete a chain
-  app.delete('/api/chains/:id', (req: Request, res: Response) => {
-    const success = chainCoordinator.deleteChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  // ── Supply chains (extracted → routes/chainRoutes.ts) ──
+  registerChainRoutes(app, { chainCoordinator });
 
   // ═══════════════════════════════════════
   //  TERRAIN ENDPOINTS (extracted → routes/terrainRoutes.ts)

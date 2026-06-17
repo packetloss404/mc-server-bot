@@ -31,6 +31,7 @@ import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
 import { ApprovalRepository } from './ApprovalRepository';
 import { RelationshipRepository } from './RelationshipRepository';
+import { StyleObservationRepository } from './StyleObservationRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -286,6 +287,8 @@ export class TownManager {
   private readonly approvals: ApprovalRepository;
   /** Relationship-edge persistence (extracted repository; TownManager delegates). */
   private readonly relationships: RelationshipRepository;
+  /** Style-observation persistence (extracted repository; TownManager delegates). */
+  private readonly styleObservations: StyleObservationRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -342,6 +345,7 @@ export class TownManager {
       this.appendFallbackRow(table as FallbackKind, townId, row as Record<string, unknown>);
     this.approvals = new ApprovalRepository(this.db, fallbackAppend);
     this.relationships = new RelationshipRepository(this.db, fallbackAppend);
+    this.styleObservations = new StyleObservationRepository(this.db, fallbackAppend);
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -1890,63 +1894,13 @@ export class TownManager {
    * Failures route to the JSONL fallback so the feedback loop survives a
    * wedged DB.
    */
-  insertStyleObservation(
-    townId: string,
-    input: { buildingId: string | null; palette: unknown },
-  ): void {
-    const id = genId('sob');
-    const recordedAt = Date.now();
-    try {
-      this.db
-        .insert(schema.styleObservations)
-        .values({
-          id,
-          townId,
-          buildingId: input.buildingId,
-          paletteJson: input.palette == null ? null : JSON.stringify(input.palette),
-          recordedAt,
-          included: true,
-        })
-        .run();
-    } catch (err: any) {
-      this.appendFallbackRow('style_observations', townId, {
-        id,
-        townId,
-        buildingId: input.buildingId,
-        palette: input.palette,
-        recordedAt,
-        included: true,
-      });
-      logger.warn(
-        { err: err?.message, townId, buildingId: input.buildingId },
-        'insertStyleObservation: DB write failed; routed to fallback',
-      );
-    }
+  // Style-observation persistence is delegated to StyleObservationRepository.
+  insertStyleObservation(townId: string, input: { buildingId: string | null; palette: unknown }): void {
+    this.styleObservations.insertStyleObservation(townId, input);
   }
 
-  /** Read every style observation for a town, newest-first. */
-  getStyleObservations(townId: string): Array<{
-    id: string;
-    townId: string;
-    buildingId: string | null;
-    palette: unknown;
-    recordedAt: number | null;
-    included: boolean;
-  }> {
-    const rows = this.db
-      .select()
-      .from(schema.styleObservations)
-      .where(eq(schema.styleObservations.townId, townId))
-      .orderBy(desc(schema.styleObservations.recordedAt))
-      .all();
-    return rows.map((row) => ({
-      id: row.id,
-      townId: row.townId ?? townId,
-      buildingId: row.buildingId ?? null,
-      palette: safeJsonParse<unknown>(row.paletteJson ?? null, null),
-      recordedAt: row.recordedAt ?? null,
-      included: row.included !== false,
-    }));
+  getStyleObservations(townId: string) {
+    return this.styleObservations.getStyleObservations(townId);
   }
 
   /**

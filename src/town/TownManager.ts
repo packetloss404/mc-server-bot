@@ -34,6 +34,7 @@ import { RelationshipRepository } from './RelationshipRepository';
 import { StyleObservationRepository } from './StyleObservationRepository';
 import { ChronicleRepository } from './ChronicleRepository';
 import { DisasterRepository } from './DisasterRepository';
+import { DistrictRepository } from './DistrictRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -141,17 +142,7 @@ export function townToDTO(
   };
 }
 
-function rowToDistrict(row: DistrictRow): District {
-  return {
-    id: row.id,
-    townId: row.townId ?? '',
-    name: row.name ?? null,
-    stylePreset: row.stylePreset,
-    bounds: safeJsonParse<unknown>(row.boundsJson ?? null, null),
-    foundedAt: row.foundedAt,
-    isDefault: row.isDefault === true,
-  };
-}
+// rowToDistrict now lives in ./DistrictRepository.
 
 function rowToResident(row: ResidentRow): Resident {
   return {
@@ -273,6 +264,8 @@ export class TownManager {
   private readonly chronicles: ChronicleRepository;
   /** Disaster persistence (extracted repository; TownManager delegates). */
   private readonly disasters: DisasterRepository;
+  /** District persistence (extracted repository; TownManager delegates). */
+  private readonly districts: DistrictRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -332,6 +325,7 @@ export class TownManager {
     this.styleObservations = new StyleObservationRepository(this.db, fallbackAppend);
     this.chronicles = new ChronicleRepository(this.db, fallbackAppend, (id) => this.getTown(id));
     this.disasters = new DisasterRepository(this.db, fallbackAppend, (id) => this.listResidents(id));
+    this.districts = new DistrictRepository(this.db, (id) => this.getTown(id));
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -660,7 +654,7 @@ export class TownManager {
       throw err;
     }
 
-    const district = this.createDefaultDistrict(id, input.capital, input.stylePreset, now);
+    const district = this.districts.createDefaultDistrict(id, input.capital, input.stylePreset, now);
 
     // Drop the founding style.json seed (medieval or mid-century) at
     // data/towns/<id>/style.json. Wrapped here AND inside writeStyle —
@@ -811,61 +805,11 @@ export class TownManager {
   //  Districts
   // ──────────────────────────────────────────────────────────────────────
 
-  private createDefaultDistrict(
-    townId: string,
-    capital: Vec3,
-    stylePreset: string,
-    foundedAt: number,
-  ): District {
-    const id = genId('dist');
-    const bounds = defaultDistrictBounds(capital);
-    try {
-      this.db
-        .insert(schema.districts)
-        .values({
-          id,
-          townId,
-          name: 'Old Town',
-          stylePreset,
-          boundsJson: JSON.stringify(bounds),
-          foundedAt,
-          isDefault: true,
-        })
-        .run();
-    } catch (err: any) {
-      logger.error({ err: err?.message, townId }, 'Failed to insert founding district');
-      throw err;
-    }
-    return {
-      id,
-      townId,
-      name: 'Old Town',
-      stylePreset,
-      bounds,
-      foundedAt,
-      isDefault: true,
-    };
-  }
-
+  // District persistence is delegated to DistrictRepository.
   listDistricts(townId: string): District[] {
-    const rows = this.db
-      .select()
-      .from(schema.districts)
-      .where(eq(schema.districts.townId, townId))
-      .all();
-    return rows.map(rowToDistrict);
+    return this.districts.listDistricts(townId);
   }
 
-  /**
-   * Phase 5-B — public district insertion. Used by DistrictManager when a
-   * town tier-ups or an admin manually adds a district. Caller supplies the
-   * style preset + a centerpoint; we derive a 64x64 default bounding box
-   * around the center the same way `defaultDistrictBounds` does for the
-   * founding district. `isDefault` defaults to false — only the founding
-   * "Old Town" carries the default flag.
-   *
-   * Returns null on DB failure so callers can decide whether to retry.
-   */
   createDistrict(input: {
     townId: string;
     name: string;
@@ -873,39 +817,7 @@ export class TownManager {
     center: Vec3;
     isDefault?: boolean;
   }): District | null {
-    if (!this.getTown(input.townId)) return null;
-    const id = genId('dist');
-    const foundedAt = Date.now();
-    const bounds = defaultDistrictBounds(input.center);
-    try {
-      this.db
-        .insert(schema.districts)
-        .values({
-          id,
-          townId: input.townId,
-          name: input.name,
-          stylePreset: input.stylePreset,
-          boundsJson: JSON.stringify(bounds),
-          foundedAt,
-          isDefault: input.isDefault === true,
-        })
-        .run();
-    } catch (err: any) {
-      logger.warn(
-        { err: err?.message, townId: input.townId, name: input.name },
-        'createDistrict: insert failed',
-      );
-      return null;
-    }
-    return {
-      id,
-      townId: input.townId,
-      name: input.name,
-      stylePreset: input.stylePreset,
-      bounds,
-      foundedAt,
-      isDefault: input.isDefault === true,
-    };
+    return this.districts.createDistrict(input);
   }
 
   /**

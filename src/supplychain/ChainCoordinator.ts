@@ -433,8 +433,11 @@ export class ChainCoordinator {
       return;
     }
 
-    const voyager = botWorker.getVoyagerLoop();
-    if (!voyager) {
+    // Bots run in worker threads, so the in-thread VoyagerLoop is unreachable
+    // from here. Detect codegen mode via the worker's cached status (voyager is
+    // null for primitive-mode bots) and queue the task via a worker command.
+    const cached = botWorker.getCachedDetailedStatus?.();
+    if (cached && cached.voyager === null) {
       stage.status = 'failed';
       stage.error = `Bot ${stage.botName} is not in codegen mode`;
       chain.status = 'failed';
@@ -449,7 +452,7 @@ export class ChainCoordinator {
     const taskDescription = this.buildTaskDescription(stage);
     this.taskDescriptionMap.set(stage.id, taskDescription);
 
-    voyager.queuePlayerTask(taskDescription, 'supply-chain');
+    botWorker.queueTask(taskDescription, 'supply-chain');
 
     stage.status = 'running';
     stage.startedAt = Date.now();
@@ -497,7 +500,12 @@ export class ChainCoordinator {
   private startPolling(): void {
     if (this.pollingInterval) return;
     this.pollingInterval = setInterval(() => {
-      this.checkChainProgress();
+      // checkChainProgress is async (it reads worker task state over IPC) and
+      // must never reject into the timer — an unhandled throw here would crash
+      // the process. Swallow-and-log so a wedged tick can't take down the bot.
+      this.checkChainProgress().catch((err: any) => {
+        logger.warn({ err: err?.message }, 'ChainCoordinator poll tick failed; continuing');
+      });
     }, 5000);
   }
 
@@ -509,10 +517,12 @@ export class ChainCoordinator {
     return false;
   }
 
-  private checkChainProgress(): void {
+  private async checkChainProgress(): Promise<void> {
     // Skip the per-chain scan entirely if no chain is active.
     if (!this.hasActiveChains()) return;
-    for (const chain of this.chains.values()) {
+    // Snapshot the chains: we await IPC reads below and a chain could be
+    // cancelled/deleted mid-loop.
+    for (const chain of [...this.chains.values()]) {
       if (chain.status !== 'running') continue;
 
       const stageIndex = chain.currentStageIndex;
@@ -524,13 +534,17 @@ export class ChainCoordinator {
       const stageBot = this.botManager.getWorker(stage.botName) as any;
       if (!stageBot) continue;
 
-      const voyager = stageBot.getVoyagerLoop();
-      if (!voyager) continue;
+      // Bots run in worker threads — read the VoyagerLoop task state over IPC
+      // (we can't touch the in-thread loop directly). null means the worker
+      // isn't running or the bot isn't in codegen mode; skip and retry next tick.
+      const state = await stageBot.getVoyagerTaskState();
+      if (!state) continue;
 
       const taskDesc = this.taskDescriptionMap.get(stage.id) ?? stage.task;
-      const currentTask = voyager.getCurrentTask();
-      const completedTasks: string[] = voyager.getCompletedTasks();
-      const failedTasks: string[] = voyager.getFailedTasks();
+      const currentTask: string | null = state.currentTask;
+      const completedTasks: string[] = state.completedTasks ?? [];
+      const failedTasks: string[] = state.failedTasks ?? [];
+      const queuedTasks: string[] = state.queuedTasks ?? [];
 
       // Skip the substring scan entirely when neither list has grown since
       // the previous tick — no new task can have matched.
@@ -547,10 +561,12 @@ export class ChainCoordinator {
       // stageId, so we have the exact string we sent — use it verbatim.
       const isCompleted = newCompleted && completedTasks.some((t: string) => t === taskDesc);
       const isFailed = newFailed && failedTasks.some((t: string) => t === taskDesc);
-      // For "task moved on without finishing" detection we still tolerate
-      // currentTask being null (bot is idle) — that's not a substring match,
-      // it's an absence-of-task signal.
-      const taskFinished = currentTask === null || currentTask !== taskDesc;
+      // #20 fix: a task that is still the bot's current task OR still sitting in
+      // its queue is NOT lost — it's just waiting or temporarily preempted (e.g.
+      // a survival interrupt). The old `taskFinished` heuristic re-queued it
+      // anyway, creating a SECOND live copy and double-executing the stage. Only
+      // treat it as abandoned when it's neither current nor queued.
+      const stillPending = currentTask === taskDesc || queuedTasks.includes(taskDesc);
 
       if (isCompleted) {
         stage.status = 'completed';
@@ -605,8 +621,10 @@ export class ChainCoordinator {
         }
 
         this.advanceStage(chain);
-      } else if (isFailed || (taskFinished && stage.startedAt && Date.now() - stage.startedAt > 10000)) {
-        // Task failed or bot moved on without completing — retry or fail
+      } else if (isFailed || (!stillPending && stage.startedAt && Date.now() - stage.startedAt > 10000)) {
+        // Task explicitly failed, OR it's been abandoned (not running, not
+        // queued, not completed) for >10s. The !stillPending guard is the #20
+        // fix: we never re-queue a task the bot is still working or has queued.
         stage.retries++;
 
         if (stage.retries < 3) {
@@ -622,10 +640,13 @@ export class ChainCoordinator {
 
           this.io.emit('chain:stage-update', { id: chain.id, stageIndex, stage });
 
-          // Re-queue the task
+          // Re-queue the task via the worker command (in-thread loop is not
+          // reachable from here). Reset the observed-count baseline so the
+          // retry's completion isn't masked by the prior attempt's counts.
           const retryDesc = this.taskDescriptionMap.get(stage.id) ?? this.buildTaskDescription(stage);
           this.taskDescriptionMap.set(stage.id, retryDesc);
-          voyager.queuePlayerTask(retryDesc, 'supply-chain');
+          this.lastObservedCounts.delete(stage.id);
+          stageBot.queueTask(retryDesc, 'supply-chain');
 
           stage.status = 'running';
           stage.startedAt = Date.now();

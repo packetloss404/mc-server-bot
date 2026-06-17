@@ -610,6 +610,35 @@ export class WorkerHandle {
     this.sendCommand('stopMovement', {});
   }
 
+  /**
+   * Queue a player task onto the worker's VoyagerLoop. Fire-and-forget command
+   * (the worker is the source of truth for the in-thread VoyagerLoop). Used by
+   * the supply-chain coordinator, which cannot reach the loop directly across
+   * the worker-thread boundary.
+   */
+  queueTask(description: string, source: string): void {
+    this.sendCommand('queueTask', { description, source });
+  }
+
+  /**
+   * Read the worker's VoyagerLoop task state (current/completed/failed/queued
+   * task descriptions) over IPC. Returns null when the worker isn't running or
+   * the bot isn't in codegen mode (no VoyagerLoop). Never throws — a restart
+   * window resolves to null so callers just skip and retry next tick.
+   */
+  async getVoyagerTaskState(): Promise<{
+    currentTask: string | null;
+    completedTasks: string[];
+    failedTasks: string[];
+    queuedTasks: string[];
+  } | null> {
+    try {
+      return await this.sendRequest('voyagerTaskState');
+    } catch {
+      return null;
+    }
+  }
+
   /** Returns true if the worker thinks the underlying mineflayer bot is connected and spawned. */
   async isBotConnected(): Promise<boolean> {
     if (!this.ipc) return false;

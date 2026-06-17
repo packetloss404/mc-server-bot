@@ -270,6 +270,18 @@ ipc.onRequest(async (type, args) => {
       return instance.getDetailedStatus();
     case 'getDiagnosticsSummary':
       return instance.getDiagnosticsSummary();
+    case 'voyagerTaskState': {
+      // Supply-chain coordinator reads task progress over IPC (it can't reach
+      // the in-thread VoyagerLoop directly). null when not in codegen mode.
+      const vl = instance.getVoyagerLoop();
+      if (!vl) return null;
+      return {
+        currentTask: vl.getCurrentTask(),
+        completedTasks: vl.getCompletedTasks(),
+        failedTasks: vl.getFailedTasks(),
+        queuedTasks: vl.getQueuedTasks(),
+      };
+    }
     case 'getSkillNames': {
       const lib = instance.getVoyagerLoop()?.getSkillLibrary();
       return lib ? lib.getSkillNames() : [];

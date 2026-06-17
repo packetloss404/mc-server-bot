@@ -13,21 +13,15 @@ import type { Config } from '../config';
 import { selectBuildSite, SiteCandidate } from './SiteSelector';
 import { prepareBunkerSite, runBunkerEntry, sampleSurfaceY } from '../actions/bunkerSite';
 import { intersectsProtectedZone } from '../actions/geofence';
+import { SchematicStore } from './SchematicStore';
+import type { SchematicInfo, CachedSchematic } from './SchematicStore';
+
+// Re-exported so existing importers of these types from BuildCoordinator keep working.
+export type { SchematicInfo, CachedSchematic } from './SchematicStore';
 
 // ── Interfaces ──────────────────────────────────────────────
 
-export interface SchematicInfo {
-  filename: string;
-  size: { x: number; y: number; z: number };
-  blockCount: number;
-  /**
-   * Optional per-block-type count map (block name → number of blocks of that
-   * type in the schematic). Only populated for schematics small enough to
-   * parse without estimation — large schematics (size-estimated or
-   * volume > 200k) omit this since we don't iterate the full block list.
-   */
-  palette?: Record<string, number>;
-}
+// SchematicInfo / CachedSchematic now live in ./SchematicStore (re-exported above).
 
 export interface BuildJob {
   id: string;
@@ -98,12 +92,6 @@ interface BlockEntry {
   name: string;
   stateStr: string; // pre-computed block state string
   localY: number;
-}
-
-interface CachedSchematic {
-  size: { x: number; y: number; z: number };
-  /** Blocks in schematic-local coordinates (relative to start). */
-  blocks: Array<{ rx: number; ry: number; rz: number; name: string; stateStr: string }>;
 }
 
 /**
@@ -186,7 +174,7 @@ export class BuildCoordinator {
    */
   private reassignQueues = new Map<string, Map<string, BlockEntry[]>>();
   /** Parsed-schematic cache, keyed by filename. Invalidated when file mtime changes. */
-  private schematicCache = new Map<string, { mtimeMs: number; data: CachedSchematic }>();
+  private schematicStore!: SchematicStore;
   /**
    * Per-resource gather-skill catalog. Discovered lazily from `skills/` the
    * first time autoGather runs (and re-discovered if the dir is cleared).
@@ -203,6 +191,7 @@ export class BuildCoordinator {
     this.io = io;
     this.eventLog = eventLog;
     this.schematicsDir = path.join(process.cwd(), 'schematics');
+    this.schematicStore = new SchematicStore(this.schematicsDir, () => this.getBotVersion());
     this.persistPath = path.join(process.cwd(), 'data', 'builds.json');
     this.sitePrepTimeoutMs =
       config?.build?.sitePrepTimeoutMs ?? SITE_PREP_DEFAULT_TIMEOUT_MS;
@@ -563,39 +552,11 @@ export class BuildCoordinator {
    * Result is cached by filename+mtime so repeated startBuild/resumeJob calls
    * for the same file skip the NBT parse + triple-nested iteration.
    */
-  private async loadSchematicCached(filename: string): Promise<CachedSchematic> {
-    const fullPath = path.join(this.schematicsDir, filename);
-    const mtimeMs = fs.statSync(fullPath).mtimeMs;
-    const cached = this.schematicCache.get(filename);
-    if (cached && cached.mtimeMs === mtimeMs) return cached.data;
-
-    const { Schematic } = require('prismarine-schematic');
-    const buffer = fs.readFileSync(fullPath);
-    const schematic = await Schematic.read(buffer, await this.getBotVersion());
-    const start = schematic.start();
-    const end = schematic.end();
-    const sx = start.x, sy = start.y, sz = start.z;
-    const size = schematic.size;
-
-    const blocks: CachedSchematic['blocks'] = [];
-    const tempPos = new Vec3(0, 0, 0);
-    for (let y = start.y; y <= end.y; y++) {
-      for (let z = start.z; z <= end.z; z++) {
-        for (let x = start.x; x <= end.x; x++) {
-          tempPos.x = x; tempPos.y = y; tempPos.z = z;
-          const block = schematic.getBlock(tempPos);
-          if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-            const props = block.getProperties ? block.getProperties() : {};
-            const stateStr = Object.entries(props).map(([k, v]) => `${k}=${v}`).join(',');
-            blocks.push({ rx: x - sx, ry: y - sy, rz: z - sz, name: block.name, stateStr });
-          }
-        }
-      }
-    }
-
-    const data: CachedSchematic = { size: { x: size.x, y: size.y, z: size.z }, blocks };
-    this.schematicCache.set(filename, { mtimeMs, data });
-    return data;
+  // Thin delegate to the extracted SchematicStore. Kept as an instance method
+  // (not inlined at call sites) so test subclasses/stubs that override
+  // `loadSchematicCached` continue to intercept resume/build schematic loads.
+  protected async loadSchematicCached(filename: string): Promise<CachedSchematic> {
+    return this.schematicStore.load(filename);
   }
 
   // ── Schematic listing ───────────────────────────────────
@@ -611,73 +572,13 @@ export class BuildCoordinator {
     return '1.21.11';
   }
 
+  // Listing/metadata delegate to the extracted SchematicStore.
   async listSchematics(): Promise<SchematicInfo[]> {
-    if (!fs.existsSync(this.schematicsDir)) return [];
-
-    const files = fs.readdirSync(this.schematicsDir).filter(
-      (f) => f.endsWith('.schem') || f.endsWith('.schematic'),
-    );
-
-    const results: SchematicInfo[] = [];
-    for (const filename of files) {
-      try {
-        // Skip files larger than 1MB to avoid OOM on huge schematics
-        const filePath = path.join(this.schematicsDir, filename);
-        const stat = fs.statSync(filePath);
-        if (stat.size > 10_000_000) {
-          results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
-          logger.info({ filename, sizeBytes: stat.size }, 'Skipping large schematic metadata load');
-          continue;
-        }
-        const info = await this.getSchematicInfoSafe(filename);
-        if (info) results.push(info);
-      } catch (err: any) {
-        logger.warn({ filename, err: err.message }, 'Failed to read schematic metadata');
-        results.push({ filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 });
-      }
-    }
-    return results;
-  }
-
-  /** Safe metadata loader — gets dimensions without holding the full schematic in memory */
-  private async getSchematicInfoSafe(filename: string): Promise<SchematicInfo | null> {
-    const fullPath = path.join(this.schematicsDir, filename);
-    if (!fs.existsSync(fullPath)) return null;
-
-    // Heuristic: compressed .schem files typically have ~100:1 to ~200:1 ratio.
-    // Files over 50KB compressed likely decompress to millions of voxels — skip parsing entirely.
-    const fileSize = fs.statSync(fullPath).size;
-    if (fileSize > 50_000) {
-      logger.info({ filename, fileSize }, 'Large schematic — estimating dimensions from file size');
-      // Rough estimate: compressed size * 150 gives approx total voxels, cube-root for dimensions
-      const estVoxels = fileSize * 150;
-      const estDim = Math.round(Math.cbrt(estVoxels));
-      return { filename, size: { x: estDim, y: Math.round(estDim * 0.6), z: estDim }, blockCount: Math.round(estVoxels * 0.15) };
-    }
-
-    try {
-      const cached = await this.loadSchematicCached(filename);
-      const size = cached.size;
-      const volume = size.x * size.y * size.z;
-      // For very large schematics, estimate block count and skip iteration
-      if (volume > 200_000) {
-        return { filename, size, blockCount: Math.round(volume * 0.15) };
-      }
-      // Tally palette counts so the dashboard can render a material list.
-      // Cheap: cached.blocks is already in memory, this is one pass.
-      const palette: Record<string, number> = {};
-      for (const b of cached.blocks) {
-        palette[b.name] = (palette[b.name] ?? 0) + 1;
-      }
-      return { filename, size, blockCount: cached.blocks.length, palette };
-    } catch (err: any) {
-      logger.warn({ filename, err: err.message }, 'Failed to parse schematic');
-      return { filename, size: { x: 0, y: 0, z: 0 }, blockCount: 0 };
-    }
+    return this.schematicStore.listSchematics();
   }
 
   async getSchematicInfoAsync(filename: string): Promise<SchematicInfo | null> {
-    return this.getSchematicInfoSafe(filename);
+    return this.schematicStore.getSchematicInfo(filename);
   }
 
   // ── Build job management ────────────────────────────────

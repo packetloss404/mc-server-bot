@@ -146,6 +146,9 @@ export class ApprovalManager {
    */
   private readonly rehydrators: Map<string, ApprovalRehydrator> = new Map();
   private rehydrated = false;
+  /** Shared in-flight rehydrate promise so concurrent callers dedupe onto one
+   *  pass and async callers can await completion (not just kick it off). */
+  private rehydratePromise: Promise<number> | null = null;
   /** Dedicated sqlite handle for handler-descriptor reads/writes. Lazy. */
   private descriptorDb: Database.Database | null = null;
   /** True once we've tried (and failed) to open the descriptor DB. */
@@ -238,7 +241,7 @@ export class ApprovalManager {
    * here; a mayor decision overrides any in-flight votes.
    */
   async mayorDecide(approvalId: string, choice: 'approved' | 'denied'): Promise<Approval | null> {
-    this.ensureRehydrated();
+    await this.ensureRehydratedAsync();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -282,7 +285,7 @@ export class ApprovalManager {
    * changed.
    */
   async tally(approvalId: string): Promise<Approval | null> {
-    this.ensureRehydrated();
+    await this.ensureRehydratedAsync();
     const approval = this.townManager.getApproval(approvalId);
     if (!approval) return null;
     if (approval.status !== 'open') return approval;
@@ -478,7 +481,17 @@ export class ApprovalManager {
    * descriptors successfully rehydrated.
    */
   async rehydrate(): Promise<number> {
-    this.rehydrated = true;
+    // Dedupe concurrent callers onto a single in-flight pass.
+    if (this.rehydratePromise) return this.rehydratePromise;
+    this.rehydratePromise = this.doRehydrate();
+    return this.rehydratePromise;
+  }
+
+  private async doRehydrate(): Promise<number> {
+    // `rehydrated` is set in the finally — only AFTER all handlers have been
+    // re-attached — so an awaiting caller (tally/mayorDecide) never fires an
+    // approval handler before the resolveOnce hooks are back in place.
+    try {
     const db = this.openDescriptorDb();
     if (!db) return 0;
     let rows: Array<{ id: string; town_id: string | null; handler_descriptor_json: string | null }> = [];
@@ -504,6 +517,9 @@ export class ApprovalManager {
       logger.info({ restored }, 'ApprovalManager.rehydrate: re-registered handlers');
     }
     return restored;
+    } finally {
+      this.rehydrated = true;
+    }
   }
 
   /**
@@ -600,11 +616,19 @@ export class ApprovalManager {
     }
   }
 
-  /** Lazy rehydrate — called from any public path that benefits from it. */
+  /** Lazy rehydrate for SYNC callers (listOpen/castHeuristicVotes) that don't
+   *  fire approval handlers — kicks off the shared pass without awaiting. */
   private ensureRehydrated(): void {
     if (this.rehydrated) return;
-    // Fire-and-forget; rehydrate sets the flag synchronously up-front.
     void this.rehydrate();
+  }
+
+  /** Lazy rehydrate for ASYNC callers that DO fire resolveOnce handlers
+   *  (tally/mayorDecide). Awaits completion so a handler can never fire before
+   *  its resolveOnce hook has been re-attached after a restart. */
+  private async ensureRehydratedAsync(): Promise<void> {
+    if (this.rehydrated) return;
+    try { await this.rehydrate(); } catch { /* rehydrate is failure-isolated */ }
   }
 
   private async dispatchRehydrate(

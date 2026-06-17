@@ -432,7 +432,7 @@ export class BuildCoordinator {
    * so a re-run after a mid-build bot drop just resumes harmlessly. dryRun
    * returns the plan without touching the world.
    */
-  async buildTunnel(opts: { dryRun?: boolean } = {}): Promise<{ plan: any; executed: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
+  async buildTunnel(opts: { dryRun?: boolean; confirm?: boolean } = {}): Promise<{ plan: any; executed: boolean; refused?: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
     // Geometry: floor block at y50, walkable air y51-55 (5 tall), ceiling y56.
     const FLOOR = 50, AIR1 = 51, AIR2 = 55, CEIL = 56, HALL_Y = 64;
     // Rail centerline forms an L sharing corner block (railX, railZ).
@@ -451,6 +451,15 @@ export class BuildCoordinator {
       poweredRailEvery: 8, ceilingLightEvery: 5, stairwells: stairs,
     };
     if (opts.dryRun) return { plan, executed: false };
+    // Safety guard (review #5c): the geometry above is HARD-CODED to the current
+    // town's hall coordinates (railX=1225, halls at fixed x/z, y50/64). Running
+    // it for any other town/world would /fill stone through whatever sits at
+    // those absolute coords. Require an explicit confirm so it can't be carved
+    // accidentally; without it, behave like dryRun and return the plan.
+    if (!opts.confirm) {
+      logger.warn('buildTunnel: refused to carve — coordinates are hard-coded for the current town layout; pass confirm:true to execute');
+      return { plan, executed: false, refused: true };
+    }
 
     // Re-acquire a connected op bot if the current one drops mid-build.
     const opBot = async (): Promise<any> => {

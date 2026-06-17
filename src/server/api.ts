@@ -2380,11 +2380,14 @@ export function createAPIServer(
   }));
 
   // Build the rail+walkway tunnel between the two town halls. Use ?dryRun=true
-  // to preview the planned route/boxes before carving.
+  // to preview the planned route/boxes. The tunnel coordinates are hard-coded
+  // for the current town, so carving requires an explicit confirm:true (body or
+  // ?confirm=true) — without it the endpoint returns the plan with refused:true.
   app.post('/api/tunnel', asyncH(async (req: Request, res: Response) => {
     try {
       const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
-      const result = await buildCoordinator.buildTunnel({ dryRun });
+      const confirm = req.query.confirm === 'true' || (req.body && req.body.confirm === true);
+      const result = await buildCoordinator.buildTunnel({ dryRun, confirm });
       res.json({ success: true, ...result });
     } catch (err: any) {
       res.status(409).json({ error: err.message });

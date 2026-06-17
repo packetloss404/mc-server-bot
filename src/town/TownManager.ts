@@ -30,6 +30,7 @@ import { clampTrust, DEFAULT_TRUST } from './diplomacy';
 import { openTownDb, TownDb, TownDbHandle } from './db';
 import * as schema from './schema';
 import { ApprovalRepository } from './ApprovalRepository';
+import { RelationshipRepository } from './RelationshipRepository';
 import { genId, safeJsonParse } from './rows';
 import {
   appendFallback,
@@ -268,17 +269,7 @@ function rowToJournal(row: JournalRow): BotJournalEntry {
   };
 }
 
-function rowToRelationship(row: RelationshipRow): Relationship {
-  const events = safeJsonParse<RelationshipEvent[]>(row.eventsJson ?? null, []);
-  return {
-    townIdA: row.townIdA ?? '',
-    townIdB: row.townIdB ?? '',
-    state: ((row.state as RelationshipState) ?? 'neutral'),
-    trust: typeof row.trust === 'number' ? clampTrust(row.trust) : DEFAULT_TRUST,
-    lastInteractionAt: row.lastInteractionAt ?? 0,
-    events: Array.isArray(events) ? events : [],
-  };
-}
+// rowToRelationship now lives in ./rows (used by RelationshipRepository).
 
 export interface TownManagerOptions {
   /** Override the data directory (defaults to `<cwd>/data`). Useful for tests. */
@@ -293,6 +284,8 @@ export class TownManager {
   private readonly db: TownDb;
   /** Approvals persistence (extracted repository; TownManager delegates). */
   private readonly approvals: ApprovalRepository;
+  /** Relationship-edge persistence (extracted repository; TownManager delegates). */
+  private readonly relationships: RelationshipRepository;
   /**
    * Per-town Town Brain instances. Created lazily by `wireBrains()` once the
    * BotManager / BuildCoordinator / BlackboardManager dependencies are
@@ -345,10 +338,10 @@ export class TownManager {
     this.dataDir = opts.dataDir ?? path.join(process.cwd(), 'data');
     this.handle = opts.handle ?? openTownDb(this.dataDir);
     this.db = this.handle.db;
-    this.approvals = new ApprovalRepository(
-      this.db,
-      (table, townId, row) => this.appendFallbackRow(table as FallbackKind, townId, row as Record<string, unknown>),
-    );
+    const fallbackAppend = (table: string, townId: string, row: unknown) =>
+      this.appendFallbackRow(table as FallbackKind, townId, row as Record<string, unknown>);
+    this.approvals = new ApprovalRepository(this.db, fallbackAppend);
+    this.relationships = new RelationshipRepository(this.db, fallbackAppend);
     // Drain any pending JSONL fallback into the DB at boot. Best-effort —
     // failures here are logged but never abort startup.
     this.drainFallback();
@@ -1867,111 +1860,21 @@ export class TownManager {
    * events array) so a wedged DB doesn't lose history. drainFallback's
    * replay re-runs the same INSERT ... ON CONFLICT path.
    */
+  // Relationship-edge persistence is delegated to RelationshipRepository.
   upsertRelationshipEdge(edge: Relationship): boolean {
-    const trust = clampTrust(edge.trust);
-    const eventsJson = JSON.stringify(edge.events ?? []);
-    try {
-      // Look up the existing row to preserve the surrogate id (uniqueness is
-      // on the pair, not the id, so a re-insert would otherwise generate a
-      // new id every tick). Falls through to INSERT when absent.
-      const existing = this.db
-        .select()
-        .from(schema.relationships)
-        .where(
-          and(
-            eq(schema.relationships.townIdA, edge.townIdA),
-            eq(schema.relationships.townIdB, edge.townIdB),
-          ),
-        )
-        .get();
-      if (existing) {
-        this.db
-          .update(schema.relationships)
-          .set({
-            state: edge.state,
-            trust,
-            lastInteractionAt: edge.lastInteractionAt,
-            eventsJson,
-          })
-          .where(eq(schema.relationships.id, existing.id))
-          .run();
-      } else {
-        const id = genId('rel');
-        this.db
-          .insert(schema.relationships)
-          .values({
-            id,
-            townIdA: edge.townIdA,
-            townIdB: edge.townIdB,
-            state: edge.state,
-            trust,
-            lastInteractionAt: edge.lastInteractionAt,
-            eventsJson,
-          })
-          .run();
-      }
-      return true;
-    } catch (err: any) {
-      this.appendFallbackRow('relationships', edge.townIdA, {
-        townIdA: edge.townIdA,
-        townIdB: edge.townIdB,
-        state: edge.state,
-        trust,
-        lastInteractionAt: edge.lastInteractionAt,
-        events: edge.events ?? [],
-      });
-      logger.warn(
-        { err: err?.message, a: edge.townIdA, b: edge.townIdB },
-        'upsertRelationshipEdge: DB write failed; routed to fallback',
-      );
-      return false;
-    }
+    return this.relationships.upsertRelationshipEdge(edge);
   }
 
-  /** Single directed edge `a -> b`, or null when no edge exists. */
   getRelationshipEdge(a: string, b: string): Relationship | null {
-    try {
-      const row = this.db
-        .select()
-        .from(schema.relationships)
-        .where(
-          and(
-            eq(schema.relationships.townIdA, a),
-            eq(schema.relationships.townIdB, b),
-          ),
-        )
-        .get();
-      return row ? rowToRelationship(row) : null;
-    } catch (err: any) {
-      logger.warn({ err: err?.message, a, b }, 'getRelationshipEdge: read failed');
-      return null;
-    }
+    return this.relationships.getRelationshipEdge(a, b);
   }
 
-  /** All outgoing edges from a town. Used by the dashboard + diplomacy loop. */
   listRelationshipsFrom(townId: string): Relationship[] {
-    try {
-      const rows = this.db
-        .select()
-        .from(schema.relationships)
-        .where(eq(schema.relationships.townIdA, townId))
-        .all();
-      return rows.map(rowToRelationship);
-    } catch (err: any) {
-      logger.warn({ err: err?.message, townId }, 'listRelationshipsFrom: read failed');
-      return [];
-    }
+    return this.relationships.listRelationshipsFrom(townId);
   }
 
-  /** Every edge in the table — used by GET /api/relationships. */
   listAllRelationships(): Relationship[] {
-    try {
-      const rows = this.db.select().from(schema.relationships).all();
-      return rows.map(rowToRelationship);
-    } catch (err: any) {
-      logger.warn({ err: err?.message }, 'listAllRelationships: read failed');
-      return [];
-    }
+    return this.relationships.listAllRelationships();
   }
 
   // ──────────────────────────────────────────────────────────────────────

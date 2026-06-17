@@ -8,8 +8,11 @@
 import crypto from 'crypto';
 import * as schema from './schema';
 import type { Approval, ApprovalStatus, ApprovalVotes } from './Approval';
+import type { Relationship, RelationshipEvent, RelationshipState } from './Relationship';
+import { clampTrust, DEFAULT_TRUST } from './diplomacy';
 
 type ApprovalRow = typeof schema.approvals.$inferSelect;
+type RelationshipRow = typeof schema.relationships.$inferSelect;
 
 /** Prefixed, time-ordered, collision-resistant id (e.g. `apv_lz4k_3f9a1c20`). */
 export function genId(prefix: string): string {
@@ -46,5 +49,17 @@ export function rowToApproval(row: ApprovalRow): Approval {
         ? row.mayorDecision
         : null,
     votes: safeVotes,
+  };
+}
+
+export function rowToRelationship(row: RelationshipRow): Relationship {
+  const events = safeJsonParse<RelationshipEvent[]>(row.eventsJson ?? null, []);
+  return {
+    townIdA: row.townIdA ?? '',
+    townIdB: row.townIdB ?? '',
+    state: ((row.state as RelationshipState) ?? 'neutral'),
+    trust: typeof row.trust === 'number' ? clampTrust(row.trust) : DEFAULT_TRUST,
+    lastInteractionAt: row.lastInteractionAt ?? 0,
+    events: Array.isArray(events) ? events : [],
   };
 }

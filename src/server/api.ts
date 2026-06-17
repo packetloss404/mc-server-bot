@@ -41,6 +41,10 @@ import { SchematicMatcher } from '../build/SchematicMatcher';
 import { ChainCoordinator } from '../supplychain/ChainCoordinator';
 import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { registerAdminRoutes } from './admin';
+import { isSafeBotName, isSafeFilename, asyncH, sanitizeErrorMessage } from './routes/helpers';
+import { registerTerrainRoutes } from './routes/terrainRoutes';
+import { registerSchematicRoutes } from './routes/schematicRoutes';
+import { registerChainRoutes } from './routes/chainRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -57,57 +61,8 @@ import { rateLimit } from './rateLimit';
 import type { TokenLedger } from '../ai/TokenLedger';
 import { atomicWriteJsonSync, atomicWriteTextSync } from '../util/atomicWrite';
 
-// ── Input validation helpers ─────────────────────────────────────────
-// Bot names become filenames (e.g. `data/<name>.json`) and worker thread
-// names; Minecraft usernames are `[A-Za-z0-9_]{3,16}` so we enforce that.
-const BOT_NAME_RE = /^[A-Za-z0-9_]{3,16}$/;
-function isSafeBotName(name: unknown): name is string {
-  return typeof name === 'string' && BOT_NAME_RE.test(name);
-}
-
-// Filenames used in `path.join(schematicsDir, name)` — reject anything that
-// would escape the directory (path separators, `..`, NUL bytes, etc.).
-function isSafeFilename(name: unknown): name is string {
-  if (typeof name !== 'string' || name.length === 0 || name.length > 128) return false;
-  if (name.includes('\0') || name.includes('..')) return false;
-  // basename() strips any path components; equality means there were none.
-  return path.basename(name) === name;
-}
-
-/**
- * Wraps an async Express handler so rejected promises are forwarded to the
- * error-handling middleware instead of crashing the process. Wraps only the
- * handlers identified by the API audit as containing un-caught awaits —
- * notably `POST /api/bots`, `POST /api/swarm`, `POST /api/missions`, and
- * `POST /api/builds`. Other endpoints that already wrap their work in
- * try/catch don't need it.
- */
-const asyncH = (
-  fn: (req: Request, res: Response, next: NextFunction) => unknown | Promise<unknown>,
-): RequestHandler => (req, res, next) =>
-  Promise.resolve(fn(req, res, next)).catch(next);
-
-/**
- * Strip absolute file paths and stack-trace style noise out of an error
- * message before sending it back to the client. Without this, validation
- * failures from deep inside `BuildCoordinator` etc. can leak server filesystem
- * layout (e.g. `/opt/mc-server-bot/data/...`) into JSON responses. We keep the
- * leading message — everything before the first absolute path — and replace
- * the offending segment with `<path>`.
- */
-function sanitizeErrorMessage(input: unknown, fallback = 'Internal error'): string {
-  const raw = input instanceof Error
-    ? input.message
-    : (typeof input === 'string' ? input : (input != null ? String(input) : ''));
-  if (!raw) return fallback;
-  // Replace any POSIX-style absolute path (and the immediately following
-  // path-like characters) with a placeholder. Conservative: only strips
-  // segments that look like real paths, not arbitrary slashes in text.
-  let cleaned = raw.replace(/\/(?:[\w.@+-]+\/)+[\w.@+-]+/g, '<path>');
-  // Also collapse newlines (occasional stack-trace bleed-through).
-  cleaned = cleaned.split('\n')[0]!.trim();
-  return cleaned || fallback;
-}
+// Input-validation + response helpers now live in ./routes/helpers (shared with
+// the extracted route modules). Re-imported below.
 
 /**
  * Minimal worker-handle shape consumed by `createGrantHandler`. Defined
@@ -2149,107 +2104,8 @@ export function createAPIServer(
   //  BUILD ENDPOINTS
   // ═══════════════════════════════════════
 
-  // List available schematics
-  app.get('/api/schematics', async (_req: Request, res: Response) => {
-    try {
-      const schematics = await buildCoordinator.listSchematics();
-      res.json({ schematics });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to list schematics');
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Upload a schematic file (multipart/form-data, field name "file").
-  // Accepts .schem and .schematic only; cap at 10MB.
-  const SCHEM_MAX_BYTES = 10 * 1024 * 1024;
-  const schematicUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: SCHEM_MAX_BYTES, files: 1 },
-  });
-  app.post(
-    '/api/schematics/upload',
-    (req: Request, res: Response, next) => {
-      schematicUpload.single('file')(req, res, (err: any) => {
-        if (err) {
-          // Multer codes: LIMIT_FILE_SIZE etc.
-          if (err.code === 'LIMIT_FILE_SIZE') {
-            res.status(400).json({ error: `File too large; max ${SCHEM_MAX_BYTES} bytes` });
-            return;
-          }
-          res.status(400).json({ error: err.message || 'Upload failed' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      try {
-        const file = (req as any).file as Express.Multer.File | undefined;
-        if (!file) {
-          res.status(400).json({ error: 'No file uploaded (use field name "file")' });
-          return;
-        }
-        // Sanitize: only allow extension + a safe basename. Strip directory components.
-        const rawName = path.basename(file.originalname || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-        const ext = path.extname(rawName).toLowerCase();
-        if (ext !== '.schem' && ext !== '.schematic') {
-          res.status(400).json({ error: 'Only .schem or .schematic files are allowed' });
-          return;
-        }
-        if (!rawName || rawName === ext) {
-          res.status(400).json({ error: 'Invalid filename' });
-          return;
-        }
-        const destPath = path.join(schematicsDir, rawName);
-        // Ensure dir exists
-        if (!fs.existsSync(schematicsDir)) {
-          fs.mkdirSync(schematicsDir, { recursive: true });
-        }
-        // Reject if a schematic with this name already exists rather than
-        // silently overwriting — a build that loaded the previous bytes mid-
-        // upload would see a torn file. Caller can DELETE first if needed.
-        if (fs.existsSync(destPath)) {
-          res.status(409).json({ error: `Schematic '${rawName}' already exists. Delete it first if you want to replace it.` });
-          return;
-        }
-        // Atomic write: write to .tmp first, then rename onto destPath so any
-        // reader either sees the complete file or no file at all.
-        const tmpPath = `${destPath}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
-        fs.writeFileSync(tmpPath, file.buffer);
-        fs.renameSync(tmpPath, destPath);
-        schematicMatcher.refresh();
-        const info = await buildCoordinator.getSchematicInfoAsync(rawName);
-        res.status(201).json({
-          schematic: info ?? { filename: rawName, size: { x: 0, y: 0, z: 0 }, blockCount: 0 },
-        });
-      } catch (err: any) {
-        logger.error({ err: err?.message }, 'Schematic upload failed');
-        res.status(500).json({ error: err?.message || 'Upload failed' });
-      }
-    },
-  );
-
-  // Get a single schematic's metadata
-  app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
-    try {
-      const filename = decodeURIComponent(req.params.filename as string);
-      if (!isSafeFilename(filename)) {
-        res.status(400).json({ error: 'invalid schematic filename' });
-        return;
-      }
-      const info = await buildCoordinator.getSchematicInfoAsync(filename);
-      if (!info) {
-        res.status(404).json({ error: 'Schematic not found' });
-        return;
-      }
-      res.json({ schematic: info });
-    } catch (err: any) {
-      logger.error({ err: err.message }, 'Failed to fetch schematic');
-      // Don't echo absolute paths back to the client — sanitize before responding.
-      res.status(500).json({ error: sanitizeErrorMessage(err, 'Failed to fetch schematic') });
-    }
-  });
+  // ── Schematics (extracted → routes/schematicRoutes.ts) ──
+  registerSchematicRoutes(app, { buildCoordinator, schematicMatcher, schematicsDir });
 
   // List all build jobs
   app.get('/api/builds', (_req: Request, res: Response) => {
@@ -2496,148 +2352,13 @@ export function createAPIServer(
   //  SUPPLY CHAIN ENDPOINTS
   // ═══════════════════════════════════════
 
-  // List chain templates
-  app.get('/api/chains/templates', (_req: Request, res: Response) => {
-    res.json({ templates: chainCoordinator.getTemplates() });
-  });
-
-  // List all chains
-  app.get('/api/chains', (_req: Request, res: Response) => {
-    res.json({ chains: chainCoordinator.getAllChains() });
-  });
-
-  // Create a new chain
-  app.post('/api/chains', (req: Request, res: Response) => {
-    const { name, description, templateId, stages, loop, botAssignments, chestLocations } = req.body;
-    if (!name) {
-      res.status(400).json({ error: 'name is required' });
-      return;
-    }
-    try {
-      const chain = chainCoordinator.createChain({ name, description, templateId, stages, loop, botAssignments, chestLocations });
-      res.status(201).json({ chain });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to create chain');
-      res.status(400).json({ error: err.message });
-    }
-  });
-
-  // Get a specific chain
-  app.get('/api/chains/:id', (req: Request, res: Response) => {
-    const chain = chainCoordinator.getChain(req.params.id as string);
-    if (!chain) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ chain });
-  });
-
-  // Start a chain
-  app.post('/api/chains/:id/start', (req: Request, res: Response) => {
-    const success = chainCoordinator.startChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or already running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Pause a chain
-  app.post('/api/chains/:id/pause', (req: Request, res: Response) => {
-    const success = chainCoordinator.pauseChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found or not running' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Cancel a chain
-  app.post('/api/chains/:id/cancel', (req: Request, res: Response) => {
-    const success = chainCoordinator.cancelChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
-
-  // Delete a chain
-  app.delete('/api/chains/:id', (req: Request, res: Response) => {
-    const success = chainCoordinator.deleteChain(req.params.id as string);
-    if (!success) {
-      res.status(404).json({ error: 'Chain not found' });
-      return;
-    }
-    res.json({ success: true });
-  });
+  // ── Supply chains (extracted → routes/chainRoutes.ts) ──
+  registerChainRoutes(app, { chainCoordinator });
 
   // ═══════════════════════════════════════
-  //  TERRAIN ENDPOINTS
+  //  TERRAIN ENDPOINTS (extracted → routes/terrainRoutes.ts)
   // ═══════════════════════════════════════
-
-  // Scan blocks in a region around a position
-  // Height-map probe around (cx, cz). Returns the top non-air block name at
-  // each grid cell as a flat string[], matching the TerrainData frontend shape.
-  app.get('/api/terrain', async (req: Request, res: Response) => {
-    const cx = parseInt(String(req.query.cx ?? req.query.x ?? '0'));
-    const cz = parseInt(String(req.query.cz ?? req.query.z ?? '0'));
-    const radius = Math.min(parseInt(String(req.query.radius ?? '16')), 64);
-    const step = Math.max(parseInt(String(req.query.step ?? '1')), 1);
-
-    let probeHandle: any = null;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
-        probeHandle = h;
-        break;
-      }
-    }
-    if (!probeHandle) {
-      res.status(503).json({ error: 'No connected bot available to scan terrain' });
-      return;
-    }
-
-    const size = Math.floor((2 * radius) / step) + 1;
-    // Single IPC call — the worker iterates the grid internally for speed.
-    const blocks = (await probeHandle.getTerrainGrid(cx, cz, radius, step, 120, -60)) ?? [];
-    res.json({ cx, cz, radius, step, size, blocks });
-  });
-
-  // Get terrain height at a specific (x, z) column
-  app.get('/api/terrain/height', async (req: Request, res: Response) => {
-    const x = parseInt(String(req.query.x ?? '0'));
-    const z = parseInt(String(req.query.z ?? '0'));
-    const maxY = parseInt(String(req.query.maxY ?? '320'));
-    const minY = parseInt(String(req.query.minY ?? '-64'));
-
-    // Pick the connected bot closest to (x, z). bot.blockAt() returns null for
-    // chunks outside view distance, so a far-away probe makes the scan miss
-    // the surface and report height=null even when ground is clearly there.
-    let probeHandle: any = null;
-    let bestDist = Infinity;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected !== 'function') continue;
-      if (!(await h.isBotConnected())) continue;
-      const pos = h.getCachedStatus?.()?.position;
-      if (!pos) { if (probeHandle === null) probeHandle = h; continue; }
-      const d = Math.hypot(pos.x - x, pos.z - z);
-      if (d < bestDist) { bestDist = d; probeHandle = h; }
-    }
-    if (!probeHandle) {
-      res.status(503).json({ error: 'No connected bot available to scan terrain' });
-      return;
-    }
-
-    // Scan downward to find the first solid block
-    for (let y = maxY; y >= minY; y--) {
-      const block = await probeHandle.getBlockAt(x, y, z);
-      if (block && block.name !== 'air' && block.name !== 'cave_air' && block.name !== 'void_air') {
-        res.json({ x, z, height: y, surfaceBlock: block.name });
-        return;
-      }
-    }
-    res.json({ x, z, height: null, surfaceBlock: null });
-  });
+  registerTerrainRoutes(app, { botManager });
 
   // ═══════════════════════════════════════
   //  CONTROL PLATFORM ENDPOINTS

@@ -216,6 +216,42 @@ const MIGRATIONS: Array<(sqlite: Database.Database) => void> = [
   },
 ];
 
+/**
+ * Schema version = number of migrations. Stored in SQLite's `user_version`
+ * pragma so we run each migration at most once per DB instead of re-running
+ * the whole idempotent ALTER list every boot.
+ */
+export const TOWN_SCHEMA_VERSION = MIGRATIONS.length;
+
+/**
+ * Apply pending migrations, gated by `user_version`. Migrations with index
+ * >= the stored version run in order, then the version is bumped to
+ * TOWN_SCHEMA_VERSION.
+ *
+ * Safe to roll out on an existing live DB: every current migration is an
+ * idempotent (duplicate-column-tolerant) ALTER and the CREATE statements
+ * already include every column, so a DB still at version 0 just re-runs the
+ * no-op ALTERs once, then the version anchor skips them on every later boot.
+ *
+ * Adding a migration: append it to MIGRATIONS AND add any new column to the
+ * matching CREATE TABLE (so fresh DBs get it directly). Future migrations need
+ * not be idempotent — they are gated by version.
+ */
+function runMigrations(sqlite: Database.Database): void {
+  let current = 0;
+  try {
+    current = Number(sqlite.pragma('user_version', { simple: true })) || 0;
+  } catch {
+    current = 0;
+  }
+  if (current >= MIGRATIONS.length) return;
+  for (let v = current; v < MIGRATIONS.length; v++) {
+    MIGRATIONS[v](sqlite);
+  }
+  // PRAGMA user_version takes only an integer literal — no bind parameters.
+  sqlite.pragma(`user_version = ${MIGRATIONS.length}`);
+}
+
 export interface TownDbHandle {
   db: TownDb;
   sqlite: Database.Database;
@@ -243,9 +279,7 @@ export function openTownDb(dataDir: string = path.join(process.cwd(), 'data')): 
   for (const stmt of CREATE_STATEMENTS) {
     sqlite.exec(stmt);
   }
-  for (const migrate of MIGRATIONS) {
-    migrate(sqlite);
-  }
+  runMigrations(sqlite);
   for (const stmt of INDEX_STATEMENTS) {
     sqlite.exec(stmt);
   }

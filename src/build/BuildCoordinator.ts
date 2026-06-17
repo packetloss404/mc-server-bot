@@ -2072,6 +2072,29 @@ export class BuildCoordinator {
       // who wander far from the capital drag the search spiral with them, and
       // SiteSelector can't find flat ground anywhere near the town centre.
       // The probe is only used here as an IPC handle for reading blocks.
+      //
+      // CRITICAL: `getBlockAt` returns null for chunks outside the probe bot's
+      // view distance. Town residents routinely wander 100-300 blocks from the
+      // capital, so the capital's chunks are unloaded and SiteSelector probes
+      // nothing but air → "no usable candidate" after the deadline. Teleport the
+      // probe to the supplied origin and wait for those chunks to stream in
+      // before searching, mirroring how the verify/repair pass positions itself.
+      try {
+        probeHandle.chat(`/tp ${probeHandle.botName} ${fallbackOrigin.x} ${fallbackOrigin.y + 50} ${fallbackOrigin.z}`);
+        let loaded = false;
+        for (let attempt = 0; attempt < 20; attempt++) {
+          await this.sleep(500);
+          const b = await probeHandle.getBlockAt(fallbackOrigin.x, fallbackOrigin.y, fallbackOrigin.z);
+          if (b) { loaded = true; break; }
+        }
+        if (!loaded) {
+          logger.warn({ refPos: fallbackOrigin, probe: probeHandle.botName }, 'originMode auto-flat: probe chunks still unloaded after teleport+wait; searching anyway');
+        } else {
+          logger.info({ refPos: fallbackOrigin, probe: probeHandle.botName }, 'originMode auto-flat: probe teleported to origin, chunks loaded');
+        }
+      } catch (err) {
+        logger.warn({ err: String(err) }, 'originMode auto-flat: probe pre-load teleport failed; searching anyway');
+      }
       const probe = (x: number, y: number, z: number) => probeHandle.getBlockAt(x, y, z);
       const cand: SiteCandidate | null = await selectBuildSite(probe, fallbackOrigin, schSize);
       if (!cand) {

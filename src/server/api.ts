@@ -43,6 +43,7 @@ import { parseBuildIntent } from '../control/BuildIntentResolver';
 import { registerAdminRoutes } from './admin';
 import { isSafeBotName, isSafeFilename, asyncH, sanitizeErrorMessage } from './routes/helpers';
 import { registerTerrainRoutes } from './routes/terrainRoutes';
+import { registerSchematicRoutes } from './routes/schematicRoutes';
 import { logger } from '../util/logger';
 import {
   requireDashboardAuth,
@@ -2102,107 +2103,8 @@ export function createAPIServer(
   //  BUILD ENDPOINTS
   // ═══════════════════════════════════════
 
-  // List available schematics
-  app.get('/api/schematics', async (_req: Request, res: Response) => {
-    try {
-      const schematics = await buildCoordinator.listSchematics();
-      res.json({ schematics });
-    } catch (err: any) {
-      logger.error({ err }, 'Failed to list schematics');
-      res.status(500).json({ error: err.message });
-    }
-  });
-
-  // Upload a schematic file (multipart/form-data, field name "file").
-  // Accepts .schem and .schematic only; cap at 10MB.
-  const SCHEM_MAX_BYTES = 10 * 1024 * 1024;
-  const schematicUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: SCHEM_MAX_BYTES, files: 1 },
-  });
-  app.post(
-    '/api/schematics/upload',
-    (req: Request, res: Response, next) => {
-      schematicUpload.single('file')(req, res, (err: any) => {
-        if (err) {
-          // Multer codes: LIMIT_FILE_SIZE etc.
-          if (err.code === 'LIMIT_FILE_SIZE') {
-            res.status(400).json({ error: `File too large; max ${SCHEM_MAX_BYTES} bytes` });
-            return;
-          }
-          res.status(400).json({ error: err.message || 'Upload failed' });
-          return;
-        }
-        next();
-      });
-    },
-    async (req: Request, res: Response) => {
-      try {
-        const file = (req as any).file as Express.Multer.File | undefined;
-        if (!file) {
-          res.status(400).json({ error: 'No file uploaded (use field name "file")' });
-          return;
-        }
-        // Sanitize: only allow extension + a safe basename. Strip directory components.
-        const rawName = path.basename(file.originalname || '').replace(/[^a-zA-Z0-9._-]/g, '_');
-        const ext = path.extname(rawName).toLowerCase();
-        if (ext !== '.schem' && ext !== '.schematic') {
-          res.status(400).json({ error: 'Only .schem or .schematic files are allowed' });
-          return;
-        }
-        if (!rawName || rawName === ext) {
-          res.status(400).json({ error: 'Invalid filename' });
-          return;
-        }
-        const destPath = path.join(schematicsDir, rawName);
-        // Ensure dir exists
-        if (!fs.existsSync(schematicsDir)) {
-          fs.mkdirSync(schematicsDir, { recursive: true });
-        }
-        // Reject if a schematic with this name already exists rather than
-        // silently overwriting — a build that loaded the previous bytes mid-
-        // upload would see a torn file. Caller can DELETE first if needed.
-        if (fs.existsSync(destPath)) {
-          res.status(409).json({ error: `Schematic '${rawName}' already exists. Delete it first if you want to replace it.` });
-          return;
-        }
-        // Atomic write: write to .tmp first, then rename onto destPath so any
-        // reader either sees the complete file or no file at all.
-        const tmpPath = `${destPath}.tmp.${process.pid}.${Math.random().toString(36).slice(2, 8)}`;
-        fs.writeFileSync(tmpPath, file.buffer);
-        fs.renameSync(tmpPath, destPath);
-        schematicMatcher.refresh();
-        const info = await buildCoordinator.getSchematicInfoAsync(rawName);
-        res.status(201).json({
-          schematic: info ?? { filename: rawName, size: { x: 0, y: 0, z: 0 }, blockCount: 0 },
-        });
-      } catch (err: any) {
-        logger.error({ err: err?.message }, 'Schematic upload failed');
-        res.status(500).json({ error: err?.message || 'Upload failed' });
-      }
-    },
-  );
-
-  // Get a single schematic's metadata
-  app.get('/api/schematics/:filename', async (req: Request, res: Response) => {
-    try {
-      const filename = decodeURIComponent(req.params.filename as string);
-      if (!isSafeFilename(filename)) {
-        res.status(400).json({ error: 'invalid schematic filename' });
-        return;
-      }
-      const info = await buildCoordinator.getSchematicInfoAsync(filename);
-      if (!info) {
-        res.status(404).json({ error: 'Schematic not found' });
-        return;
-      }
-      res.json({ schematic: info });
-    } catch (err: any) {
-      logger.error({ err: err.message }, 'Failed to fetch schematic');
-      // Don't echo absolute paths back to the client — sanitize before responding.
-      res.status(500).json({ error: sanitizeErrorMessage(err, 'Failed to fetch schematic') });
-    }
-  });
+  // ── Schematics (extracted → routes/schematicRoutes.ts) ──
+  registerSchematicRoutes(app, { buildCoordinator, schematicMatcher, schematicsDir });
 
   // List all build jobs
   app.get('/api/builds', (_req: Request, res: Response) => {

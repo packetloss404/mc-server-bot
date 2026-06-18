@@ -513,6 +513,17 @@ export class BotInstance {
   private handleAuth(onReady: () => void): void {
     if (!this.bot) return;
 
+    // Servers without a chat-password auth plugin (vanilla/Paper) use
+    // loginFlow: "none" — just join, no /login or /register. DyoCraft uses
+    // "dyoauth" (the default). Skipping here also avoids the 15s auth-timeout
+    // wait on servers that never send a login prompt.
+    if (this.config.minecraft.loginFlow === 'none') {
+      logger.info({ bot: this.name }, 'Auth: loginFlow=none, skipping login');
+      onReady();
+      return;
+    }
+    const password = this.config.minecraft.loginPassword ?? BotInstance.BOT_PASSWORD;
+
     const bot = this.bot;
     let authDone = false;
 
@@ -536,10 +547,10 @@ export class BotInstance {
         finish();
       } else if (msg.includes('already registered') || msg.includes('Please log in')) {
         logger.info({ bot: this.name }, 'Already registered, logging in');
-        bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
+        bot.chat(`/login ${password}`);
       } else if (msg.includes('Please register') || msg.includes('not registered')) {
         logger.info({ bot: this.name }, 'Registering with DyoAuth');
-        bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
+        bot.chat(`/register ${password} ${password}`);
       }
     };
 
@@ -552,14 +563,14 @@ export class BotInstance {
     this.trackTimeout(() => {
       if (!authDone && this.bot) {
         logger.info({ bot: this.name }, 'Proactively trying /login');
-        this.bot.chat(`/login ${BotInstance.BOT_PASSWORD}`);
+        this.bot.chat(`/login ${password}`);
       }
     }, 1000);
 
     this.trackTimeout(() => {
       if (!authDone && this.bot) {
         logger.info({ bot: this.name }, 'Proactively trying /register');
-        this.bot.chat(`/register ${BotInstance.BOT_PASSWORD} ${BotInstance.BOT_PASSWORD}`);
+        this.bot.chat(`/register ${password} ${password}`);
       }
     }, 3000);
 
@@ -585,6 +596,14 @@ export class BotInstance {
 
   private handleClassSelection(onReady: () => void): void {
     if (!this.bot) { onReady(); return; }
+
+    // DyoClasses is a DyoCraft plugin; a vanilla/Paper server has no class
+    // hotbar, so selectClass: false skips the dance entirely.
+    if (this.config.minecraft.selectClass === false) {
+      logger.info({ bot: this.name }, 'Class selection disabled (selectClass=false), skipping');
+      onReady();
+      return;
+    }
 
     const bot = this.bot;
     const mapping = BotInstance.PERSONALITY_CLASS_MAP[this.personality.toLowerCase()];

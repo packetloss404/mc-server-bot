@@ -16,7 +16,24 @@ import path from 'path';
  */
 export interface Config {
   api: { port: number; host: string };
-  minecraft: { host: string; port: number; version: string; auth: string };
+  minecraft: {
+    host: string;
+    port: number;
+    version: string;
+    auth: string;
+    /**
+     * Server onboarding behaviour. DyoCraft requires a chat-password login
+     * ('dyoauth') and a class-selection hotbar dance; a vanilla/Paper server
+     * needs neither. Optional with DyoCraft-compatible defaults so existing
+     * configs are unaffected.
+     *   loginFlow: 'none' (just join) | 'dyoauth' (/login + /register flow)
+     *   loginPassword: shared password for the dyoauth flow
+     *   selectClass: run the DyoClasses hotbar class-selection after login
+     */
+    loginFlow?: string;
+    loginPassword?: string;
+    selectClass?: boolean;
+  };
   bots: {
     maxBots: number;
     defaultMode: string;
@@ -283,6 +300,9 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
       { key: 'port', type: 'number' },
       { key: 'version', type: 'string' },
       { key: 'auth', type: 'string' },
+      { key: 'loginFlow', type: 'string', optional: true },
+      { key: 'loginPassword', type: 'string', optional: true },
+      { key: 'selectClass', type: 'boolean', optional: true },
     ],
   },
   bots: {

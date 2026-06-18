@@ -43,10 +43,11 @@ interface UsageMetrics {
   byTaskType: Record<string, { calls: number; tokens: number; cost: number }>;
 }
 
-type TabId = 'ai' | 'behavior' | 'affinity' | 'instincts' | 'voyager';
+type TabId = 'ai' | 'server' | 'behavior' | 'affinity' | 'instincts' | 'voyager';
 
 const TABS: ReadonlyArray<SettingsTabDef<TabId>> = [
   { id: 'ai', label: 'AI' },
+  { id: 'server', label: 'Server' },
   { id: 'behavior', label: 'Behavior' },
   { id: 'affinity', label: 'Affinity' },
   { id: 'instincts', label: 'Instincts' },
@@ -54,8 +55,21 @@ const TABS: ReadonlyArray<SettingsTabDef<TabId>> = [
 ];
 
 function isTabId(s: string | null): s is TabId {
-  return s === 'ai' || s === 'behavior' || s === 'affinity' || s === 'instincts' || s === 'voyager';
+  return s === 'ai' || s === 'server' || s === 'behavior' || s === 'affinity' || s === 'instincts' || s === 'voyager';
 }
+
+// Per-field labels + hints for the Minecraft server section. The generic
+// SettingsSection renders strings as text inputs, port as a number, and
+// selectClass as a checkbox; these just make the form self-documenting.
+const MINECRAFT_FIELD_OVERRIDES = {
+  host: { label: 'Server Host', hint: 'Hostname or IP of the Minecraft server (e.g. play.dyoburon.com or 10.80.13.14).' },
+  port: { label: 'Port', hint: 'Default 25565.' },
+  version: { label: 'MC Version', hint: 'Must match the target server, e.g. 1.21.11.' },
+  auth: { label: 'Auth Mode', hint: 'offline (cracked usernames) or microsoft (premium accounts). Online-mode servers require microsoft.' },
+  loginFlow: { label: 'Login Flow', hint: 'none = just join (vanilla/Paper). dyoauth = DyoCraft /login + /register plugin.' },
+  loginPassword: { label: 'Login Password', hint: 'Only used by the dyoauth flow. Leave as ******** to keep the current password.' },
+  selectClass: { label: 'DyoClasses Class Select', hint: 'Run the DyoClasses hotbar selection after login. Turn OFF for non-DyoCraft servers.' },
+} as const;
 
 // ─── Page shell ──────────────────────────────────────────────────────────
 
@@ -112,7 +126,7 @@ function SettingsPageInner() {
         <div>
           <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-zinc-400 text-sm mt-1">
-            Configure providers, behavior tuning, affinity rules, instincts, and Voyager loop options.
+            Configure providers, the target Minecraft server, behavior tuning, affinity rules, instincts, and Voyager loop options.
           </p>
         </div>
 
@@ -125,6 +139,15 @@ function SettingsPageInner() {
 
         <div>
           {activeTab === 'ai' && <AiProviderTab onDirtyChange={makeDirtyHandler('ai')} />}
+          {activeTab === 'server' && (
+            <SettingsSection
+              section="minecraft"
+              title="Minecraft Server"
+              description="Point the bot fleet at a Minecraft server. Changing any of these requires a dyobot restart to reconnect the fleet — the values are only read when a bot connects."
+              fieldOverrides={MINECRAFT_FIELD_OVERRIDES}
+              onDirtyChange={makeDirtyHandler('server')}
+            />
+          )}
           {activeTab === 'behavior' && (
             <SettingsSection
               section="behavior"

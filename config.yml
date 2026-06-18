@@ -9,6 +9,13 @@ minecraft:
   port: 25565
   version: "1.21.11"
   auth: "offline"
+  # Onboarding behaviour. DyoCraft uses a chat-password login + a class-select
+  # hotbar dance; a vanilla/Paper server needs neither (loginFlow: "none",
+  # selectClass: false). Changing minecraft.* requires a dyobot restart to
+  # reconnect — the values are only read at connect time.
+  loginFlow: "dyoauth"        # "none" | "dyoauth"
+  loginPassword: "dyobot2026"
+  selectClass: true
 
 bots:
   maxBots: 10

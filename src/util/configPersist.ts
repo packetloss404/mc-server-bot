@@ -33,7 +33,7 @@ export function persistConfig(config: Config, configPath?: string): void {
  * outside this set is rejected with 400 — we do not want operators editing
  * `api`, `minecraft`, `bots`, `llm`, `skills`, or `logging` over HTTP.
  */
-export const PATCHABLE_SECTIONS = ['behavior', 'affinity', 'instincts', 'voyager'] as const;
+export const PATCHABLE_SECTIONS = ['behavior', 'affinity', 'instincts', 'voyager', 'minecraft'] as const;
 export type PatchableSection = (typeof PATCHABLE_SECTIONS)[number];
 
 /**
@@ -72,6 +72,12 @@ export const RESTART_REQUIRED_FIELDS: Record<PatchableSection, ReadonlySet<strin
   voyager: new Set([
     // codeExecutionTimeoutMs captured in CodeExecutor at construction
     'codeExecutionTimeoutMs',
+  ]),
+  // Every minecraft field is read only at mineflayer.createBot (connect time),
+  // so a live bot keeps its current server until it reconnects. A dyobot
+  // restart is the clean way to apply a server switch fleet-wide.
+  minecraft: new Set([
+    'host', 'port', 'version', 'auth', 'loginFlow', 'loginPassword', 'selectClass',
   ]),
 };
 
@@ -113,6 +119,15 @@ const FIELD_TYPES: Record<PatchableSection, Record<string, 'number' | 'boolean' 
     codeExecutionTimeoutMs: 'number',
     curriculumLLMCalls: 'boolean',
     criticLLMCalls: 'boolean',
+  },
+  minecraft: {
+    host: 'string',
+    port: 'number',
+    version: 'string',
+    auth: 'string',
+    loginFlow: 'string',
+    loginPassword: 'string',
+    selectClass: 'boolean',
   },
 };
 

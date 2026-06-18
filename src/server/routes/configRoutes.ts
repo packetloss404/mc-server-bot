@@ -44,9 +44,15 @@ export function registerConfigRoutes(
         error: `Unknown or non-patchable section '${section}'. Allowed: ${PATCHABLE_SECTIONS.join(', ')}`,
       });
     }
+    // Never return the bot login password over the API. The client shows a
+    // blank password field and only patches it when a new value is typed.
+    const values = { ...(getSection(config, section) as Record<string, unknown>) };
+    if (section === 'minecraft' && 'loginPassword' in values) {
+      values.loginPassword = values.loginPassword ? '********' : '';
+    }
     res.json({
       section,
-      values: getSection(config, section),
+      values,
       restartRequired: Array.from(RESTART_REQUIRED_FIELDS[section]),
     });
   });
@@ -68,6 +74,13 @@ export function registerConfigRoutes(
     const validated = validatePatch(section, incoming as Record<string, unknown>);
     if (!validated.ok) {
       return res.status(400).json({ error: 'Invalid patch values', details: validated.errors });
+    }
+
+    // Don't clobber the stored password with the redaction sentinel or a blank
+    // field — those mean "leave the password unchanged".
+    if (section === 'minecraft' &&
+        (validated.values.loginPassword === '********' || validated.values.loginPassword === '')) {
+      delete validated.values.loginPassword;
     }
 
     const current = getSection(config, section) as Record<string, unknown>;

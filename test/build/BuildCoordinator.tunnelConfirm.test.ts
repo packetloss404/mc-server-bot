@@ -134,7 +134,8 @@ describe('BuildCoordinator.buildTunnel — dynamic route derivation', () => {
     const result = await coord.buildTunnel({ dryRun: true });
     const names = result.plan.spokes.map((s: any) => s.building);
     const skippedNames = (result.plan.skipped || []).map((s: any) => s.building);
-    const reached = new Set([...names, ...skippedNames]);
+    const linkedNames = (result.plan.linked || []).map((l: any) => l.building);
+    const reached = new Set([...names, ...skippedNames, ...linkedNames]);
     for (const n of ['small medieval town hall', 'victorian palace', 'sam-cottage', 'birch house']) {
       expect(reached.has(n)).toBe(true);
     }
@@ -144,15 +145,19 @@ describe('BuildCoordinator.buildTunnel — dynamic route derivation', () => {
     expect(Array.isArray(result.plan.skipped)).toBe(true);
   });
 
-  it('skips a riser that would land inside another building footprint (birch ⊂ town hall)', async () => {
+  it('links (not skips) a building wholly enclosed by another — reached on foot via the host, no carved spoke (birch ⊂ town hall)', async () => {
     const { coord } = makeCoordWithBuilds();
     const result = await coord.buildTunnel({ dryRun: true });
     // birch house (x1712-1735 z188-214) is entirely inside the town hall
-    // footprint (x1692-1743 z180-233) → its riser is unusable → skipped.
-    const birchSkip = (result.plan.skipped || []).find((s: any) => s.building === 'birch house');
-    expect(birchSkip).toBeTruthy();
-    expect(birchSkip.reason).toMatch(/inside another building/i);
+    // footprint (x1692-1743 z180-233). Carving a riser would pierce the
+    // town hall's furnished interior, so the birch house gets NO spoke; it's
+    // recorded as connected-on-foot via the enclosing host instead.
+    const birchLink = (result.plan.linked || []).find((l: any) => l.building === 'birch house');
+    expect(birchLink).toBeTruthy();
+    expect(birchLink.via).toBe('small medieval town hall');
     expect(result.plan.spokes.some((s: any) => s.building === 'birch house')).toBe(false);
+    // And it must NOT appear as an error-skip anymore.
+    expect((result.plan.skipped || []).some((s: any) => s.building === 'birch house')).toBe(false);
   });
 
   it('every routed spoke riser/entry sits one block OUTSIDE its building footprint, with a doorway one block inward', async () => {
@@ -173,6 +178,40 @@ describe('BuildCoordinator.buildTunnel — dynamic route derivation', () => {
       const dInsideZ = sp.doorway.z >= bb.z1 && sp.doorway.z <= bb.z2;
       expect(dInsideX && dInsideZ).toBe(true);
     }
+  });
+
+  it('gives long-walled buildings a walkable staircase: monotonic ascent from corridor floor to building floor, doorway in the wall', async () => {
+    const { coord } = makeCoordWithBuilds();
+    const result = await coord.buildTunnel({ dryRun: true });
+    // FLOOR = min(63, 66/64/64) - 12 = 51 → AIR1 = 52.
+    const AIR1 = result.plan.floorY + 1;
+    const staired = result.plan.spokes.filter((s: any) => s.access === 'stairs');
+    // Palace (62x128) and town hall (52x54) have walls far longer than the
+    // ~12-14 block rise, so both get stairs.
+    expect(staired.length).toBeGreaterThanOrEqual(2);
+    for (const sp of staired) {
+      const bb = aabbOf(sp.building);
+      const toY = sp.entry.hallY;
+      // One step per block of rise, ending exactly at the building floor.
+      expect(sp.stairs.steps).toBe(toY - AIR1);
+      expect(sp.stairs.doorway.y).toBe(toY);
+      expect(['north', 'south', 'east', 'west']).toContain(sp.stairs.facing);
+      // Doorway is cut into the building's edge wall.
+      const dIn = sp.stairs.doorway.x >= bb.x1 && sp.stairs.doorway.x <= bb.x2 &&
+                  sp.stairs.doorway.z >= bb.z1 && sp.stairs.doorway.z <= bb.z2;
+      expect(dIn).toBe(true);
+    }
+  });
+
+  it('falls back to a ladder for a building whose wall is shorter than the rise (no regression)', async () => {
+    const { coord } = makeCoordWithBuilds();
+    const result = await coord.buildTunnel({ dryRun: true });
+    // sam-cottage is 7x7; the ~12-block rise can't fit alongside a 7-block wall,
+    // so it keeps the ladder rather than dropping the spoke.
+    const cottage = result.plan.spokes.find((s: any) => s.building === 'sam-cottage');
+    expect(cottage).toBeTruthy();
+    expect(cottage.access).toBe('ladder');
+    expect(cottage.stairs).toBeNull();
   });
 
   it('clamps floorOffset to a safe minimum (>=6) so the corridor stays below building floors', async () => {

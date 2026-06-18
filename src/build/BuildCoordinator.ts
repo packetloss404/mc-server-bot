@@ -419,6 +419,8 @@ export class BuildCoordinator {
     resolvedHub?: { x: number; y: number; z: number } | null;
     resolvedSpokes?: number;
     skipped?: Array<{ building: string; reason: string }>;
+    /** Buildings connected on foot via an enclosing host rather than a carved spoke. */
+    linked?: Array<{ building: string; via: string }>;
   }> {
     // 1) Derive the whole network from live build data — a pure read, no bot,
     //    no world contact. Wrapped in computeNetworkPlan's own try/catch so a
@@ -429,13 +431,13 @@ export class BuildCoordinator {
 
     // 2) dryRun: truthful preview of the dynamic routes, no refused field.
     if (opts.dryRun) {
-      return { plan, executed: false, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped };
+      return { plan, executed: false, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped, linked: net.linked };
     }
     // 3) Confirm guard: without confirm:true behave like dryRun and return the
     //    plan with refused:true — BEFORE any bot acquisition.
     if (!opts.confirm) {
       logger.warn('buildTunnel: refused to carve — pass confirm:true to execute the data-driven town rail network');
-      return { plan, executed: false, refused: true, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped };
+      return { plan, executed: false, refused: true, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped, linked: net.linked };
     }
 
     // 4) Only now do we touch bots/world.
@@ -479,7 +481,7 @@ export class BuildCoordinator {
     };
 
     const { FLOOR, AIR1, AIR2, CEIL } = net.geom;
-    logger.info({ hub: net.hub, spokes: net.spokes.length, skipped: net.skipped }, 'Building data-driven town rail network');
+    logger.info({ hub: net.hub, spokes: net.spokes.length, skipped: net.skipped, linked: net.linked }, 'Building data-driven town rail network');
 
     // Collect every straight rail run (hub chamber centerline + each spoke
     // segment) so we can lay a continuous, deduped rail line.
@@ -533,12 +535,28 @@ export class BuildCoordinator {
       await cmd(`/setblock ${gx} ${CEIL} ${gz} glowstone`); rec(gx, CEIL, gz, 'glowstone');
     }
 
-    // 5) Ladder risers up to each building floor. The riser column sits one
-    //    block OUTSIDE the building footprint (computed in computeNetworkPlan),
-    //    so no building block is ever overwritten. Open the shaft, lay a stone
-    //    backing pillar on the chosen side, then attach the ladder facing away
-    //    from that backing.
+    // 5) Vertical access up to each building floor — a walkable staircase where
+    //    one fits the wall, otherwise the ladder riser. Both sit one block
+    //    OUTSIDE the building footprint, so the only build block ever touched is
+    //    the 1x2 doorway cut at the top.
     for (const sp of net.spokes) {
+      if (sp.stairs) {
+        // Straight flight running along the wall: per step, place the stair,
+        // clear 2 blocks of headroom above it, and wall the outward face with
+        // stone so the stairwell can't open into surrounding terrain/caves.
+        const st = sp.stairs;
+        for (const s of st.steps) {
+          await cmd(`/setblock ${s.x} ${s.y} ${s.z} stone_brick_stairs[facing=${st.facing},half=bottom]`);
+          rec(s.x, s.y, s.z, 'stone_brick_stairs', `facing=${st.facing},half=bottom`);
+          await cmd(`/setblock ${s.x} ${s.y + 1} ${s.z} air`);
+          await cmd(`/setblock ${s.x} ${s.y + 2} ${s.z} air`);
+          const ox = s.x + st.outDx, oz = s.z + st.outDz;
+          for (let y = s.y; y <= s.y + 2; y++) { await cmd(`/setblock ${ox} ${y} ${oz} stone`); rec(ox, y, oz, 'stone'); }
+        }
+        const d = st.doorway;
+        for (let y = d.y; y <= d.y + 1; y++) { await cmd(`/setblock ${d.x} ${y} ${d.z} air`); }
+        continue;
+      }
       const r = sp.riser;
       await fillBox([r.x, AIR1, r.z, r.x, r.toY, r.z], 'air');
       // Backing pillar the full height of the ladder (AIR1..toY) so every rung
@@ -572,7 +590,7 @@ export class BuildCoordinator {
     return {
       plan, executed: true, commands: n,
       verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing },
-      resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped,
+      resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped, linked: net.linked,
     };
   }
 
@@ -626,9 +644,24 @@ export class BuildCoordinator {
       corner: { x: number; z: number } | null;
       segments: Array<{ axis: 'x' | 'z'; from: { x: number; z: number }; to: { x: number; z: number }; fixed: Record<string, number>; shell: number[]; air: number[] }>;
       riser: { x: number; z: number; fromY: number; toY: number; ladderFacing: string; backDx: number; backDz: number };
+      /** Walkable staircase along the wall (preferred over the ladder); null when none fits. */
+      stairs: {
+        axis: 'x' | 'z'; facing: string; sign: number;
+        steps: Array<{ x: number; y: number; z: number }>;
+        doorway: { x: number; y: number; z: number };
+        outDx: number; outDz: number;
+      } | null;
       doorway: { x: number; y: number; z: number };
     }>;
     skipped: Array<{ building: string; reason: string }>;
+    /**
+     * Buildings reachable on foot via an enclosing building that is itself on
+     * the network — NOT carved a spoke/riser of their own. A building whose
+     * footprint sits wholly inside another's gets no shaft (that would pierce
+     * the host's furnished interior); it's recorded here as connected-via the
+     * host instead. This is the birch-house-inside-town-hall case.
+     */
+    linked: Array<{ building: string; via: string }>;
     plan: any;
   }> {
     const empty = (note: string) => ({
@@ -637,10 +670,11 @@ export class BuildCoordinator {
       geom: { FLOOR: 0, AIR1: 1, AIR2: 5, CEIL: 6 },
       spokes: [],
       skipped: [],
+      linked: [],
       plan: {
         town: null, hub: null, floorY: 0, ceilingY: 0, interior: '5-tall',
         route: 'hub-and-spoke (no town data)', poweredRailEvery: 8, ceilingLightEvery: 5,
-        spokes: [], skipped: [], note,
+        spokes: [], skipped: [], linked: [], note,
       },
     });
 
@@ -745,8 +779,33 @@ export class BuildCoordinator {
 
       const spokes: any[] = [];
       const skipped: Array<{ building: string; reason: string }> = [];
+      const linked: Array<{ building: string; via: string }> = [];
+
+      // A building whose XZ footprint sits wholly inside another building's is
+      // reached on foot through that host (which gets its own spoke) — never
+      // carved a shaft of its own, since the only riser columns available are
+      // inside the host's (furnished) interior. Record it as connected-via the
+      // host and skip spoke/riser routing entirely. Returns the host's name, or
+      // null if not enclosed. The smallest valid host is chosen so an enclosed
+      // building links to its immediate container, not the largest box.
+      const enclosingHost = (b: Box): string | null => {
+        let best: Box | null = null;
+        for (const o of boxes) {
+          if (o === b) continue;
+          if (b.x1 >= o.x1 && b.x2 <= o.x2 && b.z1 >= o.z1 && b.z2 <= o.z2) {
+            const area = (o.x2 - o.x1) * (o.z2 - o.z1);
+            if (!best || area < (best.x2 - best.x1) * (best.z2 - best.z1)) best = o;
+          }
+        }
+        return best ? best.name : null;
+      };
 
       for (const b of boxes) {
+        const host = enclosingHost(b);
+        if (host) {
+          linked.push({ building: b.name, via: host });
+          continue;
+        }
         // Entrance/riser column one block OUTSIDE the footprint, facing the hub.
         const dx = hubX - b.cx, dz = hubZ - b.cz;
         let entryX: number, entryZ: number;
@@ -839,12 +898,69 @@ export class BuildCoordinator {
           continue;
         }
 
+        // Prefer a walkable staircase over the ladder: a straight flight running
+        // ALONG the building's hub-facing wall (one block outside it), ascending
+        // one block per lateral cell from the corridor floor (AIR1) up to the
+        // building floor (toY). Uniform facing, both ends aligned (corridor at
+        // the bottom, doorway at the top). Needs `rise` cells of clear wall to
+        // the side; if the wall is too short (e.g. a 7-wide cottage) or the run
+        // hits a neighbour/protected zone, `stairs` stays null and the spoke
+        // keeps its ladder — connectivity never regresses.
+        const toY = entry.hallY;
+        const rise = toY - AIR1;
+        let stairs: {
+          axis: 'x' | 'z'; facing: string; sign: number;
+          steps: Array<{ x: number; y: number; z: number }>;
+          doorway: { x: number; y: number; z: number };
+          outDx: number; outDz: number;
+        } | null = null;
+        if (rise >= 2) {
+          // Lateral axis is perpendicular to the outward (back) direction.
+          const axis: 'x' | 'z' = backDx !== 0 ? 'z' : 'x';
+          const lo = axis === 'z' ? b.z1 : b.x1;
+          const hi = axis === 'z' ? b.z2 : b.x2;
+          const entryLat = axis === 'z' ? entry.z : entry.x;
+          const roomPos = hi - entryLat, roomNeg = entryLat - lo;
+          // Run toward the side of the wall with more room first.
+          for (const sign of roomPos >= roomNeg ? [1, -1] : [-1, 1]) {
+            if ((sign > 0 ? roomPos : roomNeg) < rise) continue;
+            const steps: Array<{ x: number; y: number; z: number }> = [];
+            let ok = true;
+            for (let i = 0; i < rise; i++) {
+              const lat = entryLat + (i + 1) * sign;
+              const sx = axis === 'z' ? entry.x : lat;
+              const sz = axis === 'z' ? lat : entry.z;
+              const sy = AIR1 + i;
+              // Each step + its 2-block headroom must stay clear of every OTHER
+              // building and of any protected zone.
+              if (inAnyOther(sx, sz) ||
+                  intersectsProtectedZone({ x: sx, y: sy, z: sz }, { x: sx, y: sy + 2, z: sz })) { ok = false; break; }
+              steps.push({ x: sx, y: sy, z: sz });
+            }
+            if (!ok) continue;
+            // Stair faces opposite the ascent direction (the low/step side faces
+            // downhill, so you walk uphill toward its full-height back).
+            const facing = axis === 'z' ? (sign > 0 ? 'north' : 'south') : (sign > 0 ? 'west' : 'east');
+            const topLat = entryLat + rise * sign;
+            const topX = axis === 'z' ? entry.x : topLat;
+            const topZ = axis === 'z' ? topLat : entry.z;
+            stairs = {
+              axis, facing, sign, steps,
+              // Doorway is one block inward (into the wall) from the top step.
+              doorway: { x: topX - backDx, y: toY, z: topZ - backDz },
+              outDx: backDx, outDz: backDz,
+            };
+            break;
+          }
+        }
+
         spokes.push({
           building: b.name,
           entry,
           corner: chosen.corner,
           segments: chosen.segs,
           riser: { x: entry.x, z: entry.z, fromY: FLOOR, toY: entry.hallY, ladderFacing, backDx, backDz },
+          stairs,
           doorway,
         });
       }
@@ -871,12 +987,16 @@ export class BuildCoordinator {
           corner: sp.corner,
           segments: sp.segments.map((s: any) => ({ axis: s.axis, from: s.from, to: s.to, fixed: s.fixed, shell: s.shell, air: s.air })),
           riser: { x: sp.riser.x, z: sp.riser.z, fromY: sp.riser.fromY, toY: sp.riser.toY, ladderFacing: sp.riser.ladderFacing },
+          // access: a walkable staircase when one fits the wall, else the ladder riser.
+          access: sp.stairs ? 'stairs' : 'ladder',
+          stairs: sp.stairs ? { axis: sp.stairs.axis, facing: sp.stairs.facing, steps: sp.stairs.steps.length, doorway: sp.stairs.doorway } : null,
           doorway: sp.doorway,
         })),
         skipped,
+        linked,
       };
 
-      return { hub, hubBox, geom: { FLOOR, AIR1, AIR2, CEIL }, spokes, skipped, plan };
+      return { hub, hubBox, geom: { FLOOR, AIR1, AIR2, CEIL }, spokes, skipped, linked, plan };
     } catch (err: any) {
       logger.warn({ err: err?.message }, 'buildTunnel: computeNetworkPlan failed; returning empty plan');
       return empty(err?.message ?? 'plan error');

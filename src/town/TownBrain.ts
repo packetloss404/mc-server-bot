@@ -751,6 +751,21 @@ export class TownBrain {
       'TownBrain build: queuing planned building',
     );
 
+    // Resolve the schematic footprint once (cached) so the lifecycle hooks can
+    // persist width/height/depth onto the building row. Without this the row
+    // lands with null dimensions and the town registry can never serve as an
+    // authoritative footprint record — which is why the rail-network connector
+    // had to re-derive every footprint from completed build jobs (see
+    // BuildCoordinator.computeNetworkPlan). Dims are static, so resolving here
+    // lets both hooks write synchronously. width=x, height=y, depth=z matches
+    // the connector's mapping.
+    const footprint = await this.buildCoordinator
+      .getSchematicInfoAsync(resolved.schematicFile)
+      .catch(() => null);
+    const dims = footprint?.size
+      ? { width: footprint.size.x, height: footprint.size.y, depth: footprint.size.z }
+      : {};
+
     // Pass to BuildCoordinator with auto-flat origin. The capital coords are
     // the seed for the SiteSelector spiral. The job carries townId/buildingId
     // so its lifecycle hooks can keep the building row in sync:
@@ -783,12 +798,21 @@ export class TownBrain {
             // from treating this live build as a leftover.
             this.townManager.recordBuildingPlacement(building.id, {
               origin: j.origin,
+              ...dims,
               status: 'building',
             });
           },
           onCompleted: (j) => {
             if (j.status === 'completed' || j.status === 'completed_with_errors') {
-              this.townManager.updateBuildingStatus(building.id, 'complete');
+              // Use recordBuildingPlacement (not updateBuildingStatus) so the
+              // terminal row carries origin + footprint, not just status. This
+              // is what makes a completed town build auto-register with full
+              // dimensions instead of needing manual backfill.
+              this.townManager.recordBuildingPlacement(building.id, {
+                origin: j.origin,
+                ...dims,
+                status: 'complete',
+              });
               this.clearBuildFailureCooldown(item.kind);
               logger.info(
                 { townId: this.townId, buildingId: building.id, jobId: j.id, status: j.status },

@@ -122,12 +122,30 @@ export function registerBuildRoutes(app: Express, deps: { buildCoordinator: Buil
     }
   }));
 
-  // Hard-coded town tunnel. ?dryRun=true previews; carving needs confirm:true.
+  // Data-driven town rail network. ?dryRun=true previews the dynamic routes;
+  // carving needs confirm:true. Optional townId / floorOffset target a specific
+  // town / corridor depth (defaults: active town, floorOffset 12).
   app.post('/api/tunnel', asyncH(async (req: Request, res: Response) => {
     try {
       const dryRun = req.query.dryRun === 'true' || (req.body && req.body.dryRun === true);
       const confirm = req.query.confirm === 'true' || (req.body && req.body.confirm === true);
-      const result = await buildCoordinator.buildTunnel({ dryRun, confirm });
+      const townId = req.query?.townId ?? req.body?.townId;
+      const floorOffsetRaw = req.query?.floorOffset ?? req.body?.floorOffset;
+
+      if (townId !== undefined && typeof townId !== 'string') {
+        return res.status(400).json({ error: 'townId must be a string' });
+      }
+      let floorOffset: number | undefined;
+      if (floorOffsetRaw !== undefined && floorOffsetRaw !== '') {
+        floorOffset = typeof floorOffsetRaw === 'string' ? Number(floorOffsetRaw) : floorOffsetRaw;
+        // Must be a finite number >= 6 so the corridor band always sits safely
+        // below building floors. Reject 0, negatives, empty-string, and NaN.
+        if (typeof floorOffset !== 'number' || !Number.isFinite(floorOffset) || floorOffset < 6) {
+          return res.status(400).json({ error: 'floorOffset must be a finite number >= 6' });
+        }
+      }
+
+      const result = await buildCoordinator.buildTunnel({ dryRun, confirm, townId: townId as string | undefined, floorOffset });
       res.json({ success: true, ...result });
     } catch (err: any) {
       res.status(409).json({ error: err.message });

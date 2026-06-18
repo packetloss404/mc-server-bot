@@ -393,43 +393,52 @@ export class BuildCoordinator {
   }
 
   /**
-   * Build an underground rail+walkway tunnel between the two town halls. An
-   * L-shaped stone-shelled corridor at y50: a rail line (powered rail every 8
-   * blocks, redstone block beneath to drive carts) along one edge, a 3-wide
-   * stone walkway beside it, glowstone-lit ceiling, and ladder shafts up to
-   * each hall floor (y64). All via op /fill + /setblock and fully idempotent,
-   * so a re-run after a mid-build bot drop just resumes harmlessly. dryRun
-   * returns the plan without touching the world.
+   * Build an underground hub-and-spoke rail network connecting the live town's
+   * standing buildings. A central station chamber sits under the town capital
+   * (or the centroid of the builds); one single-bend (Manhattan) stone-shelled
+   * corridor "spoke" runs to each eligible building and ends in a vertical
+   * ladder riser up to that building's floor — one block OUTSIDE the footprint
+   * so no building wall is ever carved.
+   *
+   * ALL placement geometry is derived at runtime from TownManager
+   * (capital + listBuildings) by {@link computeNetworkPlan}; there are no
+   * hard-coded coordinates. The proven construction primitives (stone shell →
+   * air hollow → rail with redstone/powered every 8 → glowstone every 5 →
+   * ladder riser), the confirm-guard, idempotency and verify-and-repair are
+   * preserved verbatim. dryRun returns the plan without touching the world;
+   * carving still requires confirm:true.
    */
-  async buildTunnel(opts: { dryRun?: boolean; confirm?: boolean } = {}): Promise<{ plan: any; executed: boolean; refused?: boolean; commands?: number; verify?: { checked: number; repaired: number; missing: number } }> {
-    // Geometry: floor block at y50, walkable air y51-55 (5 tall), ceiling y56.
-    const FLOOR = 50, AIR1 = 51, AIR2 = 55, CEIL = 56, HALL_Y = 64;
-    // Rail centerline forms an L sharing corner block (railX, railZ).
-    const railX = 1225, railZ = 122;
-    const aZ1 = 122, aZ2 = 526;          // leg A (along Z) toward Hall A
-    const bX1 = 1225, bX2 = 1640;        // leg B (along X) toward Hall B
-    // Shell + interior boxes (interior 5 wide × 5 tall; shell +1 each side, y49-56).
-    const legA = { shell: [1224, 49, 121, 1230, CEIL, 527], air: [1225, AIR1, 122, 1229, AIR2, 526] };
-    const legB = { shell: [1224, 49, 121, 1641, CEIL, 127], air: [1225, AIR1, 122, 1640, AIR2, 126] };
-    const stairs = [{ x: 1226, z: 524 }, { x: 1638, z: 123 }]; // up into Hall A / Hall B
+  async buildTunnel(
+    opts: { dryRun?: boolean; confirm?: boolean; townId?: string; floorOffset?: number } = {},
+  ): Promise<{
+    plan: any;
+    executed: boolean;
+    refused?: boolean;
+    commands?: number;
+    verify?: { checked: number; repaired: number; missing: number };
+    resolvedHub?: { x: number; y: number; z: number } | null;
+    resolvedSpokes?: number;
+    skipped?: Array<{ building: string; reason: string }>;
+  }> {
+    // 1) Derive the whole network from live build data — a pure read, no bot,
+    //    no world contact. Wrapped in computeNetworkPlan's own try/catch so a
+    //    missing/partial state (e.g. the contract-test mock) degrades to an
+    //    empty plan rather than throwing, keeping the confirm-guard contract.
+    const net = await this.computeNetworkPlan(opts);
+    const plan = net.plan;
 
-    const plan = {
-      floorY: FLOOR, route: 'L-shaped (shares corner 1225/122)',
-      legA_shell: legA.shell, legB_shell: legB.shell,
-      rail: { legA: `x${railX} z${aZ1}..${aZ2}`, legB: `z${railZ} x${bX1}..${bX2}` },
-      poweredRailEvery: 8, ceilingLightEvery: 5, stairwells: stairs,
-    };
-    if (opts.dryRun) return { plan, executed: false };
-    // Safety guard (review #5c): the geometry above is HARD-CODED to the current
-    // town's hall coordinates (railX=1225, halls at fixed x/z, y50/64). Running
-    // it for any other town/world would /fill stone through whatever sits at
-    // those absolute coords. Require an explicit confirm so it can't be carved
-    // accidentally; without it, behave like dryRun and return the plan.
+    // 2) dryRun: truthful preview of the dynamic routes, no refused field.
+    if (opts.dryRun) {
+      return { plan, executed: false, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped };
+    }
+    // 3) Confirm guard: without confirm:true behave like dryRun and return the
+    //    plan with refused:true — BEFORE any bot acquisition.
     if (!opts.confirm) {
-      logger.warn('buildTunnel: refused to carve — coordinates are hard-coded for the current town layout; pass confirm:true to execute');
-      return { plan, executed: false, refused: true };
+      logger.warn('buildTunnel: refused to carve — pass confirm:true to execute the data-driven town rail network');
+      return { plan, executed: false, refused: true, resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped };
     }
 
+    // 4) Only now do we touch bots/world.
     // Re-acquire a connected op bot if the current one drops mid-build.
     const opBot = async (): Promise<any> => {
       for (const h of this.botManager.getAllWorkers() as any[]) {
@@ -439,6 +448,10 @@ export class BuildCoordinator {
     };
     let handle = await opBot();
     if (!handle) throw new Error('No connected bot available to build the tunnel');
+
+    if (!net.hub || net.spokes.length === 0) {
+      throw new Error('No tunnel network to build — no eligible town buildings resolved (check town data / geofence)');
+    }
 
     let n = 0;
     const cmd = async (c: string): Promise<void> => {
@@ -465,46 +478,80 @@ export class BuildCoordinator {
       targets.push({ wx: x, wy: y, wz: z, name, stateStr, localY: 0 });
     };
 
-    logger.info({ plan }, 'Building rail+walkway tunnel between town halls');
+    const { FLOOR, AIR1, AIR2, CEIL } = net.geom;
+    logger.info({ hub: net.hub, spokes: net.spokes.length, skipped: net.skipped }, 'Building data-driven town rail network');
 
-    // 1) Stone shells, then 2) hollow the interiors (floor at y50 survives).
-    await fillBox(legA.shell, 'stone');
-    await fillBox(legB.shell, 'stone');
-    await fillBox(legA.air, 'air');
-    await fillBox(legB.air, 'air');
+    // Collect every straight rail run (hub chamber centerline + each spoke
+    // segment) so we can lay a continuous, deduped rail line.
+    const allShells: number[][] = [net.hubBox.shell];
+    const allAir: number[][] = [net.hubBox.air];
+    for (const sp of net.spokes) for (const seg of sp.segments) { allShells.push(seg.shell); allAir.push(seg.air); }
 
-    // 3) Rail line (sits at y51 on the y50 floor). Powered rail every 8 with a
-    //    redstone_block beneath to keep carts moving. Sharing (railX, railZ)
-    //    makes the corner auto-curve.
+    // 1) Stone shells, then 2) hollow the interiors (floor row at FLOOR survives
+    //    because the air boxes start at AIR1 = FLOOR+1).
+    for (const shell of allShells) await fillBox(shell, 'stone');
+    for (const air of allAir) await fillBox(air, 'air');
+
+    // 3) Rail line. A single global index `i` walks the hub centerline then
+    //    every spoke segment in route order. A placedKey set dedupes shared
+    //    corner/hub blocks so they're placed and rec()'d once. Powered rail
+    //    every 8 with a redstone_block beneath to keep carts moving; adjacent
+    //    segments share their corner block so the rail auto-curves.
     let i = 0;
-    for (let z = aZ2; z >= aZ1; z--, i++) {
+    const placedKey = new Set<string>();
+    const railCell = async (x: number, z: number): Promise<void> => {
+      const key = `${x},${z}`;
+      if (placedKey.has(key)) return;
+      placedKey.add(key);
       const powered = i % 8 === 0;
-      if (powered) { await cmd(`/setblock ${railX} ${FLOOR} ${z} redstone_block`); rec(railX, FLOOR, z, 'redstone_block'); }
-      await cmd(`/setblock ${railX} ${AIR1} ${z} ${powered ? 'powered_rail' : 'rail'}`);
-      rec(railX, AIR1, z, powered ? 'powered_rail' : 'rail');
-    }
-    for (let x = bX1; x <= bX2; x++, i++) {
-      const powered = i % 8 === 0;
-      if (powered) { await cmd(`/setblock ${x} ${FLOOR} ${railZ} redstone_block`); rec(x, FLOOR, railZ, 'redstone_block'); }
-      await cmd(`/setblock ${x} ${AIR1} ${railZ} ${powered ? 'powered_rail' : 'rail'}`);
-      rec(x, AIR1, railZ, powered ? 'powered_rail' : 'rail');
+      if (powered) { await cmd(`/setblock ${x} ${FLOOR} ${z} redstone_block`); rec(x, FLOOR, z, 'redstone_block'); }
+      await cmd(`/setblock ${x} ${AIR1} ${z} ${powered ? 'powered_rail' : 'rail'}`);
+      rec(x, AIR1, z, powered ? 'powered_rail' : 'rail');
+      i++;
+    };
+    // Hub centerline (a short cross through the chamber centre toward each face).
+    for (const [x, z] of this.railCells(net.hub.x, net.hub.z, net.hub.x, net.hub.z)) await railCell(x, z);
+    for (const sp of net.spokes) {
+      for (const seg of sp.segments) {
+        for (const [x, z] of this.railCells(seg.from.x, seg.from.z, seg.to.x, seg.to.z)) await railCell(x, z);
+      }
     }
 
-    // 4) Glowstone in the ceiling for light (no mob spawns).
-    for (let z = aZ1; z <= aZ2; z += 5) { await cmd(`/setblock ${railX + 2} ${CEIL} ${z} glowstone`); rec(railX + 2, CEIL, z, 'glowstone'); }
-    for (let x = bX1; x <= bX2; x += 5) { await cmd(`/setblock ${x} ${CEIL} ${railZ + 2} glowstone`); rec(x, CEIL, railZ + 2, 'glowstone'); }
+    // 4) Glowstone in the ceiling for light (no mob spawns), every 5 cells along
+    //    each segment, offset +2 to one side of the centerline.
+    for (const sp of net.spokes) {
+      for (const seg of sp.segments) {
+        const cells = this.railCells(seg.from.x, seg.from.z, seg.to.x, seg.to.z);
+        for (let c = 0; c < cells.length; c += 5) {
+          const [gx, gz] = seg.axis === 'x' ? [cells[c][0], cells[c][1] + 2] : [cells[c][0] + 2, cells[c][1]];
+          await cmd(`/setblock ${gx} ${CEIL} ${gz} glowstone`); rec(gx, CEIL, gz, 'glowstone');
+        }
+      }
+    }
+    // Glowstone ring in the hub ceiling corners.
+    for (const [gx, gz] of [[net.hub.x - 3, net.hub.z - 3], [net.hub.x + 3, net.hub.z - 3], [net.hub.x - 3, net.hub.z + 3], [net.hub.x + 3, net.hub.z + 3]]) {
+      await cmd(`/setblock ${gx} ${CEIL} ${gz} glowstone`); rec(gx, CEIL, gz, 'glowstone');
+    }
 
-    // 5) Ladder shafts up to each hall floor. Ladders face WEST so they attach
-    //    to the block to their EAST; through the hollow lower shaft (y51-55)
-    //    that block is interior air, so we first lay a stone backing pillar
-    //    there (above the ceiling the ladder attaches to solid terrain). The
-    //    east side is used so the backing never collides with the rail line
-    //    (legA rail at x1225, legB rail at z122). Without this the bottom rungs
-    //    had no support and popped off → unenterable shaft.
-    for (const s of stairs) {
-      await fillBox([s.x, AIR1, s.z, s.x, HALL_Y, s.z], 'air');
-      for (let y = AIR1; y <= AIR2; y++) { await cmd(`/setblock ${s.x + 1} ${y} ${s.z} stone`); rec(s.x + 1, y, s.z, 'stone'); }
-      for (let y = AIR1; y <= HALL_Y; y++) { await cmd(`/setblock ${s.x} ${y} ${s.z} ladder[facing=west]`); rec(s.x, y, s.z, 'ladder', 'facing=west'); }
+    // 5) Ladder risers up to each building floor. The riser column sits one
+    //    block OUTSIDE the building footprint (computed in computeNetworkPlan),
+    //    so no building block is ever overwritten. Open the shaft, lay a stone
+    //    backing pillar on the chosen side, then attach the ladder facing away
+    //    from that backing.
+    for (const sp of net.spokes) {
+      const r = sp.riser;
+      await fillBox([r.x, AIR1, r.z, r.x, r.toY, r.z], 'air');
+      // Backing pillar the full height of the ladder (AIR1..toY) so every rung
+      // has a guaranteed solid attachment block — a short pillar left the upper
+      // rungs relying on undisturbed terrain and they popped off.
+      const bx = r.x + r.backDx, bz = r.z + r.backDz;
+      for (let y = AIR1; y <= r.toY; y++) { await cmd(`/setblock ${bx} ${y} ${bz} stone`); rec(bx, y, bz, 'stone'); }
+      for (let y = AIR1; y <= r.toY; y++) { await cmd(`/setblock ${r.x} ${y} ${r.z} ladder[facing=${r.ladderFacing}]`); rec(r.x, y, r.z, 'ladder', `facing=${r.ladderFacing}`); }
+      // Cut a 1x2 doorway through the building's edge wall so the ladder top
+      // actually opens INTO the building (otherwise the riser dead-ends at a
+      // solid wall). This is the only place the network touches a build block.
+      const d = sp.doorway;
+      for (let y = d.y; y <= d.y + 1; y++) { await cmd(`/setblock ${d.x} ${y} ${d.z} air`); }
     }
 
     // 6) Verify the track elements landed and repair any that didn't.
@@ -517,12 +564,323 @@ export class BuildCoordinator {
     this.eventLog.push({
       type: 'build:tunnel',
       botName: handle?.botName ?? 'system',
-      description: `Built rail+walkway tunnel between town halls (${n} commands, ${sweep.missing} track blocks missing after verify)`,
+      description: `Built town rail network (hub ${net.hub.x}/${net.hub.z}, ${net.spokes.length} spokes, ${n} commands, ${sweep.missing} track blocks missing after verify)`,
       metadata: { plan, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } },
     });
     this.io.emit('build:tunnel', { plan });
     logger.info({ commands: n, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } }, 'Tunnel build complete');
-    return { plan, executed: true, commands: n, verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing } };
+    return {
+      plan, executed: true, commands: n,
+      verify: { checked: sweep.checked, repaired: sweep.repaired, missing: sweep.missing },
+      resolvedHub: net.hub, resolvedSpokes: net.spokes.length, skipped: net.skipped,
+    };
+  }
+
+  /**
+   * Enumerate the discrete rail-cell (x,z) pairs along a straight, axis-aligned
+   * run from (x1,z1) to (x2,z2) inclusive. Exactly one of the two axes varies.
+   */
+  private railCells(x1: number, z1: number, x2: number, z2: number): Array<[number, number]> {
+    const cells: Array<[number, number]> = [];
+    if (x1 === x2) {
+      const lo = Math.min(z1, z2), hi = Math.max(z1, z2);
+      for (let z = lo; z <= hi; z++) cells.push([x1, z]);
+    } else {
+      const lo = Math.min(x1, x2), hi = Math.max(x1, x2);
+      for (let x = lo; x <= hi; x++) cells.push([x, z1]);
+    }
+    return cells;
+  }
+
+  /**
+   * Pure read: compute the entire hub-and-spoke rail network from the live
+   * record of what is actually standing — the COMPLETED build jobs (each job's
+   * origin + the footprint resolved from its schematic). No bot, no world.
+   *
+   * Buildings are NOT sourced from the town registry: town.db only records a
+   * couple of point-landmarks (well/town_hall) and lacks footprint dimensions,
+   * so it can't tell us what to connect. The build jobs are the truth.
+   *
+   * Hub XZ = town.capital.{x,z} when present, else the centroid of the standing
+   * builds. FLOOR = min(capital.y, all building floors) - floorOffset (>=6,
+   * default 12). Each build within NEAR_TOWN of the centre gets one single-bend
+   * corridor ending in a ladder riser one block OUTSIDE its footprint on the
+   * hub-facing axis, plus a 1x2 doorway cut through the adjacent wall.
+   *
+   * Spokes whose corridor would carve through ANOTHER building footprint (both
+   * elbow orderings fail), whose riser/backing would land inside another
+   * footprint, or that intersect a protected zone are dropped into `skipped`
+   * for human review rather than carved.
+   *
+   * Wrapped so any failure (or a missing TownManager/jobs) yields an empty plan
+   * { hub:null, spokes:[], skipped:[], note } instead of throwing — this keeps
+   * the confirm-guard contract intact.
+   */
+  private async computeNetworkPlan(opts: { townId?: string; floorOffset?: number } = {}): Promise<{
+    hub: { x: number; y: number; z: number } | null;
+    hubBox: { shell: number[]; air: number[] };
+    geom: { FLOOR: number; AIR1: number; AIR2: number; CEIL: number };
+    spokes: Array<{
+      building: string;
+      entry: { x: number; z: number; hallY: number };
+      corner: { x: number; z: number } | null;
+      segments: Array<{ axis: 'x' | 'z'; from: { x: number; z: number }; to: { x: number; z: number }; fixed: Record<string, number>; shell: number[]; air: number[] }>;
+      riser: { x: number; z: number; fromY: number; toY: number; ladderFacing: string; backDx: number; backDz: number };
+      doorway: { x: number; y: number; z: number };
+    }>;
+    skipped: Array<{ building: string; reason: string }>;
+    plan: any;
+  }> {
+    const empty = (note: string) => ({
+      hub: null,
+      hubBox: { shell: [], air: [] },
+      geom: { FLOOR: 0, AIR1: 1, AIR2: 5, CEIL: 6 },
+      spokes: [],
+      skipped: [],
+      plan: {
+        town: null, hub: null, floorY: 0, ceilingY: 0, interior: '5-tall',
+        route: 'hub-and-spoke (no town data)', poweredRailEvery: 8, ceilingLightEvery: 5,
+        spokes: [], skipped: [], note,
+      },
+    });
+
+    try {
+      // The TownManager is optional — used only for the hub centre + naming.
+      const tm = (this.botManager as any).getTownManager?.();
+      let town: any = null;
+      if (opts.townId && tm && typeof tm.getTown === 'function') {
+        town = tm.getTown(opts.townId);
+      } else if (tm && typeof tm.listTowns === 'function') {
+        const towns = tm.listTowns() || [];
+        town = towns.find((t: any) => t.status === 'active') ?? towns[0] ?? null;
+      }
+      const capital = town && town.capital && typeof town.capital.x === 'number' ? town.capital : null;
+
+      // Source standing structures from COMPLETED build jobs (the real record of
+      // what is in the world), de-duplicated by origin, with footprints resolved
+      // from each job's schematic.
+      const completedJobs = [...this.jobs.values()].filter((j) =>
+        j && typeof j.status === 'string' && j.status.startsWith('completed') &&
+        j.origin && typeof j.origin.x === 'number');
+      if (completedJobs.length === 0) return empty('no completed builds');
+
+      // Cluster centre: capital, else centroid of completed-build origins.
+      const cx0 = capital ? capital.x : Math.round(completedJobs.reduce((s, j) => s + j.origin.x, 0) / completedJobs.length);
+      const cz0 = capital ? capital.z : Math.round(completedJobs.reduce((s, j) => s + j.origin.z, 0) / completedJobs.length);
+      // Exclude stray/test builds far from town (e.g. the sam-demo cottage at
+      // x829 and the abandoned 1200,500 hall): keep builds within NEAR_TOWN.
+      const NEAR_TOWN = 200;
+      const near = completedJobs.filter((j) => Math.hypot(j.origin.x - cx0, j.origin.z - cz0) <= NEAR_TOWN);
+      if (near.length === 0) return empty('no completed builds near town');
+
+      // Dedupe by origin, keeping the most recent job per footprint.
+      const byOrigin = new Map<string, BuildJob>();
+      for (const j of near) {
+        const key = `${j.origin.x},${j.origin.y},${j.origin.z}`;
+        const prev = byOrigin.get(key);
+        if (!prev || (j.createdAt ?? 0) >= (prev.createdAt ?? 0)) byOrigin.set(key, j);
+      }
+
+      // Resolve each job's footprint via its schematic (cached). size = {x,y,z}.
+      type Box = { name: string; x1: number; x2: number; z1: number; z2: number; y1: number; y2: number; cx: number; cz: number; hallY: number };
+      const boxes: Box[] = [];
+      for (const j of byOrigin.values()) {
+        const info = await this.getSchematicInfoAsync(j.schematicFile).catch(() => null);
+        if (!info || !info.size) continue;
+        const w = info.size.x, h = info.size.y, d = info.size.z;
+        const x1 = j.origin.x, x2 = j.origin.x + w - 1;
+        const z1 = j.origin.z, z2 = j.origin.z + d - 1;
+        const y1 = j.origin.y, y2 = j.origin.y + h - 1;
+        const name = j.schematicFile.replace(/^.*\//, '').replace(/\.schem$/i, '');
+        boxes.push({ name, x1, x2, z1, z2, y1, y2, cx: (x1 + x2) / 2, cz: (z1 + z2) / 2, hallY: j.origin.y });
+      }
+      if (boxes.length === 0) return empty('no resolvable build footprints');
+
+      // Hub XZ from capital or centroid of build centers.
+      let hubX: number, hubZ: number;
+      if (capital) {
+        hubX = Math.round(capital.x); hubZ = Math.round(capital.z);
+      } else {
+        hubX = Math.round(boxes.reduce((s, b) => s + b.cx, 0) / boxes.length);
+        hubZ = Math.round(boxes.reduce((s, b) => s + b.cz, 0) / boxes.length);
+      }
+
+      // FLOOR (computed): below the lowest of capital.y and every building floor.
+      // floorOffset is clamped to >=6 so the corridor band always sits safely
+      // below building floors even if the API caller passes a small value.
+      const floorOffset = Math.max(6, opts.floorOffset ?? 12);
+      const floors = boxes.map((b) => b.hallY);
+      if (capital && typeof capital.y === 'number') floors.push(capital.y);
+      const FLOOR = Math.min(...floors) - floorOffset;
+      const AIR1 = FLOOR + 1, AIR2 = FLOOR + 5, CEIL = FLOOR + 6;
+
+      const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+      // Inflated AABB overlap test (cross-axis inflated by `pad`). Y-aware: the
+      // corridor lives at the corridor band [segY1..segY2] (FLOOR-1..CEIL),
+      // which is DEEP underground (well below every building floor), so passing
+      // BENEATH a footprint is not a collision. A conflict only exists when the
+      // segment's Y range actually overlaps the building's Y range.
+      const overlaps = (ax1: number, az1: number, ax2: number, az2: number, segY1: number, segY2: number, b: Box, pad = 0) =>
+        Math.min(ax1, ax2) <= b.x2 + pad && Math.max(ax1, ax2) >= b.x1 - pad &&
+        Math.min(az1, az2) <= b.z2 + pad && Math.max(az1, az2) >= b.z1 - pad &&
+        segY1 <= b.y2 && segY2 >= b.y1;
+
+      // Build one straight segment descriptor between two collinear cells.
+      const makeSeg = (axis: 'x' | 'z', from: { x: number; z: number }, to: { x: number; z: number }) => {
+        if (axis === 'x') {
+          const a = Math.min(from.x, to.x), b = Math.max(from.x, to.x), C = from.z;
+          return {
+            axis, from, to, fixed: { z: C },
+            shell: [a - 1, FLOOR - 1, C - 3, b + 1, CEIL, C + 3],
+            air: [a, AIR1, C - 2, b, AIR2, C + 2],
+          };
+        }
+        const a = Math.min(from.z, to.z), b = Math.max(from.z, to.z), C = from.x;
+        return {
+          axis, from, to, fixed: { x: C },
+          shell: [C - 3, FLOOR - 1, a - 1, C + 3, CEIL, b + 1],
+          air: [C - 2, AIR1, a, C + 2, AIR2, b],
+        };
+      };
+
+      const spokes: any[] = [];
+      const skipped: Array<{ building: string; reason: string }> = [];
+
+      for (const b of boxes) {
+        // Entrance/riser column one block OUTSIDE the footprint, facing the hub.
+        const dx = hubX - b.cx, dz = hubZ - b.cz;
+        let entryX: number, entryZ: number;
+        if (Math.abs(dx) >= Math.abs(dz)) {
+          entryX = dx < 0 ? b.x1 - 1 : b.x2 + 1;
+          entryZ = clamp(hubZ, b.z1, b.z2);
+        } else {
+          entryZ = dz < 0 ? b.z1 - 1 : b.z2 + 1;
+          entryX = clamp(hubX, b.x1, b.x2);
+        }
+        const entry = { x: entryX, z: entryZ, hallY: b.hallY };
+
+        // Two single-bend orderings (X-first / Z-first). Choose one whose
+        // segments + corner avoid every OTHER building footprint.
+        const others = boxes.filter((o) => o !== b);
+        const buildSegs = (order: 'x-first' | 'z-first') => {
+          const corner = order === 'x-first' ? { x: entry.x, z: hubZ } : { x: hubX, z: entry.z };
+          const segs: any[] = [];
+          if (order === 'x-first') {
+            if (entry.x !== hubX) segs.push(makeSeg('x', { x: hubX, z: hubZ }, { x: entry.x, z: hubZ }));
+            if (entry.z !== hubZ) segs.push(makeSeg('z', { x: entry.x, z: hubZ }, { x: entry.x, z: entry.z }));
+          } else {
+            if (entry.z !== hubZ) segs.push(makeSeg('z', { x: hubX, z: hubZ }, { x: hubX, z: entry.z }));
+            if (entry.x !== hubX) segs.push(makeSeg('x', { x: hubX, z: entry.z }, { x: entry.x, z: entry.z }));
+          }
+          return { corner: segs.length === 2 ? corner : null, segs };
+        };
+        const segsClear = (segs: any[]) => segs.every((seg) => {
+          // Geofence: never fill into a protected zone.
+          if (intersectsProtectedZone(
+            { x: Math.min(seg.shell[0], seg.shell[3]), y: FLOOR - 1, z: Math.min(seg.shell[2], seg.shell[5]) },
+            { x: Math.max(seg.shell[0], seg.shell[3]), y: CEIL, z: Math.max(seg.shell[2], seg.shell[5]) },
+          )) return false;
+          // Defense-in-depth: don't carve a segment through any OTHER building
+          // whose vertical extent overlaps the corridor band (FLOOR-1..CEIL).
+          return !others.some((o) => overlaps(seg.shell[0], seg.shell[2], seg.shell[3], seg.shell[5], FLOOR - 1, CEIL, o, 0));
+        });
+
+        let chosen: { corner: { x: number; z: number } | null; segs: any[] } | null = null;
+        for (const order of ['x-first', 'z-first'] as const) {
+          const cand = buildSegs(order);
+          if (segsClear(cand.segs)) { chosen = cand; break; }
+        }
+        // Fall back to a 3-segment dogleg offset by ±3 on the cross axis.
+        if (!chosen) {
+          for (const off of [3, -3, 6, -6]) {
+            // Dogleg: hub→(hubX, hubZ+off via z)→(entry.x, hubZ+off via x)→entry.
+            const midZ = hubZ + off;
+            const segs = [
+              makeSeg('z', { x: hubX, z: hubZ }, { x: hubX, z: midZ }),
+              makeSeg('x', { x: hubX, z: midZ }, { x: entry.x, z: midZ }),
+              makeSeg('z', { x: entry.x, z: midZ }, { x: entry.x, z: entry.z }),
+            ].filter((s) => (s.axis === 'x' ? s.from.x !== s.to.x : s.from.z !== s.to.z));
+            if (segsClear(segs)) { chosen = { corner: null, segs }; break; }
+          }
+        }
+        if (!chosen) { skipped.push({ building: b.name, reason: 'corridor collides with another building' }); continue; }
+
+        // Riser geofence check (the vertical shaft up to the building floor).
+        if (intersectsProtectedZone({ x: entry.x, y: FLOOR - 1, z: entry.z }, { x: entry.x, y: entry.hallY, z: entry.z })) {
+          skipped.push({ building: b.name, reason: 'protected-zone' });
+          continue;
+        }
+
+        // Ladder backing side: outward, away from the building wall. The riser
+        // shaft is at `entry` (one block outside the footprint); the backing
+        // pillar sits one block further out; the doorway is cut one block INWARD
+        // (into the building's wall). The ladder attaches to the backing.
+        let backDx = 0, backDz = 0, ladderFacing = 'west';
+        if (Math.abs(dx) >= Math.abs(dz)) {
+          backDx = dx < 0 ? -1 : 1; // outward, away from the building
+          ladderFacing = backDx > 0 ? 'west' : 'east';
+        } else {
+          backDz = dz < 0 ? -1 : 1;
+          ladderFacing = backDz > 0 ? 'north' : 'south';
+        }
+        // Doorway: one block INWARD from the riser = the building's edge wall.
+        const doorway = { x: entry.x - backDx, y: entry.hallY, z: entry.z - backDz };
+
+        // The riser + its full-height backing pillar rise to building-floor Y, so
+        // unlike the deep corridor they CAN pierce another building. Drop the
+        // spoke if the shaft column OR its backing column lands inside any OTHER
+        // building's XZ footprint (a riser inside a neighbour is unusable
+        // regardless of the exact Y gap — this is the birch-house-inside-town-
+        // hall case the previous Y-exclusive check let through).
+        const inAnyOther = (px: number, pz: number) =>
+          others.some((o) => px >= o.x1 && px <= o.x2 && pz >= o.z1 && pz <= o.z2);
+        if (inAnyOther(entry.x, entry.z) || inAnyOther(entry.x + backDx, entry.z + backDz)) {
+          skipped.push({ building: b.name, reason: 'riser/backing inside another building footprint' });
+          continue;
+        }
+
+        spokes.push({
+          building: b.name,
+          entry,
+          corner: chosen.corner,
+          segments: chosen.segs,
+          riser: { x: entry.x, z: entry.z, fromY: FLOOR, toY: entry.hallY, ladderFacing, backDx, backDz },
+          doorway,
+        });
+      }
+
+      const hub = { x: hubX, y: FLOOR, z: hubZ };
+      const hubBox = {
+        shell: [hubX - 5, FLOOR - 1, hubZ - 5, hubX + 5, CEIL, hubZ + 5],
+        air: [hubX - 4, AIR1, hubZ - 4, hubX + 4, AIR2, hubZ + 4],
+      };
+      // Geofence the hub chamber too; if it's protected, refuse the whole net.
+      if (intersectsProtectedZone({ x: hubBox.shell[0], y: FLOOR - 1, z: hubBox.shell[2] }, { x: hubBox.shell[3], y: CEIL, z: hubBox.shell[5] })) {
+        return empty('hub chamber in protected zone');
+      }
+
+      const plan = {
+        town: town ? { id: town.id, name: town.name } : null,
+        hub,
+        floorY: FLOOR, ceilingY: CEIL, interior: '5-tall',
+        route: `hub-and-spoke (hub ${hubX}/${hubZ}, ${spokes.length} spokes)`,
+        poweredRailEvery: 8, ceilingLightEvery: 5,
+        spokes: spokes.map((sp) => ({
+          building: sp.building,
+          entry: sp.entry,
+          corner: sp.corner,
+          segments: sp.segments.map((s: any) => ({ axis: s.axis, from: s.from, to: s.to, fixed: s.fixed, shell: s.shell, air: s.air })),
+          riser: { x: sp.riser.x, z: sp.riser.z, fromY: sp.riser.fromY, toY: sp.riser.toY, ladderFacing: sp.riser.ladderFacing },
+          doorway: sp.doorway,
+        })),
+        skipped,
+      };
+
+      return { hub, hubBox, geom: { FLOOR, AIR1, AIR2, CEIL }, spokes, skipped, plan };
+    } catch (err: any) {
+      logger.warn({ err: err?.message }, 'buildTunnel: computeNetworkPlan failed; returning empty plan');
+      return empty(err?.message ?? 'plan error');
+    }
   }
 
   // ── Schematic parsing & cache ──────────────────────────

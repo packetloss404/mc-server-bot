@@ -207,17 +207,15 @@ mining:
     z: 194
     radius: 24
   # Raw block types that must be sourced at the communal mine, not in town.
+  # NOTE: bulk building materials (stone, cobblestone, dirt, gravel, the andesite/
+  # diorite/granite/tuff/deepslate family) were REMOVED from this list so build
+  # crews gather them locally instead of trekking to the communal mine at
+  # 1720,64,194 for every load — that round-trip was a big chunk of the "bots
+  # endlessly underground" behaviour. Protected zones are still enforced
+  # independently at the bot.dig choke point (isProtected), so dropping these from
+  # routing does NOT let bots dig up town. Only true ORES remain routed, to keep
+  # ore extraction centralised at the communal site.
   routeToMineBlocks:
-    - stone
-    - cobblestone
-    - deepslate
-    - cobbled_deepslate
-    - andesite
-    - diorite
-    - granite
-    - tuff
-    - dirt
-    - gravel
     - coal_ore
     - iron_ore
     - copper_ore

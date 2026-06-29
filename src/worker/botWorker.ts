@@ -175,6 +175,12 @@ ipc.onCommand((type, cmdData) => {
     case 'disconnect':
       instance.disconnect().then(() => process.exit(0));
       break;
+    case 'reconnect':
+      // Main-thread watchdog detected a stale/zombie socket. Force a reconnect
+      // in-place (the worker loop is still alive enough to receive this command;
+      // a fully wedged worker is handled by terminate+restart on the main thread).
+      instance.forceReconnect();
+      break;
     case 'releaseQuarantine':
       instance.releaseQuarantine();
       break;

@@ -94,6 +94,13 @@ export class BotInstance {
   private ambientChatTimeout: NodeJS.Timeout | null = null;
   private reconnectAttempts = 0;
   private destroyed = false;
+  /** Wall-clock of the most recent inbound packet from the MC server. Updated on
+   *  every decoded packet via _client.on('packet'). This is the authoritative
+   *  socket-liveness signal: it stays fresh on any live connection (vanilla/Paper
+   *  send keep_alive ~every 15s) and goes stale within seconds of a half-open /
+   *  CLOSE-WAIT socket — independent of the (possibly frozen) bot world-state.
+   *  Surfaced as inboundAgeMs in getStatus() so the main-thread watchdog can act. */
+  private lastInboundPacketAt = 0;
   private pendingConnectTimeout: NodeJS.Timeout | null = null;
   /** Tracked one-shot timers belonging to handshake/wander phases. Cleared on
    *  disconnect so timeouts queued mid-handshake can't fire on a dead bot. */
@@ -248,7 +255,35 @@ export class BotInstance {
       auth: this.config.minecraft.auth as any,
       hideErrors: true,
       physicsEnabled: false,
+      // Explicit client-side keepalive. node-minecraft-protocol arms a setTimeout
+      // that fires 'error'+end if no keep_alive arrives within this window. It is
+      // default-on, but we make it explicit and DO NOT raise it — raising it only
+      // slows zombie detection. NB: this timer lives on the worker event loop, so
+      // a wedged loop can starve it; that's why the main-thread watchdog (below)
+      // is the authoritative recovery path, not this.
+      keepAlive: true,
+      checkTimeoutInterval: 30_000,
     });
+
+    // Authoritative socket-liveness heartbeat. 'packet' fires for every decoded
+    // inbound packet (keep_alive, time, chunk data, entity moves...), so this
+    // timestamp stays fresh on any live connection and goes stale within seconds
+    // on a half-open/CLOSE-WAIT socket. Reset here so each connect() starts fresh.
+    // (physicsTick is unusable as a heartbeat because we run physicsEnabled:false.)
+    this.lastInboundPacketAt = Date.now();
+    try {
+      const client = (this.bot as any)._client;
+      client.on('packet', () => { this.lastInboundPacketAt = Date.now(); });
+      // Lower the OS TCP keepalive from its ~2h default so the kernel tears down a
+      // stuck-ESTAB / half-open socket (the 1.3MB-stuck-send-queue case) and
+      // surfaces 'end'/'error' to JS, which the app-layer keepalive can miss.
+      client.on('connect', () => {
+        try { client.socket?.setKeepAlive(true, 15_000); } catch {}
+      });
+      try { client.socket?.setKeepAlive(true, 15_000); } catch {}
+    } catch (err: any) {
+      logger.warn({ bot: this.name, err: err?.message }, 'Could not attach inbound-packet liveness heartbeat');
+    }
 
     this.bot.loadPlugin(pathfinder);
     this.bot.loadPlugin(collectBlock);
@@ -321,9 +356,18 @@ export class BotInstance {
         // Set up pathfinder movements
         const mcData = require('minecraft-data')(this.bot.version);
         const movements = new Movements(this.bot);
-        movements.canDig = true; // Allow digging to escape holes (matches original Voyager)
+        movements.canDig = true; // Keep digging available to escape holes (matches original Voyager)
+        // ...but make it expensive. With the library default digCost=1, pathfinder
+        // treats tunnelling straight through terrain as the cheapest route, which
+        // is the bulk of the "bots endlessly dig underground" behaviour. Raising it
+        // makes the planner strongly prefer walking/going around; digging stays a
+        // last resort (escaping a hole, no other path).
+        movements.digCost = 12;
+        // Don't pillar up 1x1 towers to reach goals — another source of pointless
+        // vertical mining/scaffolding on the way to surface build sites.
+        movements.allow1by1towers = false;
         this.bot.pathfinder.setMovements(movements);
-        logger.info({ bot: this.name, canDig: movements.canDig }, 'Pathfinder movements configured');
+        logger.info({ bot: this.name, canDig: movements.canDig, digCost: movements.digCost }, 'Pathfinder movements configured');
 
         // Auto-dismount to prevent physicsTick from stopping (matches original Voyager)
         // Use once + re-register pattern to avoid accumulating listeners on respawn
@@ -1963,6 +2007,24 @@ export class BotInstance {
     }
   }
 
+  /** Force a fresh reconnect, tearing down the current (possibly zombie) bot
+   *  object. Invoked by the main-thread watchdog when it detects a stale inbound
+   *  socket whose 'end'/'kicked' events never fired. No-op if destroyed or
+   *  quarantined (an impersonation tug-of-war must not be re-triggered here). */
+  forceReconnect(): void {
+    if (this.destroyed) return;
+    if (this.quarantined) {
+      logger.warn({ bot: this.name }, 'forceReconnect suppressed: bot is quarantined');
+      return;
+    }
+    logger.warn({ bot: this.name, inboundAgeMs: this.lastInboundPacketAt > 0 ? Date.now() - this.lastInboundPacketAt : null }, 'Watchdog: forcing reconnect on stale/zombie socket');
+    this.stopAmbientBehaviors();
+    this.state = BotState.DISCONNECTED;
+    // skipQueue=true: bypass the join-stagger queue — the bot is already "in" the
+    // fleet, this is a recovery, and connect() tears down the old bot object first.
+    void this.connect(true);
+  }
+
   async disconnect(): Promise<void> {
     this.destroyed = true;
     // Cancel any queued reconnect / staggered-connect attempt so its timeout
@@ -1993,6 +2055,11 @@ export class BotInstance {
       personality: this.personality,
       mode: this.mode,
       state: this.state,
+      // Age of the most recent inbound packet. The main-thread watchdog treats a
+      // large value (while not already DISCONNECTED) as a zombie socket and forces
+      // a reconnect. null until the first connect() so a not-yet-spawned bot is
+      // not flagged.
+      inboundAgeMs: this.lastInboundPacketAt > 0 ? Date.now() - this.lastInboundPacketAt : null,
       position: this.bot?.entity?.position
         ? {
             x: Math.round(this.bot.entity.position.x),

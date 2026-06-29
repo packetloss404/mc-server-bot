@@ -594,11 +594,13 @@ export class BotManager {
     return true;
   }
 
-  /** Start a watchdog that reconnects disconnected bots every 60 seconds. */
+  /** Start a watchdog that recovers disconnected / zombie / wedged bots. Runs
+   *  every 30s so detection latency is bounded to ~30s + the staleness threshold
+   *  (was 60s, which on top of the thresholds left a frozen bot dead for minutes). */
   startWatchdog(): void {
     if (this.watchdogInterval) return;
-    this.watchdogInterval = setInterval(() => this.watchdogTick(), 60_000);
-    logger.info('Bot watchdog started (60s interval)');
+    this.watchdogInterval = setInterval(() => this.watchdogTick(), 30_000);
+    logger.info('Bot watchdog started (30s interval)');
   }
 
   stopWatchdog(): void {
@@ -608,12 +610,50 @@ export class BotManager {
     }
   }
 
+  /** Inbound-packet age (ms) beyond which a still-"connected" bot is treated as a
+   *  zombie socket. Vanilla/Paper send keep_alive ~every 15s, so 60s (≈4 missed)
+   *  will not false-positive on a live but quiet connection. */
+  private static ZOMBIE_INBOUND_AGE_MS = 60_000;
+  /** Gap (ms) since the last worker heartbeat beyond which the worker event loop
+   *  is considered wedged. The worker force-posts every <=30s, so 90s = 3 misses. */
+  private static WEDGED_WORKER_MS = 90_000;
+
   private watchdogTick(): void {
+    const now = Date.now();
     for (const handle of this.workers.values()) {
       const status = handle.getCachedStatus();
+
+      // (1) Clean disconnect: 'end'/'kicked' fired and set DISCONNECTED. The
+      // in-worker scheduleReconnect usually handles this; the command is a backstop.
       if (status?.state === 'DISCONNECTED') {
-        logger.info({ bot: handle.botName }, 'Watchdog: restarting disconnected worker');
+        logger.info({ bot: handle.botName }, 'Watchdog: reconnecting disconnected worker');
         handle.sendCommand('reconnect', {});
+        continue;
+      }
+
+      // (3) Wedged worker: event loop blocked, no heartbeats. Can't process a
+      // 'reconnect' IPC — must terminate+restart. Checked before the zombie-socket
+      // branch because a wedged worker also produces a stale inboundAgeMs, and the
+      // restart is the stronger remedy. Skip until the first heartbeat has arrived.
+      if (handle.lastStatusReceivedAt > 0 && now - handle.lastStatusReceivedAt > BotManager.WEDGED_WORKER_MS) {
+        logger.error(
+          { bot: handle.botName, sinceHeartbeatMs: now - handle.lastStatusReceivedAt },
+          'Watchdog: worker heartbeat stale — terminating and restarting wedged worker',
+        );
+        void handle.forceRestart();
+        continue;
+      }
+
+      // (2) Zombie socket: worker loop is alive (heartbeats flowing) but no inbound
+      // MC traffic — half-open/CLOSE-WAIT whose 'end' never fired. Force a reconnect.
+      const inboundAgeMs = status?.inboundAgeMs;
+      if (typeof inboundAgeMs === 'number' && inboundAgeMs > BotManager.ZOMBIE_INBOUND_AGE_MS) {
+        logger.warn(
+          { bot: handle.botName, inboundAgeMs },
+          'Watchdog: stale inbound socket (zombie) — forcing reconnect',
+        );
+        handle.sendCommand('reconnect', {});
+        continue;
       }
     }
   }

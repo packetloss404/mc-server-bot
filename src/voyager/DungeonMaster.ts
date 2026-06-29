@@ -112,7 +112,23 @@ export class DungeonMaster {
   // --- private generators ---
 
   private tryResourceScarcity(snap: WorldSnapshot): WorldEvent | null {
-    const scarce = CRITICAL_RESOURCES.find((r) => (snap.totalResources[r] ?? 0) < 5);
+    // A resource counts as "in supply" if the fleet holds enough of it OR of an
+    // equivalent form. iron_ingot was perpetually "scarce" because bots mine
+    // iron_ore but never smelt — so unless raw ore counts, the explore-for-iron
+    // loop never ends. Same for wood (any log) and stone (any cobble/stone form).
+    const RESOURCE_EQUIVALENTS: Record<string, string[]> = {
+      iron_ingot: ['iron_ingot', 'iron_ore', 'deepslate_iron_ore', 'raw_iron'],
+      iron_ore: ['iron_ore', 'deepslate_iron_ore', 'raw_iron', 'iron_ingot'],
+      coal: ['coal', 'coal_ore', 'deepslate_coal_ore', 'charcoal'],
+      oak_log: ['oak_log', 'spruce_log', 'birch_log', 'jungle_log', 'acacia_log', 'dark_oak_log', 'cherry_log', 'mangrove_log', 'oak_planks', 'spruce_planks', 'birch_planks'],
+      cobblestone: ['cobblestone', 'stone', 'cobbled_deepslate', 'deepslate', 'blackstone'],
+      food: ['bread', 'cooked_beef', 'cooked_porkchop', 'cooked_chicken', 'cooked_mutton', 'apple', 'carrot', 'potato', 'baked_potato', 'wheat', 'beetroot', 'melon_slice'],
+    };
+    const supplyOf = (r: string): number => {
+      const forms = RESOURCE_EQUIVALENTS[r] ?? [r];
+      return forms.reduce((sum, f) => sum + (snap.totalResources[f] ?? 0), 0);
+    };
+    const scarce = CRITICAL_RESOURCES.find((r) => supplyOf(r) < 5);
     if (!scarce) return null;
 
     const dir = pick(DIRECTIONS);

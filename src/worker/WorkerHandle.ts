@@ -58,6 +58,12 @@ export class WorkerHandle {
   lastStatus: any = null;
   lastDetailedStatus: any = null;
   lastDiagnostics: any = null;
+  /** Wall-clock of the most recent status.update received from the worker. The
+   *  worker force-posts a heartbeat every <=30s (STATUS_HEARTBEAT_MS), so a gap
+   *  much larger than that means the worker event loop is wedged (blocked by a
+   *  runaway codegen/LLM loop) and cannot process a 'reconnect' IPC — the main
+   *  thread must terminate+restart it. 0 until the first heartbeat arrives. */
+  lastStatusReceivedAt = 0;
 
   // Decision trace buffer (forwarded from worker)
   private traceBuffer: TraceRecord[] = [];
@@ -277,6 +283,7 @@ export class WorkerHandle {
   private routeNotification(type: string, data: any): void {
     // Status updates from worker
     if (type === 'status.update') {
+      this.lastStatusReceivedAt = Date.now();
       this.lastStatus = data.status;
       this.lastDetailedStatus = data.detailedStatus;
       this.lastDiagnostics = data.diagnostics;
@@ -758,6 +765,21 @@ export class WorkerHandle {
 
   isAlive(): boolean {
     return this.worker !== null;
+  }
+
+  /** Forcibly terminate a wedged worker and start a fresh one. Used by the
+   *  main-thread watchdog when a worker stops emitting heartbeats (event loop
+   *  blocked) — sendCommand('reconnect') can't help because the wedged loop
+   *  can't process it. terminate() escalates to worker.terminate() after a 5s
+   *  grace period, which kills even a fully blocked worker. */
+  async forceRestart(): Promise<void> {
+    await this.terminate();
+    // terminate() leaves us in DEAD with intentionalShutdown=true; reset so a
+    // fresh worker can come up and so the crash backoff doesn't suppress it.
+    this.intentionalShutdown = false;
+    this.crashCount = 0;
+    this.lastStatusReceivedAt = 0;
+    this.start();
   }
 
   async terminate(): Promise<void> {

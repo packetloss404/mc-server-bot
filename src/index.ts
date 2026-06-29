@@ -97,6 +97,10 @@ async function main() {
 
   // Restore previously saved bots
   await botManager.loadSavedBots();
+  // Arm the connection watchdog: recovers disconnected, zombie-socket (half-open /
+  // CLOSE-WAIT whose 'end' never fired), and wedged-worker bots. Previously defined
+  // but never invoked, so a silently-dropped bot stayed a frozen "online" zombie.
+  botManager.startWatchdog();
 
   // Phase 8 — instantiate the streamer's in-memory highlight ring once,
   // then hand it to the API layer so the town:event emitter + the
@@ -167,12 +171,25 @@ async function main() {
       const workers = botManager.getAllWorkers();
       if (workers.length === 0) return;
       const statuses = workers.map((w) => w.getCachedDetailedStatus()).filter(Boolean);
+      // Aggregate the fleet's actual inventory so DungeonMaster scarcity reflects
+      // reality. Previously hardcoded {} — which made every resource read as 0,
+      // so CRITICAL_RESOURCES.find(r => 0 < 5) ALWAYS matched the first entry
+      // (iron_ingot) and the DM injected a high-priority "explore for iron" event
+      // every cooldown, forever, crowding out all build work (76% of completed
+      // tasks were iron-explore despite 73 iron_ore already mined).
+      const totalResources: Record<string, number> = {};
+      for (const s of statuses) {
+        for (const item of (s?.inventory ?? []) as Array<{ name: string; count: number }>) {
+          if (!item?.name) continue;
+          totalResources[item.name] = (totalResources[item.name] ?? 0) + (item.count ?? 0);
+        }
+      }
       const snapshot = {
         botCount: workers.length,
         playerCount: botManager.getPlayerPresenceTracker().getPlayerCount(),
         serverTimeOfDay: statuses[0]?.world?.timeOfDay ?? 0,
         weather: statuses[0]?.world?.isRaining ? 'rain' : 'clear',
-        totalResources: {},
+        totalResources,
         recentCompletedTasks: statuses.reduce((sum: number, s: any) => sum + (s?.voyager?.completedTasks?.length ?? 0), 0),
         exploredChunkCount: 0,
         activeThreatCount: 0,

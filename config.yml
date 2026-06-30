@@ -236,3 +236,13 @@ mining:
     - deepslate_lapis_ore
     - deepslate_diamond_ore
     - deepslate_emerald_ore
+
+# Per-bot movement leash. Pins a named bot to a home anchor (x,z) + radius:
+# generated code can't move it outside the radius (CodeExecutor.moveTo rejects
+# outward targets; exploreUntil is disabled for it). Keeps a caretaker bot on
+# its island/site. Adjust radius to the island size.
+leash:
+  - botName: Eleven      # 50ELEVEN HQ caretaker — must not leave the island
+    x: 1562
+    z: -374
+    radius: 64

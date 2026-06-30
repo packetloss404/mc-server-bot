@@ -248,6 +248,13 @@ export interface Config {
     /** Block types that must be sourced at the mine site, not dug in place. */
     routeToMineBlocks?: string[];
   };
+  /**
+   * Per-bot movement leash. Each entry pins a named bot to a home anchor (x,z)
+   * and radius — generated code cannot move it outside the radius (enforced in
+   * CodeExecutor.moveTo, and exploreUntil is disabled for it). Used to keep a
+   * dedicated caretaker bot on its island/site. Absent/empty → no bot leashed.
+   */
+  leash?: Array<{ botName: string; x: number; z: number; radius: number }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -283,6 +290,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'cognition',
   'mining',
   'build',
+  'leash',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {

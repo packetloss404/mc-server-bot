@@ -42,8 +42,19 @@ export class CodeExecutor {
   private timeoutMs: number;
   private currentInterrupt: InterruptState | null = null;
 
+  /** Optional movement leash. When set, generated code may not move the bot
+   *  outside `radius` blocks of (x,z) — the hard guarantee behind "keep this
+   *  bot on its island". moveTo rejects outward targets (recall toward home is
+   *  still allowed); exploreUntil is disabled entirely for a leashed bot. */
+  private leash: { x: number; z: number; radius: number } | null = null;
+
   constructor(timeoutMs: number) {
     this.timeoutMs = timeoutMs;
+  }
+
+  /** Pin this executor's bot to a home anchor + radius (or clear with null). */
+  setLeash(leash: { x: number; z: number; radius: number } | null): void {
+    this.leash = leash;
   }
 
   requestInterrupt(reason = 'Execution interrupted'): void {
@@ -311,6 +322,24 @@ export class CodeExecutor {
       },
       moveTo: async (x: number, y: number, z: number, range = 2, timeoutSec = 15) => {
         throwIfInterrupted();
+        // Leash guard: reject any target outside the home radius. A recall move
+        // (one that brings the bot CLOSER to home than it is now) is still
+        // allowed so a bot nudged out of bounds can walk back.
+        if (this.leash) {
+          const tx = x - this.leash.x, tz = z - this.leash.z;
+          const targetDist = Math.sqrt(tx * tx + tz * tz);
+          if (targetDist > this.leash.radius) {
+            const p = bot.entity.position;
+            const curDist = Math.sqrt((p.x - this.leash.x) ** 2 + (p.z - this.leash.z) ** 2);
+            if (targetDist >= curDist) {
+              throw new Error(
+                `LEASHED: target (${Math.floor(x)},${Math.floor(z)}) is ${Math.round(targetDist)} blocks from home ` +
+                `(${this.leash.x},${this.leash.z}), outside the ${this.leash.radius}-block boundary. Stay near HQ — ` +
+                `only move to coordinates within ${this.leash.radius} blocks of home.`,
+              );
+            }
+          }
+        }
         const cleanupTrace = addMovementTrace('moveTo');
         const start = bot.entity.position;
         const targetSummary = `(${x.toFixed(1)}, ${y.toFixed(1)}, ${z.toFixed(1)})`;
@@ -350,6 +379,15 @@ export class CodeExecutor {
       },
       exploreUntil: async (direction: any, maxTime = 60, callback: () => any) => {
         throwIfInterrupted();
+        // A leashed bot does not explore — exploreUntil walks the bot outward
+        // indefinitely, which would breach the boundary. Disable it outright so
+        // generated code works within the leash (findBlock/blockAt + moveTo).
+        if (this.leash) {
+          throw new Error(
+            `LEASHED: exploreUntil is disabled — this bot is pinned within ${this.leash.radius} blocks of home ` +
+            `(${this.leash.x},${this.leash.z}). Use bot.findBlock/blockAt within range and moveTo nearby instead of exploring.`,
+          );
+        }
         const cleanupTrace = addMovementTrace('exploreUntil');
         // LLM codegen produces wildly varied shapes here: strings ('north'),
         // arrays ([1,0,0]), bare numbers, options-bag objects without xyz

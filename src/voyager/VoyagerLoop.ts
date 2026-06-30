@@ -232,6 +232,20 @@ export class VoyagerLoop {
     this.skillLibrary = new SkillLibrary(config.skills.directory, config.skills.maxSkills, llmClient);
     this.codeExecutor = new CodeExecutor(config.voyager.codeExecutionTimeoutMs);
 
+    // Movement leash: if config.leash names this bot, pin it to a home anchor +
+    // radius so generated code can't walk it off its island (enforced in
+    // CodeExecutor.moveTo/exploreUntil). No entry → unleashed (default).
+    const leashEntry = config.leash?.find(
+      (l) => l.botName.toLowerCase() === botName.toLowerCase(),
+    );
+    if (leashEntry) {
+      this.codeExecutor.setLeash({ x: leashEntry.x, z: leashEntry.z, radius: leashEntry.radius });
+      logger.info(
+        { bot: botName, home: { x: leashEntry.x, z: leashEntry.z }, radius: leashEntry.radius },
+        'VoyagerLoop: bot is leashed to a home boundary',
+      );
+    }
+
     this.curriculumAgent = new CurriculumAgent(
       llmClient,
       config.voyager.curriculumLLMCalls,

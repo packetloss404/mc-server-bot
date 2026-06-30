@@ -153,7 +153,7 @@ export class LLMSettings {
         } else if (p.name === 'anthropic') {
           clients.set('anthropic', new AnthropicClient({
             apiKey: p.apiKey,
-            model: p.model || 'claude-sonnet-4-6',
+            model: p.model || 'claude-opus-4-8',
             temperature: 0.7,
             maxTokens: 2048,
             maxConcurrentRequests: p.maxConcurrentRequests || 3,
@@ -170,7 +170,7 @@ export class LLMSettings {
         } else if (p.name === 'minimax') {
           clients.set('minimax', new MiniMaxClient({
             apiKey: p.apiKey,
-            model: p.model || 'MiniMax-M2.7-highspeed',
+            model: p.model || 'MiniMax-M3',
             baseUrl: process.env.MINIMAX_BASE_URL,
             temperature: 0.7,
             maxTokens: 2048,
@@ -179,7 +179,7 @@ export class LLMSettings {
         } else if (p.name === 'openai') {
           clients.set('openai', new OpenAIClient({
             apiKey: p.apiKey,
-            model: p.model || 'gpt-5.4',
+            model: p.model || 'gpt-5.5',
             baseUrl: process.env.OPENAI_BASE_URL,
             temperature: 0.7,
             maxTokens: 2048,
@@ -239,7 +239,7 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'anthropic',
         apiKey: anthropicKey,
-        model: 'claude-sonnet-4-6',
+        model: 'claude-opus-4-8',
         maxConcurrentRequests: 3,
         enabled: true,
       });
@@ -250,7 +250,7 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'openai',
         apiKey: openaiKey,
-        model: 'gpt-5.4',
+        model: 'gpt-5.5',
         maxConcurrentRequests: 3,
         enabled: true,
       });
@@ -272,7 +272,7 @@ export class LLMSettings {
       this.settings.providers.push({
         name: 'minimax',
         apiKey: minimaxKey,
-        model: 'MiniMax-M2.7-highspeed',
+        model: 'MiniMax-M3',
         maxConcurrentRequests: 3,
         enabled: true,
       });

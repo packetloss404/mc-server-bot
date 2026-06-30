@@ -409,7 +409,7 @@ Last task: ${this.lastTask || 'none'}
 
 Propose the next task:`;
 
-      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000);
+      const response = await this.llmClient!.generate(CURRICULUM_SYSTEM_PROMPT, userMessage, 1000, { taskType: 'curriculum' });
       logger.debug({ rawResponse: response.text.slice(0, 500) }, 'Curriculum LLM raw response');
       const cleaned = response.text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
       let parsed: any;

@@ -68,7 +68,11 @@ llm:
   model: "gemini-2.5-flash"
   temperature: 0.7
   chatMaxTokens: 2048
-  codeGenMaxTokens: 8192
+  # 16384 (was 8192): the codegen brain (MiniMax-M3) is a chain-of-thought model
+  # that spends output tokens on reasoning BEFORE emitting the code block. At 8192
+  # the reasoning+code routinely truncated mid-function → "Unterminated template" /
+  # maxTokens failures. Doubling the cap lets the full function land.
+  codeGenMaxTokens: 16384
   maxConcurrentRequests: 1
 
 skills:

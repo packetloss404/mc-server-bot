@@ -1364,7 +1364,7 @@
     ]
   },
   {
-    "quality": 0.08014432855654086,
+    "quality": 0.06534801391710461,
     "successCount": 0,
     "failureCount": 10,
     "name": "mine_the_nearest_oak_log",
@@ -1917,8 +1917,8 @@
       "log"
     ],
     "file": "mine_1_oak_log.js",
-    "quality": 0.7267441860465116,
-    "successCount": 124,
+    "quality": 0.7911111111111111,
+    "successCount": 177,
     "failureCount": 46,
     "embedding": [
       -0.003432236,
@@ -2178,7 +2178,7 @@
       0.018564891,
       -0.010375751
     ],
-    "lastQualityUpdate": 1781772556942
+    "lastQualityUpdate": 1782673764187
   },
   {
     "quality": 0.75,
@@ -4347,8 +4347,8 @@
     "lastQualityUpdate": 1779531585219
   },
   {
-    "quality": 0.9629629629629629,
-    "successCount": 25,
+    "quality": 0.9821428571428571,
+    "successCount": 54,
     "failureCount": 0,
     "name": "craft_a_wooden_pickaxe",
     "description": "Craft a wooden pickaxe",
@@ -4616,7 +4616,7 @@
       0.016375529,
       -0.020492483
     ],
-    "lastQualityUpdate": 1781767736032
+    "lastQualityUpdate": 1782711944120
   },
   {
     "quality": 0.5,
@@ -31270,9 +31270,9 @@
     ]
   },
   {
-    "quality": 0.9417322834645669,
+    "quality": 0.8978978978978979,
     "successCount": 597,
-    "failureCount": 36,
+    "failureCount": 67,
     "name": "swim_to_the_surface_drowning",
     "description": "Swim to the surface — drowning",
     "keywords": [
@@ -31540,7 +31540,7 @@
       0.03491098,
       0.0094939545
     ],
-    "lastQualityUpdate": 1781786286233
+    "lastQualityUpdate": 1782020318452
   },
   {
     "quality": 0.6666666666666666,
@@ -36992,8 +36992,8 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit.js",
-    "quality": 0.9836065573770492,
-    "successCount": 59,
+    "quality": 0.984375,
+    "successCount": 62,
     "failureCount": 0,
     "embedding": [
       -0.014067125,
@@ -37253,7 +37253,7 @@
       0.0020741175,
       0.00004106742
     ],
-    "lastQualityUpdate": 1781731277695
+    "lastQualityUpdate": 1782305589182
   },
   {
     "quality": 0.6666666666666666,
@@ -38351,8 +38351,8 @@
       "planks"
     ],
     "file": "craft_1_oak_planks.js",
-    "quality": 0.9666666666666667,
-    "successCount": 28,
+    "quality": 0.9873417721518988,
+    "successCount": 77,
     "failureCount": 0,
     "embedding": [
       -0.012541495,
@@ -38612,7 +38612,7 @@
       0.0047266623,
       -0.002722866
     ],
-    "lastQualityUpdate": 1781772991743
+    "lastQualityUpdate": 1782711073487
   },
   {
     "quality": 0.8,
@@ -38895,7 +38895,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night.js",
-    "quality": 0.7114917586099558,
+    "quality": 0.56693817479434,
     "successCount": 106,
     "failureCount": 40,
     "embedding": [
@@ -39430,8 +39430,8 @@
     ]
   },
   {
-    "quality": 0.9965753424657534,
-    "successCount": 290,
+    "quality": 0.9995442114858706,
+    "successCount": 2192,
     "failureCount": 0,
     "name": "obtain_oakplanks",
     "description": "Obtain oak_planks",
@@ -39698,7 +39698,7 @@
       0.0044931443,
       -0.009578496
     ],
-    "lastQualityUpdate": 1781773033881
+    "lastQualityUpdate": 1782718262731
   },
   {
     "quality": 0.6666666666666666,
@@ -41330,7 +41330,7 @@
     ]
   },
   {
-    "quality": 0.3333333333333333,
+    "quality": 0.13655079811493395,
     "successCount": 1,
     "failureCount": 3,
     "name": "hunt_for_food",
@@ -42700,9 +42700,9 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore.js",
-    "quality": 0.7852941176470588,
-    "successCount": 266,
-    "failureCount": 72,
+    "quality": 0.78125,
+    "successCount": 299,
+    "failureCount": 83,
     "embedding": [
       -0.015814144,
       -0.001432306,
@@ -42961,7 +42961,7 @@
       -0.0038710476,
       -0.0027139063
     ],
-    "lastQualityUpdate": 1781786077353
+    "lastQualityUpdate": 1782720496423
   },
   {
     "quality": 0.6666666666666666,
@@ -48128,8 +48128,8 @@
     ]
   },
   {
-    "quality": 0.4074074074074074,
-    "successCount": 21,
+    "quality": 0.49206349206349204,
+    "successCount": 30,
     "failureCount": 31,
     "name": "mine_1_cherry_log",
     "description": "Mine 1 cherry log",
@@ -48397,11 +48397,11 @@
       0.011727097,
       -0.019496506
     ],
-    "lastQualityUpdate": 1781760635007
+    "lastQualityUpdate": 1782673940742
   },
   {
-    "quality": 0.75,
-    "successCount": 2,
+    "quality": 0.8333333333333334,
+    "successCount": 4,
     "failureCount": 0,
     "name": "craft_2_cherry_planks",
     "description": "Craft 2 cherry planks",
@@ -48669,11 +48669,11 @@
       -0.000337735,
       -0.015024554
     ],
-    "lastQualityUpdate": 1781750483669
+    "lastQualityUpdate": 1782255052258
   },
   {
-    "quality": 0.75,
-    "successCount": 2,
+    "quality": 0.8333333333333334,
+    "successCount": 4,
     "failureCount": 0,
     "name": "craft_1_stick",
     "description": "Craft 1 stick",
@@ -48940,11 +48940,11 @@
       0.012504243,
       -0.02287312
     ],
-    "lastQualityUpdate": 1781773007872
+    "lastQualityUpdate": 1782034203849
   },
   {
-    "quality": 0.8,
-    "successCount": 3,
+    "quality": 0.9,
+    "successCount": 8,
     "failureCount": 0,
     "name": "craft_3_cherry_planks",
     "description": "Craft 3 cherry planks",
@@ -49212,7 +49212,7 @@
       -0.0024549789,
       -0.021598294
     ],
-    "lastQualityUpdate": 1781750623639
+    "lastQualityUpdate": 1782524612687
   },
   {
     "quality": 0.6666666666666666,
@@ -50585,8 +50585,8 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and.js",
-    "quality": 0.9325885504761117,
-    "successCount": 31,
+    "quality": 0.9821428571428571,
+    "successCount": 54,
     "failureCount": 0,
     "embedding": [
       -0.008155986,
@@ -50846,7 +50846,7 @@
       0.009965004,
       0.0035469928
     ],
-    "lastQualityUpdate": 1780200699380
+    "lastQualityUpdate": 1782719000620
   },
   {
     "name": "walk_to_the_nearest_shore_v2",
@@ -50859,7 +50859,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v2.js",
-    "quality": 0.47798797889067046,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -51134,7 +51134,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v2.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -51409,7 +51409,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v3.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -51681,7 +51681,7 @@
       "north"
     ],
     "file": "explore_north_for_51_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -51953,7 +51953,7 @@
       "west"
     ],
     "file": "explore_west_for_59_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -52227,7 +52227,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v3.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -52499,7 +52499,7 @@
       "west"
     ],
     "file": "explore_west_for_70_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -52773,7 +52773,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v4.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -53047,7 +53047,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v5.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -53319,7 +53319,7 @@
       "north"
     ],
     "file": "explore_north_for_67_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -53591,7 +53591,7 @@
       "north"
     ],
     "file": "explore_north_for_67_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -53863,7 +53863,7 @@
       "east"
     ],
     "file": "explore_east_for_55_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -54137,7 +54137,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v6.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -54411,7 +54411,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v7.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -54685,7 +54685,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v8.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -54957,7 +54957,7 @@
       "north"
     ],
     "file": "explore_north_for_69_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -55229,7 +55229,7 @@
       "east"
     ],
     "file": "explore_east_for_67_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -55503,7 +55503,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v9.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -55777,7 +55777,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v10.js",
-    "quality": 0.4803851053679059,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -56049,7 +56049,7 @@
       "west"
     ],
     "file": "explore_west_for_74_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -56323,7 +56323,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v11.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -56595,7 +56595,7 @@
       "east"
     ],
     "file": "explore_east_for_57_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -56867,7 +56867,7 @@
       "west"
     ],
     "file": "explore_west_for_55_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -57139,7 +57139,7 @@
       "west"
     ],
     "file": "explore_west_for_55_blocks_v3.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -57411,7 +57411,7 @@
       "north"
     ],
     "file": "explore_north_for_64_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -57685,7 +57685,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v12.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -57959,7 +57959,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v13.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -58231,7 +58231,7 @@
       "west"
     ],
     "file": "explore_west_for_50_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -58503,7 +58503,7 @@
       "north"
     ],
     "file": "explore_north_for_57_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -58775,7 +58775,7 @@
       "north"
     ],
     "file": "explore_north_for_72_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -59047,7 +59047,7 @@
       "east"
     ],
     "file": "explore_east_for_65_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -59318,7 +59318,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v2.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -59593,7 +59593,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v4.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -59868,7 +59868,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v5.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -60143,7 +60143,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v6.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -60417,7 +60417,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v14.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -60688,7 +60688,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v3.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -60960,7 +60960,7 @@
       "south"
     ],
     "file": "explore_south_for_54_blocks_v2.js",
-    "quality": 0.07142857142857142,
+    "quality": 0.05601258335751834,
     "successCount": 0,
     "failureCount": 12,
     "embedding": [
@@ -61234,7 +61234,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v15.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -61508,7 +61508,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v16.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -61782,7 +61782,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v17.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -62056,7 +62056,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v18.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -62330,7 +62330,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v19.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -62604,7 +62604,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v20.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -62878,7 +62878,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v21.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -63152,7 +63152,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v22.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -63426,7 +63426,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v23.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -63700,7 +63700,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v24.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -63974,7 +63974,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v25.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -64248,7 +64248,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v26.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -64522,7 +64522,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v27.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -64796,7 +64796,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v28.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -65069,9 +65069,9 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v2.js",
-    "quality": 0.49205972090782,
+    "quality": 0.2,
     "successCount": 0,
-    "failureCount": 0,
+    "failureCount": 3,
     "embedding": [
       -0.023533836,
       0.0021469046,
@@ -65330,7 +65330,7 @@
       0.0072210785,
       -0.010561477
     ],
-    "lastQualityUpdate": 1779473942656
+    "lastQualityUpdate": 1782263229288
   },
   {
     "name": "walk_to_the_nearest_shore_v29",
@@ -65343,7 +65343,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v29.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -65617,7 +65617,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v30.js",
-    "quality": 0.479904720262538,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -65890,7 +65890,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v3.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -66163,7 +66163,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v4.js",
-    "quality": 0.49205972090782,
+    "quality": 0.3808752934192041,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -66436,9 +66436,9 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v5.js",
-    "quality": 0.49205972090782,
+    "quality": 0.2,
     "successCount": 0,
-    "failureCount": 0,
+    "failureCount": 3,
     "embedding": [
       -0.025721215,
       0.01594378,
@@ -66697,7 +66697,7 @@
       0.009904988,
       -0.011628437
     ],
-    "lastQualityUpdate": 1779474118348
+    "lastQualityUpdate": 1782263108798
   },
   {
     "name": "walk_to_the_nearest_shore_v31",
@@ -66710,7 +66710,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v31.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -66990,9 +66990,9 @@
       "farmer"
     ],
     "file": "tend_crops_plant_seeds_and.js",
-    "quality": 0.38461538461538464,
-    "successCount": 19,
-    "failureCount": 31,
+    "quality": 0.39655172413793105,
+    "successCount": 22,
+    "failureCount": 34,
     "embedding": [
       -0.039676927,
       0.011297269,
@@ -67251,7 +67251,7 @@
       0.013770409,
       0.00077745435
     ],
-    "lastQualityUpdate": 1781784729454
+    "lastQualityUpdate": 1782740761772
   },
   {
     "name": "patrol_aggressively_and_fight_hostile",
@@ -67270,9 +67270,9 @@
       "skeleton"
     ],
     "file": "patrol_aggressively_and_fight_hostile.js",
-    "quality": 0.5065064804659566,
-    "successCount": 26,
-    "failureCount": 22,
+    "quality": 0.5263157894736842,
+    "successCount": 29,
+    "failureCount": 26,
     "embedding": [
       -0.028792,
       -0.0035112014,
@@ -67531,7 +67531,7 @@
       0.012415093,
       0.0037272845
     ],
-    "lastQualityUpdate": 1780710991730
+    "lastQualityUpdate": 1782713983342
   },
   {
     "name": "walk_to_the_nearest_shore_v32",
@@ -67544,7 +67544,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v32.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -67824,9 +67824,9 @@
       "farmer"
     ],
     "file": "tend_crops_plant_seeds_and_v2.js",
-    "quality": 0.043478260869565216,
+    "quality": 0.011862106995048916,
     "successCount": 0,
-    "failureCount": 21,
+    "failureCount": 25,
     "embedding": [
       -0.039919008,
       0.0031779022,
@@ -68085,7 +68085,7 @@
       0.009434698,
       0.0016795901
     ],
-    "lastQualityUpdate": 1781748665778
+    "lastQualityUpdate": 1782018743491
   },
   {
     "name": "patrol_aggressively_and_fight_hostile_v2",
@@ -68104,9 +68104,9 @@
       "skeleton"
     ],
     "file": "patrol_aggressively_and_fight_hostile_v2.js",
-    "quality": 0.08527045125689513,
+    "quality": 0.018858675667804338,
     "successCount": 0,
-    "failureCount": 9,
+    "failureCount": 15,
     "embedding": [
       -0.026408406,
       -0.006847348,
@@ -68365,7 +68365,7 @@
       0.010573524,
       0.002401609
     ],
-    "lastQualityUpdate": 1780678593274
+    "lastQualityUpdate": 1781804346823
   },
   {
     "name": "walk_to_the_nearest_shore_v33",
@@ -68378,7 +68378,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v33.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -68652,7 +68652,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v34.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -68926,7 +68926,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v35.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -69201,7 +69201,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v7.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -69481,9 +69481,9 @@
       "farmer"
     ],
     "file": "tend_crops_plant_seeds_and_v3.js",
-    "quality": 0.04,
+    "quality": 0.011862106995048916,
     "successCount": 0,
-    "failureCount": 23,
+    "failureCount": 25,
     "embedding": [
       -0.040162034,
       0.0034398995,
@@ -69742,7 +69742,7 @@
       0.009182074,
       -0.0032738703
     ],
-    "lastQualityUpdate": 1781750909691
+    "lastQualityUpdate": 1782014809493
   },
   {
     "name": "patrol_aggressively_and_fight_hostile_v3",
@@ -69761,9 +69761,9 @@
       "skeleton"
     ],
     "file": "patrol_aggressively_and_fight_hostile_v3.js",
-    "quality": 0.07816458031882045,
+    "quality": 0.020037342897042093,
     "successCount": 0,
-    "failureCount": 10,
+    "failureCount": 14,
     "embedding": [
       -0.028313262,
       -0.0037907294,
@@ -70022,7 +70022,7 @@
       0.008670683,
       -0.00081075664
     ],
-    "lastQualityUpdate": 1780709148215
+    "lastQualityUpdate": 1781806754675
   },
   {
     "name": "mine_the_new_ironingot_deposit_v4",
@@ -70032,7 +70032,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v4.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -70303,7 +70303,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v5.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -70574,7 +70574,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v6.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -70845,7 +70845,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v7.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -71116,7 +71116,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v8.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -71387,7 +71387,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v9.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -71658,7 +71658,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v10.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -71930,7 +71930,7 @@
       "east"
     ],
     "file": "explore_east_for_62_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -72202,7 +72202,7 @@
       "south"
     ],
     "file": "explore_south_for_60_blocks_v2.js",
-    "quality": 0.07142857142857142,
+    "quality": 0.05601258335751834,
     "successCount": 0,
     "failureCount": 12,
     "embedding": [
@@ -72474,7 +72474,7 @@
       "north"
     ],
     "file": "explore_north_for_75_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -72748,7 +72748,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v36.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -73019,7 +73019,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v11.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -73290,7 +73290,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v12.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -73564,7 +73564,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v37.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -73836,7 +73836,7 @@
       "east"
     ],
     "file": "explore_east_for_54_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -74108,7 +74108,7 @@
       "south"
     ],
     "file": "explore_south_for_72_blocks_v2.js",
-    "quality": 0.07142857142857142,
+    "quality": 0.05601258335751834,
     "successCount": 0,
     "failureCount": 12,
     "embedding": [
@@ -74380,7 +74380,7 @@
       "north"
     ],
     "file": "explore_north_for_50_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -74652,7 +74652,7 @@
       "west"
     ],
     "file": "explore_west_for_52_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -74924,7 +74924,7 @@
       "east"
     ],
     "file": "explore_east_for_66_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -75196,7 +75196,7 @@
       "east"
     ],
     "file": "explore_east_for_61_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -75468,7 +75468,7 @@
       "east"
     ],
     "file": "explore_east_for_72_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -75740,7 +75740,7 @@
       "east"
     ],
     "file": "explore_east_for_50_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -76012,7 +76012,7 @@
       "east"
     ],
     "file": "explore_east_for_75_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -76290,7 +76290,7 @@
       "west"
     ],
     "file": "explore_direction_for_n_blocks.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "lastQualityUpdate": 1779480437751,
@@ -76562,9 +76562,9 @@
       "south"
     ],
     "file": "explore_south_for_61_blocks.js",
-    "quality": 0.13333333333333333,
+    "quality": 0.09225601964767711,
     "successCount": 1,
-    "failureCount": 12,
+    "failureCount": 14,
     "embedding": [
       -0.008834736,
       0.0134302545,
@@ -76823,7 +76823,7 @@
       -0.0033770727,
       0.008712383
     ],
-    "lastQualityUpdate": 1781618669751
+    "lastQualityUpdate": 1782059742894
   },
   {
     "name": "walk_to_the_nearest_shore_v38",
@@ -76836,7 +76836,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v38.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -77110,7 +77110,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v39.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -77382,7 +77382,7 @@
       "south"
     ],
     "file": "explore_south_for_69_blocks.js",
-    "quality": 0.125,
+    "quality": 0.098022020875657,
     "successCount": 1,
     "failureCount": 13,
     "embedding": [
@@ -77654,7 +77654,7 @@
       "west"
     ],
     "file": "explore_west_for_53_blocks.js",
-    "quality": 0.3333333333333333,
+    "quality": 0.26139205566841844,
     "successCount": 1,
     "failureCount": 3,
     "embedding": [
@@ -77928,7 +77928,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v40.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -78200,9 +78200,9 @@
       "north"
     ],
     "file": "explore_north_for_70_blocks.js",
-    "quality": 0.2857142857142857,
+    "quality": 0.25,
     "successCount": 3,
-    "failureCount": 9,
+    "failureCount": 11,
     "embedding": [
       -0.018530907,
       0.01718203,
@@ -78461,7 +78461,7 @@
       -0.0032156215,
       0.0026711163
     ],
-    "lastQualityUpdate": 1781445899666
+    "lastQualityUpdate": 1782531283292
   },
   {
     "name": "explore_north_for_70_blocks",
@@ -78472,7 +78472,7 @@
       "north"
     ],
     "file": "explore_north_for_70_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -78744,9 +78744,9 @@
       "east"
     ],
     "file": "explore_east_for_74_blocks.js",
-    "quality": 0.375,
+    "quality": 0.25,
     "successCount": 2,
-    "failureCount": 4,
+    "failureCount": 8,
     "embedding": [
       -0.01679297,
       0.02052316,
@@ -79005,7 +79005,7 @@
       0.00039204425,
       0.012756446
     ],
-    "lastQualityUpdate": 1781699698369
+    "lastQualityUpdate": 1782534906012
   },
   {
     "name": "explore_east_for_74_blocks",
@@ -79016,7 +79016,7 @@
       "east"
     ],
     "file": "explore_east_for_74_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -79288,7 +79288,7 @@
       "east"
     ],
     "file": "explore_east_for_55_blocks.js",
-    "quality": 0.42857142857142855,
+    "quality": 0.3360755001451093,
     "successCount": 2,
     "failureCount": 3,
     "embedding": [
@@ -79560,7 +79560,7 @@
       "east"
     ],
     "file": "explore_east_for_55_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -79832,9 +79832,9 @@
       "north"
     ],
     "file": "explore_north_for_60_blocks.js",
-    "quality": 0.036585365853658534,
+    "quality": 0.03529411764705882,
     "successCount": 2,
-    "failureCount": 78,
+    "failureCount": 81,
     "embedding": [
       -0.015530583,
       0.014744651,
@@ -80093,7 +80093,7 @@
       0.0013022221,
       0.004863616
     ],
-    "lastQualityUpdate": 1781759477891
+    "lastQualityUpdate": 1782470359905
   },
   {
     "name": "explore_north_for_60_blocks",
@@ -80104,7 +80104,7 @@
       "north"
     ],
     "file": "explore_north_for_60_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -80376,7 +80376,7 @@
       "south"
     ],
     "file": "explore_south_for_73_blocks.js",
-    "quality": 0.17647058823529413,
+    "quality": 0.13838402947151565,
     "successCount": 2,
     "failureCount": 13,
     "embedding": [
@@ -80650,7 +80650,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v41.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -80922,7 +80922,7 @@
       "east"
     ],
     "file": "explore_east_for_65_blocks.js",
-    "quality": 0.375,
+    "quality": 0.29406606262697077,
     "successCount": 2,
     "failureCount": 4,
     "embedding": [
@@ -81196,7 +81196,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v42.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -81470,7 +81470,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v43.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -81743,7 +81743,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v6.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -82016,7 +82016,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v7.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -82289,7 +82289,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v8.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -82562,7 +82562,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v9.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -82835,7 +82835,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v10.js",
-    "quality": 0.196823888363128,
+    "quality": 0.1568352334010512,
     "successCount": 0,
     "failureCount": 3,
     "embedding": [
@@ -83108,7 +83108,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v11.js",
-    "quality": 0.196823888363128,
+    "quality": 0.1568352334010512,
     "successCount": 0,
     "failureCount": 3,
     "embedding": [
@@ -83381,7 +83381,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v12.js",
-    "quality": 0.49205972090782,
+    "quality": 0.37897472189819337,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -83654,7 +83654,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v13.js",
-    "quality": 0.49205972090782,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -83927,7 +83927,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v14.js",
-    "quality": 0.49205972090782,
+    "quality": 0.3797338097839515,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -84200,9 +84200,9 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v15.js",
-    "quality": 0.0005662514156285391,
+    "quality": 0.0002994908655286014,
     "successCount": 0,
-    "failureCount": 1764,
+    "failureCount": 3337,
     "embedding": [
       -0.028857516,
       0.013104582,
@@ -84461,7 +84461,7 @@
       -0.0007449406,
       -0.015754309
     ],
-    "lastQualityUpdate": 1781780411420
+    "lastQualityUpdate": 1782733596799
   },
   {
     "name": "seek_shelter_urgently_rainy_night_v15",
@@ -84473,7 +84473,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v15.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -84746,7 +84746,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v16.js",
-    "quality": 0.196823888363128,
+    "quality": 0.1568352334010512,
     "successCount": 0,
     "failureCount": 3,
     "embedding": [
@@ -85018,7 +85018,7 @@
       "east"
     ],
     "file": "explore_east_for_63_blocks.js",
-    "quality": 0.42857142857142855,
+    "quality": 0.3360755001451093,
     "successCount": 2,
     "failureCount": 3,
     "embedding": [
@@ -85290,9 +85290,9 @@
       "south"
     ],
     "file": "explore_south_for_52_blocks.js",
-    "quality": 0.13333333333333333,
+    "quality": 0.09225601964767711,
     "successCount": 1,
-    "failureCount": 12,
+    "failureCount": 14,
     "embedding": [
       -0.013247914,
       0.022963578,
@@ -85551,7 +85551,7 @@
       -0.004636173,
       0.011038465
     ],
-    "lastQualityUpdate": 1781627661656
+    "lastQualityUpdate": 1782061543904
   },
   {
     "name": "explore_west_for_54_blocks",
@@ -85562,7 +85562,7 @@
       "west"
     ],
     "file": "explore_west_for_54_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -85834,7 +85834,7 @@
       "north"
     ],
     "file": "explore_north_for_59_blocks.js",
-    "quality": 0.4444444444444444,
+    "quality": 0.3485227408912245,
     "successCount": 3,
     "failureCount": 4,
     "embedding": [
@@ -86106,7 +86106,7 @@
       "north"
     ],
     "file": "explore_north_for_52_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -86378,7 +86378,7 @@
       "north"
     ],
     "file": "explore_north_for_53_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -86652,7 +86652,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v44.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -86926,7 +86926,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v45.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -87200,7 +87200,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v46.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -87472,9 +87472,9 @@
       "south"
     ],
     "file": "explore_south_for_70_blocks.js",
-    "quality": 0.1875,
+    "quality": 0.13838402947151565,
     "successCount": 2,
-    "failureCount": 12,
+    "failureCount": 13,
     "embedding": [
       -0.010182878,
       0.021304365,
@@ -87733,7 +87733,7 @@
       -0.0049803895,
       0.0091772955
     ],
-    "lastQualityUpdate": 1781728518637
+    "lastQualityUpdate": 1782039809671
   },
   {
     "name": "explore_west_for_60_blocks",
@@ -87744,7 +87744,7 @@
       "west"
     ],
     "file": "explore_west_for_60_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -88016,7 +88016,7 @@
       "east"
     ],
     "file": "explore_east_for_70_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -88288,7 +88288,7 @@
       "north"
     ],
     "file": "explore_north_for_61_blocks.js",
-    "quality": 0.5714285714285714,
+    "quality": 0.4481006668601467,
     "successCount": 3,
     "failureCount": 2,
     "embedding": [
@@ -88560,7 +88560,7 @@
       "north"
     ],
     "file": "explore_north_for_61_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -88832,7 +88832,7 @@
       "west"
     ],
     "file": "explore_west_for_68_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -89104,7 +89104,7 @@
       "east"
     ],
     "file": "explore_east_for_60_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -89379,7 +89379,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v8.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -89653,7 +89653,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v47.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -89927,7 +89927,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v48.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -90201,7 +90201,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v49.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -90473,7 +90473,7 @@
       "west"
     ],
     "file": "explore_west_for_54_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -90745,7 +90745,7 @@
       "east"
     ],
     "file": "explore_east_for_75_blocks.js",
-    "quality": 0.5714285714285714,
+    "quality": 0.4481006668601467,
     "successCount": 3,
     "failureCount": 2,
     "embedding": [
@@ -91019,7 +91019,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v50.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -91293,7 +91293,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v51.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -91567,7 +91567,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v52.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -91841,7 +91841,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v53.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -92115,7 +92115,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v54.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -92387,7 +92387,7 @@
       "west"
     ],
     "file": "explore_west_for_52_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -92659,7 +92659,7 @@
       "east"
     ],
     "file": "explore_east_for_75_blocks_v3.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -92931,7 +92931,7 @@
       "west"
     ],
     "file": "explore_west_for_64_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -93203,7 +93203,7 @@
       "east"
     ],
     "file": "explore_east_for_61_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -93475,7 +93475,7 @@
       "west"
     ],
     "file": "explore_west_for_72_blocks.js",
-    "quality": 0.42857142857142855,
+    "quality": 0.3360755001451093,
     "successCount": 2,
     "failureCount": 3,
     "embedding": [
@@ -93747,7 +93747,7 @@
       "west"
     ],
     "file": "explore_west_for_67_blocks.js",
-    "quality": 0.3333333333333333,
+    "quality": 0.26139205566841844,
     "successCount": 1,
     "failureCount": 3,
     "embedding": [
@@ -94021,7 +94021,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v55.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -94295,7 +94295,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v56.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -94567,7 +94567,7 @@
       "south"
     ],
     "file": "explore_south_for_54_blocks.js",
-    "quality": 0.125,
+    "quality": 0.098022020875657,
     "successCount": 1,
     "failureCount": 13,
     "embedding": [
@@ -94839,7 +94839,7 @@
       "west"
     ],
     "file": "explore_west_for_59_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -95111,9 +95111,9 @@
       "west"
     ],
     "file": "explore_west_for_50_blocks.js",
-    "quality": 0.03488372093023256,
+    "quality": 0.03296703296703297,
     "successCount": 2,
-    "failureCount": 82,
+    "failureCount": 87,
     "embedding": [
       -0.021728357,
       0.022768151,
@@ -95372,7 +95372,7 @@
       -0.0035793534,
       -0.0014423303
     ],
-    "lastQualityUpdate": 1781717715350
+    "lastQualityUpdate": 1782553199650
   },
   {
     "name": "explore_west_for_50_blocks",
@@ -95383,7 +95383,7 @@
       "west"
     ],
     "file": "explore_west_for_50_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -95655,7 +95655,7 @@
       "west"
     ],
     "file": "explore_west_for_70_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -95927,7 +95927,7 @@
       "west"
     ],
     "file": "explore_west_for_70_blocks_v3.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -96199,7 +96199,7 @@
       "west"
     ],
     "file": "explore_west_for_60_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -96471,7 +96471,7 @@
       "east"
     ],
     "file": "explore_east_for_71_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -96743,7 +96743,7 @@
       "west"
     ],
     "file": "explore_west_for_75_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 3,
     "failureCount": 3,
     "embedding": [
@@ -97015,8 +97015,8 @@
       "west"
     ],
     "file": "explore_west_for_69_blocks.js",
-    "quality": 0.4,
-    "successCount": 1,
+    "quality": 0.5,
+    "successCount": 2,
     "failureCount": 2,
     "embedding": [
       -0.022254096,
@@ -97276,7 +97276,7 @@
       0.00041326127,
       -0.008361811
     ],
-    "lastQualityUpdate": 1781148926390
+    "lastQualityUpdate": 1782666244089
   },
   {
     "name": "explore_south_for_72_blocks",
@@ -97287,9 +97287,9 @@
       "south"
     ],
     "file": "explore_south_for_72_blocks.js",
-    "quality": 0.13333333333333333,
+    "quality": 0.09225601964767711,
     "successCount": 1,
-    "failureCount": 12,
+    "failureCount": 14,
     "embedding": [
       -0.0063904314,
       0.023849688,
@@ -97548,7 +97548,7 @@
       -0.004907573,
       0.011629353
     ],
-    "lastQualityUpdate": 1781617458677
+    "lastQualityUpdate": 1782063363973
   },
   {
     "name": "explore_north_for_70_blocks_v2",
@@ -97559,7 +97559,7 @@
       "north"
     ],
     "file": "explore_north_for_70_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -97831,7 +97831,7 @@
       "west"
     ],
     "file": "explore_west_for_63_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -98103,7 +98103,7 @@
       "north"
     ],
     "file": "explore_north_for_73_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -98375,7 +98375,7 @@
       "west"
     ],
     "file": "explore_west_for_74_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -98647,7 +98647,7 @@
       "south"
     ],
     "file": "explore_south_for_73_blocks_v2.js",
-    "quality": 0.07142857142857142,
+    "quality": 0.05601258335751834,
     "successCount": 0,
     "failureCount": 12,
     "embedding": [
@@ -98921,7 +98921,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v57.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -99192,7 +99192,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v13.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -99464,7 +99464,7 @@
       "north"
     ],
     "file": "explore_north_for_64_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -99736,7 +99736,7 @@
       "north"
     ],
     "file": "explore_north_for_55_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -100008,7 +100008,7 @@
       "east"
     ],
     "file": "explore_east_for_63_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -100280,7 +100280,7 @@
       "north"
     ],
     "file": "explore_north_for_56_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -100552,7 +100552,7 @@
       "east"
     ],
     "file": "explore_east_for_75_blocks_v4.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -100826,7 +100826,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v58.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -101099,7 +101099,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v17.js",
-    "quality": 0.196823888363128,
+    "quality": 0.1568352334010512,
     "successCount": 0,
     "failureCount": 3,
     "embedding": [
@@ -101372,7 +101372,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v18.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -101645,7 +101645,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v19.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -101918,7 +101918,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v20.js",
-    "quality": 0.196823888363128,
+    "quality": 0.1568352334010512,
     "successCount": 0,
     "failureCount": 3,
     "embedding": [
@@ -102191,9 +102191,9 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v21.js",
-    "quality": 0.49205972090782,
+    "quality": 0.2,
     "successCount": 0,
-    "failureCount": 0,
+    "failureCount": 3,
     "embedding": [
       -0.03749243,
       0.0014590229,
@@ -102452,7 +102452,7 @@
       0.005215535,
       -0.0034073144
     ],
-    "lastQualityUpdate": 1779487207768
+    "lastQualityUpdate": 1782263403602
   },
   {
     "name": "seek_shelter_urgently_rainy_night_v22",
@@ -102464,7 +102464,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v22.js",
-    "quality": 0.49205972090782,
+    "quality": 0.3763298440632068,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -102737,7 +102737,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v23.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -103012,7 +103012,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v9.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -103287,7 +103287,7 @@
       "survival"
     ],
     "file": "swim_to_shore_drowning_and_v10.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -103559,7 +103559,7 @@
       "east"
     ],
     "file": "explore_east_for_60_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -103831,7 +103831,7 @@
       "east"
     ],
     "file": "explore_east_for_51_blocks.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 2,
     "failureCount": 2,
     "embedding": [
@@ -104105,7 +104105,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v59.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -104379,7 +104379,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v60.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -104651,7 +104651,7 @@
       "north"
     ],
     "file": "explore_north_for_51_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -104923,9 +104923,9 @@
       "south"
     ],
     "file": "explore_south_for_57_blocks.js",
-    "quality": 0.13333333333333333,
+    "quality": 0.11764705882352941,
     "successCount": 1,
-    "failureCount": 12,
+    "failureCount": 14,
     "embedding": [
       -0.004712432,
       0.022346215,
@@ -105184,7 +105184,7 @@
       -0.0015255109,
       0.009204467
     ],
-    "lastQualityUpdate": 1781640918176
+    "lastQualityUpdate": 1782540574134
   },
   {
     "name": "explore_north_for_58_blocks",
@@ -105195,7 +105195,7 @@
       "north"
     ],
     "file": "explore_north_for_58_blocks.js",
-    "quality": 0.375,
+    "quality": 0.29406606262697077,
     "successCount": 2,
     "failureCount": 4,
     "embedding": [
@@ -105467,7 +105467,7 @@
       "west"
     ],
     "file": "explore_west_for_58_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -105739,7 +105739,7 @@
       "east"
     ],
     "file": "explore_east_for_57_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -106011,7 +106011,7 @@
       "north"
     ],
     "file": "explore_north_for_75_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -106283,7 +106283,7 @@
       "west"
     ],
     "file": "explore_west_for_75_blocks_v2.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -106555,7 +106555,7 @@
       "east"
     ],
     "file": "explore_east_for_65_blocks_v3.js",
-    "quality": 0.5,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -106828,9 +106828,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food.js",
-    "quality": 0.5879629629629629,
-    "successCount": 126,
-    "failureCount": 88,
+    "quality": 0.7662037037037037,
+    "successCount": 330,
+    "failureCount": 100,
     "embedding": [
       -0.023904702,
       -0.015668334,
@@ -107089,7 +107089,7 @@
       0.013875274,
       0.0015214621
     ],
-    "lastQualityUpdate": 1781786026184
+    "lastQualityUpdate": 1782675620773
   },
   {
     "name": "mine_1_oak_log_v2",
@@ -114717,8 +114717,8 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood.js",
-    "quality": 0.6273764258555133,
-    "successCount": 164,
+    "quality": 0.7580246913580246,
+    "successCount": 306,
     "failureCount": 97,
     "embedding": [
       -0.015936833,
@@ -114978,7 +114978,7 @@
       0.017513644,
       -0.0023011088
     ],
-    "lastQualityUpdate": 1781786428208
+    "lastQualityUpdate": 1782740829025
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v2",
@@ -114990,7 +114990,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v2.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -115263,7 +115263,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v3.js",
-    "quality": 0.024390243902439025,
+    "quality": 0.00781163143576392,
     "successCount": 0,
     "failureCount": 39,
     "embedding": [
@@ -115536,7 +115536,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v4.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -115809,9 +115809,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v5.js",
-    "quality": 0.024390243902439025,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.018264184,
       -0.018360643,
@@ -116070,7 +116070,7 @@
       0.021102382,
       -0.0055669313
     ],
-    "lastQualityUpdate": 1781739548097
+    "lastQualityUpdate": 1781792025513
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v6",
@@ -116082,9 +116082,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v6.js",
-    "quality": 0.024390243902439025,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.017649299,
       -0.020447953,
@@ -116343,7 +116343,7 @@
       0.019006576,
       -0.0050015105
     ],
-    "lastQualityUpdate": 1781774717197
+    "lastQualityUpdate": 1781790902915
   },
   {
     "name": "towntownmph4x8tze3237864_needs_16_more_stone",
@@ -116355,8 +116355,8 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone.js",
-    "quality": 0.5037037037037037,
-    "successCount": 67,
+    "quality": 0.6436170212765957,
+    "successCount": 120,
     "failureCount": 66,
     "embedding": [
       -0.030105041,
@@ -116616,7 +116616,7 @@
       0.01599399,
       0.0003325423
     ],
-    "lastQualityUpdate": 1781774482403
+    "lastQualityUpdate": 1782712012820
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v2",
@@ -116628,7 +116628,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v2.js",
-    "quality": 0.017054090251379012,
+    "quality": 0.00582904520641223,
     "successCount": 0,
     "failureCount": 53,
     "embedding": [
@@ -116901,7 +116901,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v3.js",
-    "quality": 0.017543859649122806,
+    "quality": 0.005624517304432873,
     "successCount": 0,
     "failureCount": 55,
     "embedding": [
@@ -117174,7 +117174,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v7.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -117447,7 +117447,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v8.js",
-    "quality": 0.023255813953488372,
+    "quality": 0.00745575549657382,
     "successCount": 0,
     "failureCount": 41,
     "embedding": [
@@ -117720,9 +117720,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v9.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.00745575549657382,
     "successCount": 0,
-    "failureCount": 40,
+    "failureCount": 41,
     "embedding": [
       -0.016720934,
       -0.01709983,
@@ -117981,7 +117981,7 @@
       0.01758096,
       -0.008698477
     ],
-    "lastQualityUpdate": 1781786472239
+    "lastQualityUpdate": 1781789451013
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v4",
@@ -117993,7 +117993,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v4.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -118265,7 +118265,7 @@
       "wood"
     ],
     "file": "mine_3_oak_logs_v2.js",
-    "quality": 0.49255227318100103,
+    "quality": 0.4990005,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -118538,7 +118538,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v2.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -118811,7 +118811,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v10.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -119084,7 +119084,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v11.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -119357,9 +119357,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v12.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.00745575549657382,
     "successCount": 0,
-    "failureCount": 40,
+    "failureCount": 41,
     "embedding": [
       -0.01909057,
       -0.019567946,
@@ -119618,7 +119618,7 @@
       0.016195767,
       -0.0069185095
     ],
-    "lastQualityUpdate": 1781785337446
+    "lastQualityUpdate": 1781788383722
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v13",
@@ -119630,9 +119630,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v13.js",
-    "quality": 0.0227860655626674,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.016714707,
       -0.022122696,
@@ -119891,7 +119891,7 @@
       0.01948236,
       -0.007955059
     ],
-    "lastQualityUpdate": 1779979003491
+    "lastQualityUpdate": 1781789653836
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v5",
@@ -119903,7 +119903,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v5.js",
-    "quality": 0.017543859649122806,
+    "quality": 0.005624517304432873,
     "successCount": 0,
     "failureCount": 55,
     "embedding": [
@@ -120176,7 +120176,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v3.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -120449,7 +120449,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v24.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -120722,7 +120722,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v6.js",
-    "quality": 0.017054090251379012,
+    "quality": 0.00582904520641223,
     "successCount": 0,
     "failureCount": 53,
     "embedding": [
@@ -121002,9 +121002,9 @@
       "skeleton"
     ],
     "file": "patrol_aggressively_and_fight_hostile_v4.js",
-    "quality": 0.07816458031882045,
+    "quality": 0.018858675667804338,
     "successCount": 0,
-    "failureCount": 10,
+    "failureCount": 15,
     "embedding": [
       -0.03255978,
       -0.0048929057,
@@ -121263,7 +121263,7 @@
       0.008241457,
       0.004528341
     ],
-    "lastQualityUpdate": 1780719300851
+    "lastQualityUpdate": 1781805488212
   },
   {
     "name": "walk_to_the_nearest_shore_v61",
@@ -121276,7 +121276,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v61.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -121549,7 +121549,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v14.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -121822,7 +121822,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v7.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -122096,7 +122096,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v62.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -122369,7 +122369,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v4.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -122643,7 +122643,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v63.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -122917,7 +122917,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v64.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -123191,7 +123191,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v65.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -123469,7 +123469,7 @@
       "miner"
     ],
     "file": "continue_mining_underground_or_shelter.js",
-    "quality": 0.5092428858024104,
+    "quality": 0.17810971464037428,
     "successCount": 4,
     "failureCount": 3,
     "embedding": [
@@ -123742,9 +123742,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v15.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.00745575549657382,
     "successCount": 0,
-    "failureCount": 40,
+    "failureCount": 41,
     "embedding": [
       -0.01810753,
       -0.017149663,
@@ -124003,7 +124003,7 @@
       0.014544819,
       -0.009099353
     ],
-    "lastQualityUpdate": 1781786375782
+    "lastQualityUpdate": 1781788550044
   },
   {
     "name": "walk_to_the_nearest_shore_v66",
@@ -124016,7 +124016,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v66.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -124295,7 +124295,7 @@
       "lumberjack"
     ],
     "file": "chop_nearby_trees_and_stockpile.js",
-    "quality": 0.7777777777777778,
+    "quality": 0.2493536004965236,
     "successCount": 6,
     "failureCount": 1,
     "embedding": [
@@ -124569,7 +124569,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v67.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -124842,7 +124842,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v8.js",
-    "quality": 0.017543859649122806,
+    "quality": 0.005624517304432873,
     "successCount": 0,
     "failureCount": 55,
     "embedding": [
@@ -125120,8 +125120,8 @@
       "rest"
     ],
     "file": "seek_shelter_and_sleep_through.js",
-    "quality": 0.34768997030647353,
-    "successCount": 10,
+    "quality": 0.13444410718015337,
+    "successCount": 12,
     "failureCount": 17,
     "embedding": [
       -0.031855743,
@@ -125381,7 +125381,7 @@
       0.011526182,
       -0.01743382
     ],
-    "lastQualityUpdate": 1780804416031
+    "lastQualityUpdate": 1781953159634
   },
   {
     "name": "walk_to_the_nearest_shore_v68",
@@ -125394,7 +125394,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v68.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -126755,7 +126755,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v5.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -127029,7 +127029,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v69.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -127302,7 +127302,7 @@
       "safety"
     ],
     "file": "seek_shelter_urgently_rainy_night_v25.js",
-    "quality": 0.49205972090782,
+    "quality": 0.392088083502628,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -127574,7 +127574,7 @@
       "north"
     ],
     "file": "explore_north_for_220_blocks.js",
-    "quality": 0.4,
+    "quality": 0.3136704668021024,
     "successCount": 1,
     "failureCount": 2,
     "embedding": [
@@ -127852,9 +127852,9 @@
       "rest"
     ],
     "file": "seek_shelter_and_sleep_through_v2.js",
-    "quality": 0.08283191841059914,
+    "quality": 0.024661345104051796,
     "successCount": 0,
-    "failureCount": 9,
+    "failureCount": 11,
     "embedding": [
       -0.02932428,
       -0.007829114,
@@ -128113,7 +128113,7 @@
       0.012009041,
       -0.015939662
     ],
-    "lastQualityUpdate": 1780677299383
+    "lastQualityUpdate": 1782021423669
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v9",
@@ -128125,7 +128125,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v9.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -128405,9 +128405,9 @@
       "farmer"
     ],
     "file": "tend_crops_plant_seeds_and_v4.js",
-    "quality": 0.03908229015941023,
+    "quality": 0.011862106995048916,
     "successCount": 0,
-    "failureCount": 22,
+    "failureCount": 25,
     "embedding": [
       -0.045077547,
       0.003618978,
@@ -128666,7 +128666,7 @@
       0.0091339,
       0.0008232617
     ],
-    "lastQualityUpdate": 1780005105397
+    "lastQualityUpdate": 1781991146957
   },
   {
     "name": "mine_the_new_ironingot_deposit_v14",
@@ -128676,7 +128676,7 @@
       "iron_ingot"
     ],
     "file": "mine_the_new_ironingot_deposit_v14.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.5,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -128949,7 +128949,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v6.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -129222,9 +129222,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v16.js",
-    "quality": 0.0228774381420938,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.020435734,
       -0.022647785,
@@ -129483,7 +129483,7 @@
       0.014496993,
       -0.007781442
     ],
-    "lastQualityUpdate": 1779990514904
+    "lastQualityUpdate": 1781792640905
   },
   {
     "name": "continue_mining_underground_or_shelter_v2",
@@ -129500,7 +129500,7 @@
       "miner"
     ],
     "file": "continue_mining_underground_or_shelter_v2.js",
-    "quality": 0.4583185972221696,
+    "quality": 0.16029874317633674,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -129773,7 +129773,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v17.js",
-    "quality": 0.023255813953488372,
+    "quality": 0.00745575549657382,
     "successCount": 0,
     "failureCount": 41,
     "embedding": [
@@ -130046,7 +130046,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v7.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -130319,7 +130319,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v10.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -130597,7 +130597,7 @@
       "rest"
     ],
     "file": "seek_shelter_and_sleep_through_v3.js",
-    "quality": 0.07051055341879531,
+    "quality": 0.024661345104051796,
     "successCount": 0,
     "failureCount": 11,
     "embedding": [
@@ -130871,7 +130871,7 @@
       "survival"
     ],
     "file": "walk_to_the_nearest_shore_v70.js",
-    "quality": 0.48086597133924514,
+    "quality": 0.3913042994237063,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -131416,7 +131416,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v11.js",
-    "quality": 0.017543859649122806,
+    "quality": 0.005624517304432873,
     "successCount": 0,
     "failureCount": 55,
     "embedding": [
@@ -131689,7 +131689,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v12.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -131967,7 +131967,7 @@
       "rest"
     ],
     "file": "seek_shelter_and_sleep_through_v4.js",
-    "quality": 0.07592925854304913,
+    "quality": 0.0267164571960561,
     "successCount": 0,
     "failureCount": 10,
     "embedding": [
@@ -132240,9 +132240,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v18.js",
-    "quality": 0.024390243902439025,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.021068953,
       -0.022062693,
@@ -132501,7 +132501,7 @@
       0.0153695205,
       -0.010376842
     ],
-    "lastQualityUpdate": 1781770612055
+    "lastQualityUpdate": 1781789923986
   },
   {
     "name": "towntownmph4x8tze3237864_needs_32_more_wood_v19",
@@ -132513,9 +132513,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v19.js",
-    "quality": 0.0228774381420938,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.02005573,
       -0.018833276,
@@ -132774,7 +132774,7 @@
       0.016782898,
       -0.0067122923
     ],
-    "lastQualityUpdate": 1779992847357
+    "lastQualityUpdate": 1781793048950
   },
   {
     "name": "mine_1_oak_log_v32",
@@ -133058,7 +133058,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v8.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -133331,7 +133331,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v13.js",
-    "quality": 0.017054090251379012,
+    "quality": 0.00582904520641223,
     "successCount": 0,
     "failureCount": 53,
     "embedding": [
@@ -133609,9 +133609,9 @@
       "rest"
     ],
     "file": "seek_shelter_and_rest_until.js",
-    "quality": 0.33104998723265133,
-    "successCount": 11,
-    "failureCount": 21,
+    "quality": 0.36978398887462527,
+    "successCount": 14,
+    "failureCount": 24,
     "embedding": [
       -0.040234275,
       0.0036500636,
@@ -133870,7 +133870,7 @@
       0.011802392,
       -0.010142439
     ],
-    "lastQualityUpdate": 1780680584984
+    "lastQualityUpdate": 1782135502981
   },
   {
     "name": "towntownmph4x8tze3237864_needs_8_more_food_v14",
@@ -133882,7 +133882,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v14.js",
-    "quality": 0.01818181818181818,
+    "quality": 0.00582904520641223,
     "successCount": 0,
     "failureCount": 53,
     "embedding": [
@@ -134155,9 +134155,9 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v20.js",
-    "quality": 0.024390243902439025,
+    "quality": 0.007286306508015292,
     "successCount": 0,
-    "failureCount": 39,
+    "failureCount": 42,
     "embedding": [
       -0.018087396,
       -0.024204824,
@@ -134416,7 +134416,7 @@
       0.017717442,
       -0.006635579
     ],
-    "lastQualityUpdate": 1781766239247
+    "lastQualityUpdate": 1781791909948
   },
   {
     "name": "towntownmph4x8tze3237864_needs_16_more_stone_v9",
@@ -134428,7 +134428,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v9.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [
@@ -134707,7 +134707,7 @@
       "lumberjack"
     ],
     "file": "chop_nearby_trees_and_stockpile_v2.js",
-    "quality": 0.46898748191292283,
+    "quality": 0.16029874317633674,
     "successCount": 0,
     "failureCount": 0,
     "embedding": [
@@ -134980,7 +134980,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_32_more_wood_v21.js",
-    "quality": 0.023809523809523808,
+    "quality": 0.007633273484587455,
     "successCount": 0,
     "failureCount": 40,
     "embedding": [
@@ -135253,7 +135253,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_8_more_food_v15.js",
-    "quality": 0.017857142857142856,
+    "quality": 0.005724955113440597,
     "successCount": 0,
     "failureCount": 54,
     "embedding": [
@@ -135526,7 +135526,7 @@
       "supply"
     ],
     "file": "towntownmph4x8tze3237864_needs_16_more_stone_v10.js",
-    "quality": 0.019956914123954148,
+    "quality": 0.006821223113886645,
     "successCount": 0,
     "failureCount": 45,
     "embedding": [

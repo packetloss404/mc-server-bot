@@ -52,13 +52,20 @@ export class AnthropicClient implements LLMClient {
           ]
         : systemPrompt;
 
-      const body = {
+      const body: Record<string, any> = {
         model: this.model,
         system: systemField,
-        temperature: this.temperature,
         max_tokens: maxTokens || this.defaultMaxTokens,
         messages: this.toAnthropicMessages(contents),
       };
+      // Opus 4.6+ / Fable reasoning models reject a custom `temperature` (HTTP
+      // 400, which is terminal in ModelRouter — so the codegen/critic fallback to
+      // claude-opus-4-8 silently died on every call). Only send temperature for
+      // models that accept it (Sonnet/Haiku and older Opus).
+      const rejectsTemperature = /claude-(opus-4-(6|7|8|9)|fable|mythos)/i.test(this.model);
+      if (!rejectsTemperature) {
+        body.temperature = this.temperature;
+      }
 
       const resp = await fetch(this.baseUrl, {
         method: 'POST',

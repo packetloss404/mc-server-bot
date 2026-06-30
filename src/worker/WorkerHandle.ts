@@ -207,11 +207,13 @@ export class WorkerHandle {
     // LLM
     if (type === 'llm.chat') {
       if (!this.llmClient) throw new Error('No LLM client available');
-      return this.llmClient.chat(args[0], args[1], args[2]);
+      // args[3] = LLMCallOptions ({taskType, botName}) — forward it so per-task
+      // routing/temperature in ModelRouter actually applies to fleet calls.
+      return this.llmClient.chat(args[0], args[1], args[2], args[3]);
     }
     if (type === 'llm.generate') {
       if (!this.llmClient) throw new Error('No LLM client available');
-      return this.llmClient.generate(args[0], args[1], args[2]);
+      return this.llmClient.generate(args[0], args[1], args[2], args[3]);
     }
     if (type === 'llm.embed') {
       if (!this.llmClient?.embed) throw new Error('LLM client does not support embed');

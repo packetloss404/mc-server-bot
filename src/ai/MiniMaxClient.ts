@@ -1,5 +1,6 @@
 import { LLMClient, LLMResponse } from './LLMClient';
 import { Semaphore } from '../util/Semaphore';
+import { logger } from '../util/logger';
 
 type GeminiLikeContent = {
   role?: string;
@@ -72,12 +73,27 @@ export class MiniMaxClient implements LLMClient {
       }
 
       const json: any = await resp.json();
-      const raw = json.choices?.[0]?.message?.content?.trim();
+      const choice = json.choices?.[0];
+      const raw = choice?.message?.content?.trim();
       if (!raw) throw new Error('No text in MiniMax response');
-      // MiniMax M2.x models stream chain-of-thought inside <think>...</think>
-      // blocks before the real answer. Strip them so downstream JSON parsers
-      // and prompt logic only see the final response.
-      const text = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim() || raw;
+      // Truncation guard (mirrors GeminiClient's MAX_TOKENS handling, which
+      // MiniMaxClient previously lacked). M2.x/M3 are chain-of-thought models;
+      // when the output hits the token cap mid-reasoning the closing </think>
+      // and/or the code block never arrive, and the half-written blob would
+      // otherwise reach Babel as "Unterminated template". Surface it loudly.
+      if (choice?.finish_reason === 'length') {
+        logger.warn(
+          { model: this.model, outputTokens: json.usage?.completion_tokens },
+          'MiniMax response truncated (finish_reason=length) — raise codeGenMaxTokens',
+        );
+      }
+      // Strip chain-of-thought. First closed <think>...</think> blocks, then an
+      // UNTERMINATED <think> (truncated before its closing tag) — drop everything
+      // from the dangling tag onward so raw reasoning never reaches a code/JSON
+      // parser. Fall back to raw only if stripping left nothing.
+      let text = raw.replace(/<think>[\s\S]*?<\/think>\s*/g, '').trim();
+      text = text.replace(/<think>[\s\S]*$/g, '').trim();
+      if (!text) text = raw;
       return {
         text,
         inputTokens: json.usage?.prompt_tokens,

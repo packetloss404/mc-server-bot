@@ -49,12 +49,21 @@ export class OpenAIClient implements LLMClient {
         else messages.push({ role, content: text });
       }
 
-      const body = {
-        model: this.model,
-        messages,
-        temperature: this.temperature,
-        max_tokens: maxTokens || this.defaultMaxTokens,
-      };
+      const tokenLimit = maxTokens || this.defaultMaxTokens;
+      // GPT-5-era / reasoning models renamed the output cap to `max_completion_tokens`
+      // and reject any non-default `temperature` (both return HTTP 400). Detect by
+      // model id and branch — the legacy path (max_tokens + temperature) still serves
+      // gpt-4* and OpenAI-compatible hosts (OpenRouter, Azure, llama.cpp) reached via
+      // baseUrl. Verified June 2026 against OpenAI gpt-5.5 docs.
+      const isReasoningEra = /^(gpt-5|gpt-6|o[1-9])/i.test(this.model) || /codex/i.test(this.model);
+      const body: Record<string, any> = { model: this.model, messages };
+      if (isReasoningEra) {
+        body.max_completion_tokens = tokenLimit;
+        // Deliberately omit temperature: reasoning models only accept the default.
+      } else {
+        body.max_tokens = tokenLimit;
+        body.temperature = this.temperature;
+      }
 
       const resp = await fetch(`${this.baseUrl}/chat/completions`, {
         method: 'POST',

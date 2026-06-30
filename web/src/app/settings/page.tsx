@@ -227,6 +227,8 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
     ],
     anthropic: [
       // Current
+      'claude-fable-5',
+      'claude-opus-4-8',
       'claude-opus-4-7',
       'claude-sonnet-4-6',
       'claude-haiku-4-5',
@@ -237,21 +239,19 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
       'claude-opus-4-1',
     ],
     openai: [
-      // Frontier (gpt-5.4 family)
-      'gpt-5.4',
-      'gpt-5.4-pro',
+      // Frontier (gpt-5.5 — GA; size variants are still 5.4 tier)
+      'gpt-5.5',
+      'gpt-5.5-pro',
+      'gpt-5.3-codex',     // most capable agentic coding model
       'gpt-5.4-mini',
       'gpt-5.4-nano',
-      // gpt-5 family
+      // older
       'gpt-5',
-      'gpt-5-mini',
-      'gpt-5-nano',
-      // Older
       'gpt-4.1',
-      'gpt-4.1-mini',
       'gpt-4o',
     ],
     minimax: [
+      'MiniMax-M3',
       'MiniMax-M2.7-highspeed',
       'MiniMax-M2.7',
       'MiniMax-M2.5',

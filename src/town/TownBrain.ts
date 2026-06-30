@@ -54,6 +54,7 @@ import {
   CORE_RESOURCE_THRESHOLDS,
   RESOURCE_KEYWORDS,
   RESOURCE_ROLE,
+  resourceLocaleHint,
 } from './resourceThresholds';
 import * as budgetLedger from './budgetLedger';
 import { logger } from '../util/logger';
@@ -488,7 +489,7 @@ export class TownBrain {
       // Hand the shortage off to the role loop on this tick — it pulls from
       // the idle pool to staff up before the next demand loop runs.
       this.currentTickShortages.push(resource);
-      const description = `town:${this.townId} needs ${need} more ${resource} (requesting role: ${role})`;
+      const description = `town:${this.townId} needs ${need} more ${resource} (requesting role: ${role}).${resourceLocaleHint(resource)}`;
       // BlackboardManager.addTask requires a Task — we hand it a minimal one;
       // the Voyager loop synthesizes spec/guidance downstream.
       this.blackboard.addTask(

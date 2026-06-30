@@ -45,3 +45,35 @@ export const RESOURCE_ROLE: Record<string, string> = {
   food: 'farmer',
   iron: 'blacksmith',
 };
+
+/**
+ * Where each core resource lives in the world. Drives the locational
+ * precondition baked into demand-loop supply tasks: the dominant town-task
+ * failure was a SURFACE-resource task (food/wood) being claimed by a bot deep
+ * underground, which then fruitlessly searched for wheat/trees among deepslate
+ * and gave up. The hint tells whichever bot claims the task to relocate
+ * vertically FIRST instead of searching in the wrong layer.
+ */
+export const RESOURCE_LOCALE: Record<string, 'surface' | 'underground'> = {
+  wood: 'surface',
+  food: 'surface',
+  stone: 'underground',
+  iron: 'underground',
+};
+
+/**
+ * Build the locational precondition clause appended to a supply-task
+ * description. Empty string for resources with no clear vertical bias.
+ */
+export function resourceLocaleHint(resource: string): string {
+  const locale = RESOURCE_LOCALE[resource];
+  if (locale === 'surface') {
+    // Wording deliberately avoids the words surface/swim/water/food/etc. so it
+    // does not trip the keyword-matched survival categories in TaskGuidance.
+    return ' LOCATION: this resource is found ABOVE GROUND in open daylight. If you are underground or walled in by stone/deepslate (low Y, no open sky overhead), travel UP to open sky FIRST: scan your column for the highest solid block (or a grass_block) and moveTo just above it, then search. Do NOT look for it down in the rock.';
+  }
+  if (locale === 'underground') {
+    return ' LOCATION: this resource is found UNDERGROUND. If none is near you at ground level, dig a staircase DOWN to the stone layer FIRST (around Y 0 to 48; never dig straight down under your feet), then search.';
+  }
+  return '';
+}

@@ -12,6 +12,33 @@ export function buildTaskGuidance(task: Task): TaskGuidance {
   const spec = inferTaskSpec(task);
   const target = spec.target || inferTarget(task.description);
 
+  // Town supply tasks ("town:<id> needs N more <resource> ...") are GATHER
+  // tasks. Route them explicitly BEFORE the keyword-matched survival branches
+  // below — otherwise "needs 8 more food" matches the /food/ survival branch
+  // and the bot is told to EAT food instead of collecting it. The LOCATION
+  // precondition baked into the description (resourceLocaleHint) tells the bot
+  // to relocate to the right layer first; reinforce it here.
+  const supplyMatch = task.description.match(/needs\s+\d+\s+more\s+(wood|stone|food|iron)\b/i);
+  if (supplyMatch) {
+    const resource = supplyMatch[1].toLowerCase();
+    const collect: Record<string, string> = {
+      wood: 'Find any tree and mineBlock a *_log type (oak_log, spruce_log, birch_log, ...). Any log variant counts.',
+      stone: 'mineBlock stone or cobblestone (or deepslate at depth). You need a pickaxe — craft a wooden/stone pickaxe first if you have none.',
+      food: 'Do NOT eat your food. COLLECT it: harvest wheat/carrots/potatoes from farmland, or killMob a cow/pig/chicken/sheep and pick up the dropped meat. Keep it in inventory for the town.',
+      iron: 'mineBlock iron_ore underground (needs a stone pickaxe or better), then smeltItem the raw iron into iron_ingot.',
+    };
+    return {
+      category: 'gather',
+      prompt: task.description,
+      guidance: [
+        `Goal: COLLECT ${resource} and keep it in your inventory for the town (this is a supply run, not consumption).`,
+        collect[resource],
+        'If the resource is not where you are, follow the LOCATION hint in the task and relocate to the correct layer BEFORE giving up.',
+        'If nothing is found after relocating and exploring once, return cleanly — the task retries next cycle.',
+      ],
+    };
+  }
+
   if (spec.kind === 'craft') {
     return {
       category: 'craft',

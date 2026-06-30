@@ -188,6 +188,20 @@ export function registerTownRoutes(
     res.json({ brain: status });
   });
 
+  // Per-resource demand snapshot (on-hand vs tier threshold) — read-only view
+  // of the demand loop's shortage math so the dashboard can show what the town
+  // is short on without inferring it from the supply-task queue.
+  app.get('/api/towns/:id/demand', (req: Request, res: Response) => {
+    const tm = botManager.getTownManager();
+    const id = String(req.params.id);
+    if (!tm.getTown(id)) {
+      res.status(404).json({ error: 'Town not found' });
+      return;
+    }
+    const brain = tm.getTownBrain(id);
+    res.json({ demand: brain ? brain.computeDemand() : [] });
+  });
+
   app.delete('/api/towns/:id', (req: Request, res: Response) => {
     const ok = botManager.getTownManager().abandonTown(String(req.params.id));
     if (!ok) {

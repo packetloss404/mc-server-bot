@@ -2097,6 +2097,37 @@ export class BotInstance {
     const heldItem = this.bot.heldItem;
     const equipment = heldItem ? { name: heldItem.name, count: heldItem.count } : null;
 
+    // Armor / offhand / hotbar from the inventory window slots (mineflayer
+    // canonical indices: 5-8 armor head→feet, 36-44 hotbar, 45 offhand). The
+    // dashboard's EquipmentDisplay + hotbar row consume these; previously never
+    // emitted, so those slots always rendered empty.
+    const slots = this.bot.inventory.slots;
+    const slotItem = (i: number) => {
+      const it = slots[i];
+      return it ? { name: it.name, count: it.count } : null;
+    };
+    const armor = {
+      helmet: slotItem(5),
+      chestplate: slotItem(6),
+      leggings: slotItem(7),
+      boots: slotItem(8),
+    };
+    const offhand = slotItem(45);
+    const hotbar = Array.from({ length: 9 }, (_, i) => {
+      const it = slots[36 + i];
+      return it ? { name: it.name, count: it.count, slot: it.slot } : null;
+    });
+
+    // Accumulated stats + combat/instinct state for the Stats and Activity
+    // panels (both previously rendered placeholder zeros because these fields
+    // were never sent).
+    const stats = this.statsTracker.getStats(this.name);
+    const combat = {
+      lastAttackerName: this.lastAttackerName,
+      lastAttackedAt: this.lastAttackedAt,
+      instinctActive: this.instinctActive,
+    };
+
     // World context via Observation. renderObservation does a 512-block scan
     // that's too expensive to run on every 2s status push — cache 10s.
     const WORLD_TTL_MS = 10_000;
@@ -2137,6 +2168,7 @@ export class BotInstance {
         isPaused: this.voyagerLoop.isPaused(),
         currentTask: this.voyagerLoop.getCurrentTask(),
         queuedTasks: this.voyagerLoop.getQueuedTasks(),
+        queuedTaskCount: this.voyagerLoop.getQueuedTasks().length,
         longTermGoal: this.voyagerLoop.getLongTermGoal(),
         completedTasks: this.voyagerLoop.getCompletedTasks(),
         failedTasks: this.voyagerLoop.getFailedTasks(),
@@ -2151,7 +2183,12 @@ export class BotInstance {
       health: this.bot.health,
       food: this.bot.food,
       equipment,
+      armor,
+      offhand,
+      hotbar,
       inventory,
+      stats,
+      combat,
       world,
       voyager,
     };

@@ -54,6 +54,7 @@ import {
   CORE_RESOURCE_THRESHOLDS,
   RESOURCE_KEYWORDS,
   RESOURCE_ROLE,
+  RESOURCE_LOCALE,
   resourceLocaleHint,
 } from './resourceThresholds';
 import * as budgetLedger from './budgetLedger';
@@ -533,6 +534,40 @@ export class TownBrain {
         'TownBrain demand: queued supply task',
       );
     }
+  }
+
+  /**
+   * On-demand snapshot of the demand loop's per-resource shortage math, for the
+   * dashboard's Resource Demand card. Same inputs the demand loop uses
+   * (aggregate resident inventory vs the tier thresholds) but read-only — it
+   * queues nothing. Returns one row per core resource with have/threshold/need
+   * plus the role and locale that supply tasks are tagged with.
+   */
+  computeDemand(): Array<{
+    resource: string;
+    have: number;
+    threshold: number;
+    need: number;
+    role: string;
+    locale: string;
+  }> {
+    const town = this.townManager.getTown(this.townId);
+    if (!town) return [];
+    const residents = this.townManager.listResidents(this.townId);
+    const totals = this.aggregateResidentInventory(residents.map((r) => r.botName));
+    const thresholds =
+      CORE_RESOURCE_THRESHOLDS[town.tier as TownTier] ?? CORE_RESOURCE_THRESHOLDS.founding;
+    return Object.entries(thresholds).map(([resource, threshold]) => {
+      const have = totals[resource] ?? 0;
+      return {
+        resource,
+        have,
+        threshold,
+        need: Math.max(0, threshold - have),
+        role: RESOURCE_ROLE[resource] ?? 'gatherer',
+        locale: RESOURCE_LOCALE[resource] ?? 'any',
+      };
+    });
   }
 
   private aggregateResidentInventory(botNames: string[]): Record<string, number> {

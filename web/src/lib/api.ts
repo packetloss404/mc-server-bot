@@ -1182,6 +1182,13 @@ export const api = {
       `/api/towns/${encodeURIComponent(id)}/brain`,
     ).catch(() => null as { brain: TownBrainStatusDTO } | null),
 
+  // Per-resource demand snapshot (on-hand vs tier threshold). Swallows errors
+  // so the Resource Demand card just hides until the backend/brain is up.
+  getTownDemand: (id: string) =>
+    fetchJSON<{ demand: TownResourceDemand[] }>(
+      `/api/towns/${encodeURIComponent(id)}/demand`,
+    ).catch(() => null as { demand: TownResourceDemand[] } | null),
+
   // ─── Town roles & schedules (Phase 3 — parallel backend agent) ───
   //
   // GET endpoints swallow errors so the UI can fall back to a "no role data
@@ -1444,6 +1451,16 @@ export interface TownBrainStatusDTO {
   /** Epoch ms of the last completed tick; null when none have run yet. */
   lastTickAt: number | null;
   ticks: number;
+}
+
+/** One row of the town's per-resource demand snapshot (on-hand vs threshold). */
+export interface TownResourceDemand {
+  resource: string;
+  have: number;
+  threshold: number;
+  need: number;
+  role: string;
+  locale: string;
 }
 
 // Phase 6-A — minimal mirror of the BlackboardTask shape the decree endpoint

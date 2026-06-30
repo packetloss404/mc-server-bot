@@ -70,6 +70,19 @@ export class StatsTracker {
     this.persist();
   }
 
+  /** Public snapshot of a bot's accumulated stats for the dashboard. Returns a
+   *  shallow copy so callers can't mutate the live record. */
+  getStats(botName: string): BotStats {
+    const s = this.ensure(botName);
+    return {
+      mined: { ...s.mined }, crafted: { ...s.crafted }, smelted: { ...s.smelted },
+      placed: { ...s.placed }, killed: { ...s.killed }, withdrew: { ...s.withdrew },
+      deposited: { ...s.deposited },
+      deaths: s.deaths, interrupts: s.interrupts,
+      movementTimeouts: s.movementTimeouts, damageTaken: s.damageTaken,
+    };
+  }
+
   summary(botName: string): string {
     const stats = this.ensure(botName);
     return [

@@ -10,6 +10,7 @@ import { useTownStore, type Town, type TownEvent } from '@/lib/townStore';
 import { TownPicker } from '@/components/town/TownPicker';
 import { TownStatusCard } from '@/components/town/TownStatusCard';
 import { BrainStatusCard } from '@/components/town/BrainStatusCard';
+import { ResourceDemandCard } from '@/components/town/ResourceDemandCard';
 import { FoundTownModal } from '@/components/town/FoundTownModal';
 import { RoleBreakdownCard } from '@/components/town/RoleBreakdownCard';
 import { ScheduleStripCard } from '@/components/town/ScheduleStripCard';
@@ -280,8 +281,11 @@ function TownBody({ town, events, buildingCount }: BodyProps) {
         />
       </div>
 
-      {/* Town Brain status (followup #38) — running/paused, last tick, count. */}
-      <BrainStatusCard townId={town.id} />
+      {/* Operational status — brain lifecycle + per-resource demand snapshot. */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <BrainStatusCard townId={town.id} />
+        <ResourceDemandCard townId={town.id} />
+      </div>
 
       {/* Mayor (Phase 6-A) — current mayor + decree form. */}
       <MayorPanelCard town={town} />

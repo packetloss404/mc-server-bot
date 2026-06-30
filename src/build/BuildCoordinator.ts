@@ -113,6 +113,41 @@ const SITE_PREP_DEFAULT_TIMEOUT_MS = 240_000; // 4 minutes — matches the
 // clearSite/snapToGround). Raised from 2.5min when SiteSelector's budget was
 // bumped to handle realistic town-scale (19x23+) schematic footprints.
 
+/**
+ * Nearest origin to `origin` whose footprint (corner-origin, size x/z),
+ * inflated by `margin`, clears every avoid rectangle. Coarse 8-direction ring
+ * search out to ~320 blocks; preserves Y (snapToGround/clearSite handles the
+ * terrain at the chosen spot). Used as the avoid-aware fallback when
+ * SiteSelector finds no flat site — so we never drop a build back onto an
+ * existing one just because no perfectly-flat candidate qualified.
+ */
+function nearestAvoidClearOrigin(
+  origin: { x: number; y: number; z: number },
+  size: { x: number; z: number },
+  avoidRects: Array<{ x1: number; x2: number; z1: number; z2: number }>,
+  margin: number,
+): { x: number; y: number; z: number } {
+  if (avoidRects.length === 0) return origin;
+  const clears = (x: number, z: number): boolean => {
+    const ax1 = x - margin, ax2 = x + size.x + margin;
+    const az1 = z - margin, az2 = z + size.z + margin;
+    return !avoidRects.some((r) => ax1 < r.x2 && ax2 > r.x1 && az1 < r.z2 && az2 > r.z1);
+  };
+  if (clears(origin.x, origin.z)) return origin;
+  const STEP = 8;
+  for (let ring = 1; ring <= 40; ring++) {
+    const d = ring * STEP;
+    const cands: Array<[number, number]> = [
+      [origin.x + d, origin.z], [origin.x - d, origin.z],
+      [origin.x, origin.z + d], [origin.x, origin.z - d],
+      [origin.x + d, origin.z + d], [origin.x - d, origin.z - d],
+      [origin.x + d, origin.z - d], [origin.x - d, origin.z + d],
+    ];
+    for (const [x, z] of cands) if (clears(x, z)) return { x, y: origin.y, z };
+  }
+  return origin;
+}
+
 // ── Build Coordinator ───────────────────────────────────────
 
 export class BuildCoordinator {
@@ -2596,6 +2631,21 @@ export class BuildCoordinator {
         spacingMargin: avoidOpts?.spacingMargin,
       });
       if (!cand) {
+        // No flat site qualified. Falling back to the raw supplied origin would
+        // re-create the very overlap the avoid-gate just prevented (it's the
+        // capital, usually already built on). Instead spiral out geometrically
+        // to the nearest origin whose footprint+margin clears every avoidRect —
+        // snapToGround/clearSite will handle the (possibly uneven) terrain there.
+        const avoidClear = nearestAvoidClearOrigin(
+          fallbackOrigin,
+          schSize,
+          avoidOpts?.avoidRects ?? [],
+          avoidOpts?.spacingMargin ?? 5,
+        );
+        if (avoidClear.x !== fallbackOrigin.x || avoidClear.z !== fallbackOrigin.z) {
+          logger.warn({ from: fallbackOrigin, to: avoidClear }, 'originMode auto-flat: no flat site; using nearest avoid-clear origin');
+          return avoidClear;
+        }
         logger.warn({ refPos: fallbackOrigin }, 'originMode auto-flat: no acceptable site found near supplied origin, using supplied origin');
         return fallbackOrigin;
       }

@@ -5,14 +5,18 @@ import { api, type Command, type Mission } from '@/lib/api';
 import { useToast } from '@/components/Toast';
 
 const STATUS_COLORS: Record<string, string> = {
-  pending: '#F59E0B',
-  dispatched: '#3B82F6',
+  // command statuses (CommandStatus)
+  queued: '#F59E0B',
+  started: '#8B5CF6',
+  succeeded: '#10B981',
+  // mission statuses (MissionStatus)
+  draft: '#6B7280',
   running: '#8B5CF6',
-  active: '#8B5CF6',
+  paused: '#F59E0B',
   completed: '#10B981',
+  // shared
   failed: '#EF4444',
   cancelled: '#6B7280',
-  paused: '#F59E0B',
 };
 
 interface Props {
@@ -35,11 +39,13 @@ export function CommandHistoryPanel({ botName }: Props) {
       let cmds = cmdRes.commands;
       let miss = missRes.missions;
       if (botName) {
-        cmds = cmds.filter((c) => c.botName === botName);
-        miss = miss.filter((m) => m.botName === botName);
+        cmds = cmds.filter((c) => c.targets?.includes(botName));
+        miss = miss.filter((m) => m.assigneeIds?.includes(botName));
       }
-      setCommands(cmds.sort((a, b) => b.createdAt - a.createdAt));
-      setMissions(miss.sort((a, b) => b.createdAt - a.createdAt));
+      // createdAt is an ISO string on commands and a number on missions; route
+      // both through Date so the subtraction doesn't yield NaN on the strings.
+      setCommands(cmds.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
+      setMissions(miss.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
     } catch {
       // silent
     }
@@ -72,7 +78,7 @@ export function CommandHistoryPanel({ botName }: Props) {
     }
   };
 
-  const formatTime = (ts: number) => {
+  const formatTime = (ts: number | string) => {
     const d = new Date(ts);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
@@ -114,7 +120,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-mono text-zinc-300">{cmd.type}</span>
-                      <span className="text-[10px] text-zinc-500">-&gt; {cmd.botName}</span>
+                      <span className="text-[10px] text-zinc-500">-&gt; {cmd.targets?.join(', ') || '—'}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <span
@@ -123,7 +129,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                       >
                         {cmd.status}
                       </span>
-                      {(cmd.status === 'pending' || cmd.status === 'running') && (
+                      {(cmd.status === 'queued' || cmd.status === 'started') && (
                         <button
                           onClick={() => handleCancelCommand(cmd.id)}
                           className="text-[10px] text-zinc-500 hover:text-red-400 transition-colors"
@@ -134,7 +140,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                     </div>
                   </div>
                   <p className="text-[10px] text-zinc-600 font-mono">{formatTime(cmd.createdAt)}</p>
-                  {cmd.error && <p className="text-[10px] text-red-400/70 mt-1">{typeof cmd.error === 'string' ? cmd.error : ((cmd.error as { message?: string }).message ?? JSON.stringify(cmd.error))}</p>}
+                  {cmd.error && <p className="text-[10px] text-red-400/70 mt-1">{cmd.error}</p>}
                 </div>
               ))}
             </div>
@@ -149,7 +155,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                   <div className="flex items-center justify-between mb-1">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-mono text-zinc-300">{m.type}</span>
-                      <span className="text-[10px] text-zinc-500">-&gt; {m.botName}</span>
+                      <span className="text-[10px] text-zinc-500">-&gt; {m.assigneeIds?.join(', ') || '—'}</span>
                     </div>
                     <span
                       className="text-[10px] font-medium px-1.5 py-0.5 rounded"
@@ -159,24 +165,19 @@ export function CommandHistoryPanel({ botName }: Props) {
                     </span>
                   </div>
                   <p className="text-xs text-zinc-400 mt-1 truncate">{m.description}</p>
-                  {m.progress !== undefined && (
-                    <div className="h-1.5 bg-zinc-800 rounded-full mt-2 overflow-hidden">
-                      <div className="h-full bg-emerald-500 rounded-full transition-all" style={{ width: `${m.progress}%` }} />
-                    </div>
-                  )}
                   <div className="flex items-center justify-between mt-2">
                     <p className="text-[10px] text-zinc-600 font-mono">{formatTime(m.createdAt)}</p>
                     <div className="flex gap-1.5">
-                      {m.status === 'pending' && (
+                      {(m.status === 'draft' || m.status === 'queued') && (
                         <ActionBtn label="Start" onClick={() => handleMissionAction(m.id, 'start')} />
                       )}
-                      {m.status === 'active' && (
+                      {m.status === 'running' && (
                         <ActionBtn label="Pause" onClick={() => handleMissionAction(m.id, 'pause')} />
                       )}
                       {m.status === 'paused' && (
                         <ActionBtn label="Resume" onClick={() => handleMissionAction(m.id, 'resume')} />
                       )}
-                      {(m.status === 'active' || m.status === 'paused' || m.status === 'pending') && (
+                      {(m.status === 'draft' || m.status === 'queued' || m.status === 'running' || m.status === 'paused') && (
                         <ActionBtn label="Cancel" onClick={() => handleMissionAction(m.id, 'cancel')} danger />
                       )}
                       {m.status === 'failed' && (
@@ -184,7 +185,7 @@ export function CommandHistoryPanel({ botName }: Props) {
                       )}
                     </div>
                   </div>
-                  {m.error && <p className="text-[10px] text-red-400/70 mt-1">{typeof m.error === 'string' ? m.error : ((m.error as { message?: string }).message ?? JSON.stringify(m.error))}</p>}
+                  {m.blockedReason && <p className="text-[10px] text-red-400/70 mt-1">{m.blockedReason}</p>}
                 </div>
               ))}
             </div>

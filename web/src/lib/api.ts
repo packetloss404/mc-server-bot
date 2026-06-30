@@ -283,11 +283,20 @@ export interface RoleApprovalRecord {
 export interface CommandRecord {
   id: string;
   type: string;
-  botName: string;
-  params: Record<string, unknown>;
+  scope?: string;
+  priority?: string;
+  source?: string;
   status: string;
-  createdAt: number;
-  updatedAt: number;
+  /** Bot names this command targets (backend CommandRecord.targets). */
+  targets: string[];
+  params: Record<string, unknown>;
+  /** ISO timestamp (backend CommandRecord.createdAt). */
+  createdAt: string;
+  startedAt?: string;
+  completedAt?: string;
+  /** flattenCmd() collapses the backend CommandError into a "code: message" string. */
+  error?: string;
+  result?: Record<string, unknown>;
 }
 
 export interface MissionRecord {
@@ -339,6 +348,13 @@ export interface Route {
 export type MarkerRecord = Marker;
 export type ZoneRecord = Zone;
 export type RouteRecord = Route;
+
+// Short aliases used across the dashboard (map overlays, control store, history
+// panel). Kept as plain aliases of the *Record types so there's a single source
+// of truth for each shape.
+export type Command = CommandRecord;
+export type Mission = MissionRecord;
+export type Squad = SquadRecord;
 
 export interface SchematicInfo {
   filename: string;
@@ -781,7 +797,9 @@ export const api = {
   createCommand: (data: { type: string; botName: string; params?: Record<string, unknown> }) =>
     fetchJSON<{ command: CommandRecord }>('/api/commands', {
       method: 'POST',
-      body: JSON.stringify(data),
+      // Backend CommandCenter.createCommand reads `targets: string[]`, not
+      // `botName` — map the single bot name into a one-element targets array.
+      body: JSON.stringify({ type: data.type, targets: [data.botName], params: data.params }),
     }),
   cancelCommand: (id: string) =>
     fetchJSON<{ success: boolean }>(`/api/commands/${id}/cancel`, { method: 'POST' }),
@@ -953,10 +971,12 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ input }),
     }),
-  clarifyCommanderInput: (input: string, answers: Record<string, string>) =>
-    fetchJSON<{ plan: CommanderPlan }>('/api/commander/parse', {
+  clarifyCommanderInput: (originalInput: string, clarifications: Record<string, string>) =>
+    // The /parse endpoint only reads `{ input }` and drops the answers; the
+    // dedicated /clarify endpoint reads `{ originalInput, clarifications }`.
+    fetchJSON<{ plan: CommanderPlan }>('/api/commander/clarify', {
       method: 'POST',
-      body: JSON.stringify({ input, clarificationAnswers: answers }),
+      body: JSON.stringify({ originalInput, clarifications }),
     }),
   executeCommanderPlan: (planId: string) =>
     fetchJSON<{ result: any }>('/api/commander/execute', {

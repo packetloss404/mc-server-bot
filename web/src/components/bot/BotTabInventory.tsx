@@ -81,7 +81,7 @@ export function BotTabInventory({ botName, personality }: Props) {
       {/* Inventory grid */}
       <div className="bg-zinc-900/80 border border-zinc-800/60 rounded-xl p-4">
         <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
-          Inventory ({bot.inventory.length})
+          Inventory ({(bot.inventory ?? []).length})
         </h2>
         {/* Hotbar */}
         {bot.hotbar && bot.hotbar.some((s) => s !== null) && (
@@ -98,7 +98,7 @@ export function BotTabInventory({ botName, personality }: Props) {
         <p className="text-[9px] text-zinc-600 uppercase tracking-wider mb-1">Main</p>
         <div className="grid grid-cols-9 gap-0.5">
           {Array.from({ length: 27 }).map((_, i) => {
-            const item = bot.inventory.find((inv) => inv.slot === i + 9);
+            const item = (bot.inventory ?? []).find((inv) => inv.slot === i + 9);
             return <InventorySlot key={`inv-${i}`} item={item ?? null} />;
           })}
         </div>

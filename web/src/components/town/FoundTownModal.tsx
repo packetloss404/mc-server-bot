@@ -265,7 +265,7 @@ export function FoundTownModal({ open, onClose, onCreated, defaultMayorUsername 
                     Town center (capital)
                   </span>
                   <p className="text-[11px] text-zinc-500 mt-1">
-                    In Phase 2 you'll be able to click the map. For now, enter coordinates.
+                    Map-click selection is coming; for now, enter coordinates.
                   </p>
                 </div>
                 <div className="grid grid-cols-3 gap-2">
@@ -332,7 +332,7 @@ export function FoundTownModal({ open, onClose, onCreated, defaultMayorUsername 
                   </div>
                   <div className="flex justify-between text-xs">
                     <span className="text-zinc-500">Autonomy</span>
-                    <span className="text-zinc-500 italic">Phase 2 — currently shell only</span>
+                    <span className="text-zinc-300">Autonomous — the Town Brain ticks continuously once founded.</span>
                   </div>
                 </div>
               </div>

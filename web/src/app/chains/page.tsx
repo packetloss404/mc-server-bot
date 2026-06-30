@@ -103,7 +103,7 @@ function ChainCard({
       <div className="flex items-center gap-3 text-xs text-zinc-500 mb-4">
         <span>{chain.stages.length} stage{chain.stages.length !== 1 ? 's' : ''}</span>
         <span className="text-zinc-700">|</span>
-        <span>Stage {chain.currentStageIndex + 1} of {chain.stages.length}</span>
+        <span>Stage {(chain.currentStageIndex ?? 0) + 1} of {chain.stages.length}</span>
         {chain.loop && (
           <>
             <span className="text-zinc-700">|</span>
@@ -771,7 +771,7 @@ export default function ChainsPage() {
       await api.deleteChain(id);
       await fetchChains();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed to resume chain');
+      setError(err instanceof Error ? err.message : 'Failed to delete chain');
     }
   };
 

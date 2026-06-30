@@ -20,6 +20,7 @@ export function BotTabTasks({ botName }: Props) {
   /** Map of failed task description -> whether its retry list is expanded. */
   const [expandedRetries, setExpandedRetries] = useState<Record<string, boolean>>({});
   const [retries, setRetries] = useState<Record<string, RetryAttempt[]>>({});
+  const [queuedTasks, setQueuedTasks] = useState<string[]>([]);
 
   // Prefer the shared 3s polling tick from BotPollingProvider; only fall back
   // to a local 10s fetch when this tab is rendered outside a provider.
@@ -42,7 +43,10 @@ export function BotTabTasks({ botName }: Props) {
     const load = () => {
       api
         .getBotTasks(botName)
-        .then((data) => setRetries(data.retries ?? {}))
+        .then((data) => {
+          setRetries(data.retries ?? {});
+          setQueuedTasks(data.queuedTasks ?? []);
+        })
         .catch(() => {});
     };
     load();
@@ -99,6 +103,21 @@ export function BotTabTasks({ botName }: Props) {
         <div className="mb-3 p-2.5 rounded-lg bg-emerald-500/5 border border-emerald-500/15">
           <p className="text-[9px] text-emerald-500/70 uppercase tracking-wider mb-0.5">Current Task</p>
           <p className="text-xs text-zinc-200">{voyager.currentTask}</p>
+        </div>
+      )}
+
+      {queuedTasks.length > 0 && (
+        <div className="mb-3">
+          <p className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider mb-1">
+            Queued ({queuedTasks.length})
+          </p>
+          <div className="space-y-0.5 ml-4">
+            {queuedTasks.map((task, i) => (
+              <div key={i} className="text-xs text-zinc-400 truncate flex items-center gap-1.5">
+                <span className="text-zinc-500">&#8226;</span> {task}
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
@@ -207,7 +226,7 @@ export function BotTabTasks({ botName }: Props) {
               )}
             </div>
           )}
-          {voyager.completedTasks.length === 0 && voyager.failedTasks.length === 0 && !voyager.currentTask && (
+          {voyager.completedTasks.length === 0 && voyager.failedTasks.length === 0 && !voyager.currentTask && queuedTasks.length === 0 && (
             <p className="text-xs text-zinc-600 text-center py-3">No tasks yet</p>
           )}
         </>

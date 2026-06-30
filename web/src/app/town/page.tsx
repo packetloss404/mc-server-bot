@@ -140,7 +140,7 @@ export default function TownPage() {
     <div className="p-6 space-y-4 max-w-[1400px] mx-auto">
       <PageHeader
         title="Town"
-        subtitle="Autonomous town builder — shell (Phase 1). Autonomy wires in Phase 2."
+        subtitle="Autonomous town builder — live."
       >
         <button
           type="button"
@@ -335,7 +335,7 @@ function RecentEventsPanel({ events }: { events: TownEvent[] }) {
       <div className="divide-y divide-zinc-800/60 max-h-[420px] overflow-y-auto">
         {events.length === 0 ? (
           <div className="px-4 py-10 text-center text-xs text-zinc-500">
-            No events yet. Once the town brain ticks (Phase 2), activity will stream here.
+            No events yet. Town brain activity will stream here as it ticks.
           </div>
         ) : (
           events.map((e) => <EventRow key={e.id} event={e} />)
@@ -417,7 +417,7 @@ function QuickActionsPanel({ town }: { town: Town }) {
       <header className="px-4 py-3 border-b border-zinc-800/60">
         <h3 className="text-sm font-bold text-white">Quick Actions</h3>
         <p className="text-[10px] text-zinc-500 mt-0.5">
-          Pause toggles autonomy. The other two wire in later phases.
+          Pause toggles the town brain's autonomy.
         </p>
       </header>
       <div className="p-4 space-y-2">
@@ -441,30 +441,8 @@ function QuickActionsPanel({ town }: { town: Town }) {
             {town.paused ? 'Paused' : 'Active'}
           </span>
         </button>
-        <DisabledAction
-          label="Memorial Park"
-          tooltip="Jumps the map to the Memorial Park footprint. (Phase 5)"
-        />
-        <DisabledAction
-          label="Manual override task"
-          tooltip="Insert a one-off task that bypasses the Town Brain queue. (Phase 2)"
-        />
       </div>
     </section>
-  );
-}
-
-function DisabledAction({ label, tooltip }: { label: string; tooltip: string }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={tooltip}
-      className="w-full text-left px-3 py-2.5 rounded-lg border border-zinc-800/60 bg-zinc-950/60 text-xs text-zinc-500 cursor-not-allowed flex items-center justify-between gap-2"
-    >
-      <span className="font-semibold">{label}</span>
-      <span className="text-[9px] uppercase tracking-wider text-zinc-600">Soon</span>
-    </button>
   );
 }
 

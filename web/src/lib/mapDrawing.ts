@@ -283,30 +283,33 @@ export function drawMissionOverlays(
 ) {
   const activeMissions = missions.filter((m) => m.status === 'running');
   for (const mission of activeMissions) {
-    const pos = botPositions.get(mission.botName.toLowerCase());
-    if (!pos) continue;
+    // Missions can have multiple assignees (assigneeIds[]); ring each one.
+    for (const assignee of mission.assigneeIds ?? []) {
+      const pos = botPositions.get(assignee.toLowerCase());
+      if (!pos) continue;
 
-    const { sx, sy } = worldToScreen(pos.x, pos.z, cx, cy, scale, offset);
+      const { sx, sy } = worldToScreen(pos.x, pos.z, cx, cy, scale, offset);
 
-    // Pulsing ring around bot on active mission
-    ctx.save();
-    const t = (Date.now() % 2000) / 2000;
-    const pulseR = 14 + t * 8;
-    const alpha = Math.floor((1 - t) * 60).toString(16).padStart(2, '0');
-    ctx.beginPath();
-    ctx.arc(sx, sy, pulseR, 0, Math.PI * 2);
-    ctx.strokeStyle = '#10B981' + alpha;
-    ctx.lineWidth = 1.5;
-    ctx.stroke();
+      // Pulsing ring around bot on active mission
+      ctx.save();
+      const t = (Date.now() % 2000) / 2000;
+      const pulseR = 14 + t * 8;
+      const alpha = Math.floor((1 - t) * 60).toString(16).padStart(2, '0');
+      ctx.beginPath();
+      ctx.arc(sx, sy, pulseR, 0, Math.PI * 2);
+      ctx.strokeStyle = '#10B981' + alpha;
+      ctx.lineWidth = 1.5;
+      ctx.stroke();
 
-    // Mission label
-    ctx.fillStyle = '#10B981A0';
-    ctx.font = '8px system-ui, sans-serif';
-    ctx.textAlign = 'center';
-    ctx.shadowColor = '#000000';
-    ctx.shadowBlur = 2;
-    ctx.fillText(mission.name || mission.type, sx, sy + 22);
-    ctx.restore();
+      // Mission label
+      ctx.fillStyle = '#10B981A0';
+      ctx.font = '8px system-ui, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = '#000000';
+      ctx.shadowBlur = 2;
+      ctx.fillText(mission.name || mission.type, sx, sy + 22);
+      ctx.restore();
+    }
   }
 }
 

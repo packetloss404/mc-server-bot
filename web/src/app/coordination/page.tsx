@@ -46,6 +46,15 @@ const KIND_CONFIG: Record<string, { label: string; color: string; icon: string }
 
 const KIND_FILTERS = ['all', 'blocker', 'progress', 'completion', 'claim', 'request_help', 'info'];
 
+const TASK_STATUS_CONFIG: Record<string, { label: string; color: string }> = {
+  pending: { label: 'pending', color: '#F59E0B' },
+  claimed: { label: 'claimed', color: '#10B981' },
+  blocked: { label: 'blocked', color: '#EF4444' },
+  completed: { label: 'completed', color: '#3B82F6' },
+};
+
+const TASK_STATUS_FILTERS = ['all', 'pending', 'claimed', 'blocked', 'completed'];
+
 function formatTimeAgo(ts: number): string {
   const diff = Date.now() - ts;
   if (diff < 60_000) return `${Math.floor(diff / 1000)}s ago`;
@@ -63,6 +72,7 @@ export default function CoordinationPage() {
   const [reservations, setReservations] = useState<{ id: string; type: string; key: string; botName: string; createdAt: number }[]>([]);
   const [filter, setFilter] = useState('');
   const [kindFilter, setKindFilter] = useState('all');
+  const [taskStatusFilter, setTaskStatusFilter] = useState('all');
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [swarmInput, setSwarmInput] = useState('');
   const [swarmLoading, setSwarmLoading] = useState(false);
@@ -106,6 +116,12 @@ export default function CoordinationPage() {
 
   const activeTasks = tasks.filter((t) => t.status === 'claimed' || t.status === 'pending');
   const blockedTasks = tasks.filter((t) => t.status === 'blocked');
+  // Newest-first so fresh supply shortages / blockers surface at the top.
+  const sortedTasks = [...tasks].sort((a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt));
+  const filteredTasks =
+    taskStatusFilter === 'all'
+      ? sortedTasks
+      : sortedTasks.filter((t) => t.status === taskStatusFilter);
   const commanderEvents = activityFeed.filter((event) => event.type === 'commander:parse' || event.type === 'commander:execute').slice(0, 8);
 
   return (
@@ -185,6 +201,81 @@ export default function CoordinationPage() {
           <p className="text-[10px] text-zinc-500 uppercase tracking-wider">Reservations</p>
           <p className="text-lg font-bold text-white mt-1">{reservations.length}</p>
         </div>
+      </div>
+
+      {/* Task Queue — the live supply/work queue (town demand loop, swarm, bot goals) */}
+      <div className="bg-zinc-900/50 rounded-xl border border-zinc-800/40 overflow-hidden">
+        <div className="px-4 py-3 border-b border-zinc-800/30 flex flex-wrap items-center gap-3">
+          <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Task Queue</h2>
+          <span className="text-[10px] text-zinc-600">{filteredTasks.length} of {tasks.length}</span>
+          <div className="flex gap-1 flex-wrap ml-auto">
+            {TASK_STATUS_FILTERS.map((status) => {
+              const config = status === 'all' ? null : TASK_STATUS_CONFIG[status];
+              const count = status === 'all' ? tasks.length : tasks.filter((t) => t.status === status).length;
+              return (
+                <button
+                  key={status}
+                  onClick={() => setTaskStatusFilter(status)}
+                  className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors ${
+                    taskStatusFilter === status
+                      ? 'bg-zinc-700 text-white'
+                      : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800'
+                  }`}
+                  style={taskStatusFilter === status && config ? { color: config.color, backgroundColor: `${config.color}15` } : undefined}
+                >
+                  {status === 'all' ? 'All' : config?.label ?? status} ({count})
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {filteredTasks.length === 0 ? (
+          <div className="py-12 text-center">
+            <p className="text-sm text-zinc-500">
+              No tasks{taskStatusFilter !== 'all' ? ` with status "${taskStatusFilter}"` : ' on the blackboard'}
+            </p>
+          </div>
+        ) : (
+          <div className="divide-y divide-zinc-800/30 max-h-[420px] overflow-y-auto">
+            {filteredTasks.map((task) => {
+              const config = TASK_STATUS_CONFIG[task.status] ?? { label: task.status, color: '#6B7280' };
+              return (
+                <div key={task.id} className="px-4 py-3 hover:bg-zinc-800/20 transition-colors">
+                  <div className="flex items-start gap-3">
+                    <span
+                      className="mt-1 w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: config.color }}
+                      aria-hidden
+                    />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="text-xs text-white font-medium break-words">{task.description}</span>
+                        <span
+                          className="text-[10px] px-1.5 py-0.5 rounded font-medium shrink-0"
+                          style={{ color: config.color, backgroundColor: `${config.color}15` }}
+                        >
+                          {config.label}
+                        </span>
+                        <span className="text-[10px] text-zinc-600 ml-auto shrink-0">{formatTimeAgo(task.updatedAt ?? task.createdAt)}</span>
+                      </div>
+                      <div className="flex items-center gap-2 mt-1 text-[10px] text-zinc-500 flex-wrap">
+                        {task.assignedBot && (
+                          <span className="text-zinc-400">→ {task.assignedBot}</span>
+                        )}
+                        <span className="px-1.5 py-0.5 rounded bg-zinc-800/60 text-zinc-500 uppercase tracking-wider">{task.source}</span>
+                      </div>
+                      {task.blocker && (
+                        <p className="text-[11px] text-red-400 mt-1.5 leading-relaxed">
+                          Blocked: {task.blocker}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Filters */}

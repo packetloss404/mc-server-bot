@@ -98,7 +98,7 @@ export function MapContextMenu({
     for (const bot of onlineBots) {
       try {
         await api.createCommand({
-          type: 'guard',
+          type: 'guard_zone',
           botName: bot.name,
           params: { zoneId: zoneAtPoint.id, zoneName: zoneAtPoint.name },
         });
@@ -116,7 +116,7 @@ export function MapContextMenu({
     for (const bot of onlineBots) {
       try {
         await api.createCommand({
-          type: 'patrol',
+          type: 'patrol_route',
           botName: bot.name,
           params: { routeId: nearestRoute.id, routeName: nearestRoute.name },
         });

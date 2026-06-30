@@ -63,7 +63,7 @@ export function BotTabOverview({ botName, personality }: Props) {
     let cancelled = false;
     const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
     const loadLlm = () => {
-      fetch(`${base}/api/llm/providers`)
+      fetch(`${base}/api/llm/providers`, { credentials: 'include' })
         .then((r) => r.json())
         .then((s) => {
           if (cancelled) return;
@@ -114,7 +114,7 @@ export function BotTabOverview({ botName, personality }: Props) {
 
   return (
     <div className="space-y-5">
-      {/* Routing + XP/Level header */}
+      {/* AI routing header */}
       <motion.div
         initial={{ opacity: 0, y: 8 }}
         animate={{ opacity: 1, y: 0 }}
@@ -129,25 +129,6 @@ export function BotTabOverview({ botName, personality }: Props) {
           </div>
         ) : (
           <div className="text-xs text-zinc-600">AI routing unavailable</div>
-        )}
-
-        {bot.experience && (
-          <div className="flex-1 min-w-[220px] max-w-md">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Experience</span>
-              <span className="text-xs font-bold text-emerald-400">Lv. {bot.experience.level}</span>
-            </div>
-            <div className="h-2.5 bg-zinc-800 rounded-full overflow-hidden">
-              <motion.div
-                className="h-full rounded-full"
-                style={{ backgroundColor: '#5EE65E' }}
-                initial={{ width: 0 }}
-                animate={{ width: `${bot.experience.progress * 100}%` }}
-                transition={{ duration: 0.6 }}
-              />
-            </div>
-            <p className="text-[9px] text-zinc-600 mt-0.5 text-right">{bot.experience.points} XP</p>
-          </div>
         )}
       </motion.div>
 

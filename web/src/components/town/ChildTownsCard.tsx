@@ -71,7 +71,7 @@ export function ChildTownsCard({ townId }: Props) {
         refresh();
       } else if (res.proposal && !res.executed) {
         toast(
-          `Proposal "${res.proposal.childName}" pending approval (Phase 6 wires the approval flow)`,
+          `Expansion "${res.proposal.childName}" proposed — see the Approvals queue.`,
           'info',
         );
       } else {

@@ -86,7 +86,7 @@ export function DistrictsCard({ townId }: Props) {
         ) : (
           <ul className="space-y-2">
             {districts.map((d) => {
-              const meta = STYLE_META[d.stylePreset];
+              const meta = STYLE_META[d.stylePreset] ?? STYLE_META['medieval-communal'];
               const isActive = d.id === activeId;
               return (
                 <li

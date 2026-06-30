@@ -247,10 +247,13 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
     socket.on('mission:failed', refetchMissions);
     socket.on('mission:cancelled', refetchMissions);
 
-    socket.on('command:created', refetchCommands);
-    socket.on('command:updated', refetchCommands);
-    socket.on('command:completed', refetchCommands);
+    // Backend emits queued/started/succeeded/failed/cancelled (COMMAND_EVENTS in
+    // src/control/CommandTypes.ts) — not created/updated/completed.
+    socket.on('command:queued', refetchCommands);
+    socket.on('command:started', refetchCommands);
+    socket.on('command:succeeded', refetchCommands);
     socket.on('command:failed', refetchCommands);
+    socket.on('command:cancelled', refetchCommands);
 
     socket.on('build:started', refetchBuilds);
     socket.on('build:progress', refetchBuilds);
@@ -310,8 +313,8 @@ export function SocketProvider({ children }: { children: React.ReactNode }) {
       socket.off('role:updated');
       socket.off('mission:created'); socket.off('mission:updated'); socket.off('mission:completed');
       socket.off('mission:failed'); socket.off('mission:cancelled');
-      socket.off('command:created'); socket.off('command:updated'); socket.off('command:completed');
-      socket.off('command:failed');
+      socket.off('command:queued'); socket.off('command:started'); socket.off('command:succeeded');
+      socket.off('command:failed'); socket.off('command:cancelled');
       socket.off('build:started'); socket.off('build:progress'); socket.off('build:completed');
       socket.off('build:cancelled'); socket.off('build:bot-status');
       socket.off('chain:started'); socket.off('chain:stage-update'); socket.off('chain:paused');

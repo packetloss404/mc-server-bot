@@ -206,8 +206,8 @@ export default function BotProfilePage() {
             <div className="bg-zinc-900/60 border border-zinc-800/60 rounded-lg p-2.5">
               <p className="text-[9px] text-zinc-500 uppercase tracking-wider mb-1.5 font-semibold">Vitals</p>
               <div className="space-y-1">
-                <VitalBar label="HP" value={bot.health} max={20} intent="danger" />
-                <VitalBar label="FD" value={bot.food} max={20} intent="warning" />
+                <VitalBar label="HP" value={bot.health ?? 0} max={20} intent="danger" />
+                <VitalBar label="FD" value={bot.food ?? 0} max={20} intent="warning" />
               </div>
             </div>
 

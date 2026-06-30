@@ -157,6 +157,25 @@ export class CodeExecutor {
 
     const botProxy = this.createBotProxy(bot, pushLog, interruptibleDelay);
 
+    // Runtime name guard. ActionAgent.findInvalidPrimitiveArg only catches a
+    // LITERAL empty (mineBlock('')); it cannot see a name that resolves to ''
+    // at runtime from a variable, nor empties inside a replayed saved skill.
+    // Those were still reaching mineBlock/craftItem and producing thousands of
+    // uninformative "Unknown block type: " / "No item named " no-ops. Throw a
+    // single actionable error here so it surfaces in the exec output and feeds
+    // the retry loop instead of silently burning the task.
+    const requireName = (primitive: string, argName: string, value: any): string => {
+      if (typeof value !== 'string' || value.trim() === '') {
+        throw new Error(
+          `${primitive}() received an empty/invalid ${argName} (got ${JSON.stringify(value)}). ` +
+          `Pass a concrete Minecraft id (e.g. 'oak_log', 'iron_ore', 'crafting_table') from ` +
+          `"Nearby blocks" or your inventory — never '' or a variable that can resolve to empty. ` +
+          `Guard the call: if you cannot determine a valid name, pick the closest valid one instead.`,
+        );
+      }
+      return value;
+    };
+
     const sandbox = {
       bot: botProxy,
       Vec3,
@@ -174,6 +193,7 @@ export class CodeExecutor {
 
       mineBlock: async (name: string, count = 1) => {
         throwIfInterrupted();
+        requireName('mineBlock', 'block name', name);
         const beforeItems = bot.inventory.items().map((i) => `${i.name}x${i.count}`).join(', ') || 'empty';
         pushLog(`[primitive] mineBlock("${name}", ${count})`);
         pushEvent('primitive_start', `mineBlock ${name} x${count}`, { primitive: 'mineBlock', name, count });
@@ -187,6 +207,7 @@ export class CodeExecutor {
       },
       craftItem: async (name: string, count = 1) => {
         throwIfInterrupted();
+        requireName('craftItem', 'item name', name);
         pushLog(`[primitive] craftItem("${name}", ${count})`);
         pushEvent('primitive_start', `craftItem ${name} x${count}`, { primitive: 'craftItem', name, count });
         const result = await craft(bot, name, count);
@@ -197,6 +218,8 @@ export class CodeExecutor {
       },
       smeltItem: async (itemName: string, fuelName: string, count = 1) => {
         throwIfInterrupted();
+        requireName('smeltItem', 'item name', itemName);
+        requireName('smeltItem', 'fuel name', fuelName);
         pushLog(`[primitive] smeltItem("${itemName}", "${fuelName}", ${count})`);
         pushEvent('primitive_start', `smeltItem ${itemName} fuel=${fuelName} x${count}`, { primitive: 'smeltItem', itemName, fuelName, count });
         const result = await smelt(bot, itemName, fuelName, count);
@@ -207,6 +230,7 @@ export class CodeExecutor {
       },
       placeItem: async (name: string, x: number, y: number, z: number) => {
         throwIfInterrupted();
+        requireName('placeItem', 'item name', name);
         pushLog(`[primitive] placeItem("${name}", ${x}, ${y}, ${z})`);
         pushEvent('primitive_start', `placeItem ${name}`, { primitive: 'placeItem', name, x, y, z });
         const result = await placeBlock(bot, name, x, y, z);
@@ -217,6 +241,8 @@ export class CodeExecutor {
       },
       withdrawItem: async (containerName: string, itemName: string, count = 1) => {
         throwIfInterrupted();
+        requireName('withdrawItem', 'container name', containerName);
+        requireName('withdrawItem', 'item name', itemName);
         pushLog(`[primitive] withdrawItem("${containerName}", "${itemName}", ${count})`);
         pushEvent('primitive_start', `withdrawItem ${itemName} from ${containerName}`, { primitive: 'withdrawItem', containerName, itemName, count });
         const result = await withdrawFromContainer(bot, containerName, itemName, count);
@@ -227,6 +253,8 @@ export class CodeExecutor {
       },
       depositItem: async (containerName: string, itemName: string, count = 1) => {
         throwIfInterrupted();
+        requireName('depositItem', 'container name', containerName);
+        requireName('depositItem', 'item name', itemName);
         pushLog(`[primitive] depositItem("${containerName}", "${itemName}", ${count})`);
         pushEvent('primitive_start', `depositItem ${itemName} into ${containerName}`, { primitive: 'depositItem', containerName, itemName, count });
         const result = await depositToContainer(bot, containerName, itemName, count);
@@ -237,6 +265,7 @@ export class CodeExecutor {
       },
       inspectContainer: async (containerName: string) => {
         throwIfInterrupted();
+        requireName('inspectContainer', 'container name', containerName);
         pushLog(`[primitive] inspectContainer("${containerName}")`);
         pushEvent('primitive_start', `inspectContainer ${containerName}`, { primitive: 'inspectContainer', containerName });
         const result = await inspectContainer(bot, containerName);
@@ -256,12 +285,14 @@ export class CodeExecutor {
         return result;
       },
       setBlock: async (name: string, x: number, y: number, z: number, state?: string) => {
+        requireName('setBlock', 'block name', name);
         const blockSpec = state ? `minecraft:${name}[${state}]` : `minecraft:${name}`;
         bot.chat(`/setblock ${Math.floor(x)} ${Math.floor(y)} ${Math.floor(z)} ${blockSpec} replace`);
         pushLog(`[primitive] setBlock("${blockSpec}", ${Math.floor(x)}, ${Math.floor(y)}, ${Math.floor(z)})`);
         await new Promise((r) => setTimeout(r, 50));
       },
       fillBlocks: async (name: string, x1: number, y1: number, z1: number, x2: number, y2: number, z2: number, mode = 'replace') => {
+        requireName('fillBlocks', 'block name', name);
         const blockSpec = `minecraft:${name}`;
         bot.chat(`/fill ${Math.floor(x1)} ${Math.floor(y1)} ${Math.floor(z1)} ${Math.floor(x2)} ${Math.floor(y2)} ${Math.floor(z2)} ${blockSpec} ${mode}`);
         pushLog(`[primitive] fillBlocks("${name}", ${x1},${y1},${z1} -> ${x2},${y2},${z2}, ${mode})`);
@@ -269,6 +300,7 @@ export class CodeExecutor {
       },
       killMob: async (name: string, maxDuration = 30000) => {
         throwIfInterrupted();
+        requireName('killMob', 'mob name', name);
         pushLog(`[primitive] killMob("${name}")`);
         pushEvent('primitive_start', `killMob ${name}`, { primitive: 'killMob', name, maxDuration });
         const result = await attack(bot, name, maxDuration);

@@ -64,6 +64,39 @@ export interface SiteSelectorOptions {
    * search. Default 4000. Acts as a secondary hang-prevention guard.
    */
   maxProbes?: number;
+  /**
+   * Footprints of EXISTING buildings to keep clear of, as world-space x/z
+   * rectangles (corner-origin: [x1,x2) × [z1,z2)). A candidate whose own
+   * footprint — expanded by {@link spacingMargin} — intersects any of these is
+   * rejected outright, BEFORE the terrain probe. Without this the selector only
+   * dodged trees/water and happily stacked builds on the flattened pads of
+   * earlier ones (a well ended up fully inside the town hall). Default [].
+   */
+  avoidRects?: Array<{ x1: number; x2: number; z1: number; z2: number }>;
+  /**
+   * Minimum clear gap (blocks) between a new footprint and any
+   * {@link avoidRects} rectangle. The avoid rectangles are inflated by this
+   * margin before the intersection test, so buildings get breathing room for
+   * paths/yards instead of sitting flush. Default 5.
+   */
+  spacingMargin?: number;
+}
+
+/** True if the candidate footprint [seedX,seedX+sx) × [seedZ,seedZ+sz),
+ *  inflated by `margin`, intersects any avoid rectangle. Cheap pre-probe gate. */
+function intersectsAvoid(
+  seedX: number,
+  seedZ: number,
+  size: { x: number; z: number },
+  avoidRects: Array<{ x1: number; x2: number; z1: number; z2: number }>,
+  margin: number,
+): boolean {
+  const ax1 = seedX - margin, ax2 = seedX + size.x + margin;
+  const az1 = seedZ - margin, az2 = seedZ + size.z + margin;
+  for (const r of avoidRects) {
+    if (ax1 < r.x2 && ax2 > r.x1 && az1 < r.z2 && az2 > r.z1) return true;
+  }
+  return false;
 }
 
 /**
@@ -435,6 +468,8 @@ export async function selectBuildSite(
   const probeTimeoutMs = options.probeTimeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS;
   const deadlineMs = options.deadlineMs ?? DEFAULT_DEADLINE_MS;
   const maxProbes = options.maxProbes ?? DEFAULT_MAX_PROBES;
+  const avoidRects = options.avoidRects ?? [];
+  const spacingMargin = options.spacingMargin ?? 5;
 
   const refX = Math.floor(refPos.x);
   const refZ = Math.floor(refPos.z);
@@ -465,6 +500,14 @@ export async function selectBuildSite(
         throw new Error(
           `site selection timed out after ${deadlineMs}ms (no usable candidate near ${refX},${refZ})`,
         );
+      }
+
+      // Footprint-collision gate (pre-probe, cheap). Skip any candidate that
+      // would overlap — or come within spacingMargin of — an existing building.
+      // This is the fix for builds stacking on each other: the terrain probe
+      // alone is attracted to the flat cleared pads of prior builds.
+      if (intersectsAvoid(refX + dx, refZ + dz, size, avoidRects, spacingMargin)) {
+        continue;
       }
 
       const cand = await evaluateCandidate(probe, refX + dx, refZ + dz, size, refY, refPos, flatTol, ctx);

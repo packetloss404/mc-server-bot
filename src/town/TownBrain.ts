@@ -833,6 +833,19 @@ export class TownBrain {
     // This is the town↔build linkage: it guarantees the row always advances to
     // a terminal state, so a planned/building row can never orphan and wedge
     // the build loop the way it did before.
+    // Footprint-avoid rects for the SiteSelector: every already-placed building
+    // with a resolved origin + dims. Without this the auto-flat selector is
+    // blind to prior builds and stacks them (a well ended up fully inside the
+    // town hall). corner-origin x/z rects; selectBuildSite inflates by margin.
+    const avoidRects = existingBuildings
+      .filter((b) => b.origin && b.width && b.depth && b.status !== 'destroyed')
+      .map((b) => ({
+        x1: b.origin!.x,
+        x2: b.origin!.x + (b.width as number),
+        z1: b.origin!.z,
+        z2: b.origin!.z + (b.depth as number),
+      }));
+
     try {
       const job = await this.buildCoordinator.startBuild(
         resolved.schematicFile,
@@ -840,6 +853,8 @@ export class TownBrain {
         connectedNames,
         {
           originMode: 'auto-flat',
+          avoidRects,
+          spacingMargin: 6,
           // Without these the chosen site is taken as-is. SiteSelector picks
           // the flattest spot but natural terrain still has tree stumps,
           // grass tufts, and small mounds inside the footprint. clearSite

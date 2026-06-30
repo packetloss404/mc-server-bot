@@ -1099,6 +1099,16 @@ export class BuildCoordinator {
       townId?: string;
       buildingId?: string;
       /**
+       * Existing building footprints (world-space x/z rects, corner-origin) the
+       * SiteSelector must keep clear of when originMode is 'auto-flat'. Passed
+       * straight through to selectBuildSite. Without it, auto-flat placement is
+       * blind to prior builds and stacks structures on each other.
+       */
+      avoidRects?: Array<{ x1: number; x2: number; z1: number; z2: number }>;
+      /** Minimum clear gap (blocks) between the new footprint and any avoidRect.
+       *  Forwarded to selectBuildSite (default there: 5). */
+      spacingMargin?: number;
+      /**
        * Per-call override for the pre-job site-prep deadline. Overrides both
        * the config knob and the module-level default. Useful in tests and for
        * callers that know the site prep will be unusually slow (e.g. very large
@@ -1231,7 +1241,10 @@ export class BuildCoordinator {
     // fallback for 'coords' mode and a hint elsewhere (e.g. Y for player mode).
     // CRITICAL: propagate a timeout so the caller can clean up.
     origin = await withTimeout(
-      this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize),
+      this.resolveOrigin(originMode, origin, botNames, probeHandle, schSize, {
+        avoidRects: options?.avoidRects,
+        spacingMargin: options?.spacingMargin,
+      }),
       sitePrepRemaining(),
       'startBuild resolveOrigin',
     );
@@ -2537,6 +2550,10 @@ export class BuildCoordinator {
     botNames: string[],
     probeHandle: any,
     schSize: { x: number; y: number; z: number },
+    avoidOpts?: {
+      avoidRects?: Array<{ x1: number; x2: number; z1: number; z2: number }>;
+      spacingMargin?: number;
+    },
   ): Promise<{ x: number; y: number; z: number }> {
     if (originMode === 'coords') return fallbackOrigin;
 
@@ -2574,7 +2591,10 @@ export class BuildCoordinator {
         logger.warn({ err: String(err) }, 'originMode auto-flat: probe pre-load teleport failed; searching anyway');
       }
       const probe = (x: number, y: number, z: number) => probeHandle.getBlockAt(x, y, z);
-      const cand: SiteCandidate | null = await selectBuildSite(probe, fallbackOrigin, schSize);
+      const cand: SiteCandidate | null = await selectBuildSite(probe, fallbackOrigin, schSize, {
+        avoidRects: avoidOpts?.avoidRects,
+        spacingMargin: avoidOpts?.spacingMargin,
+      });
       if (!cand) {
         logger.warn({ refPos: fallbackOrigin }, 'originMode auto-flat: no acceptable site found near supplied origin, using supplied origin');
         return fallbackOrigin;

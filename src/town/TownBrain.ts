@@ -489,6 +489,29 @@ export class TownBrain {
       // Hand the shortage off to the role loop on this tick — it pulls from
       // the idle pool to staff up before the next demand loop runs.
       this.currentTickShortages.push(resource);
+
+      // Dedup: a shortage that stays unmet is re-evaluated every tick. Reap any
+      // stale pending/blocked duplicates for THIS town+resource and skip
+      // re-queueing when a bot already has one claimed — otherwise the loop
+      // piles a fresh duplicate (and later a `blocked` row) on every tick,
+      // accumulating hundreds of stale tasks that bots churn instead of the
+      // current one. Matcher is town- and resource-scoped so other towns and
+      // other resources are untouched.
+      const resourceRe = new RegExp(`needs \\d+ more ${resource}\\b`);
+      const matcher = (t: { description: string }) =>
+        t.description.startsWith(`town:${this.townId} needs`) && resourceRe.test(t.description);
+      const { claimedActive, removed } = this.blackboard.reapShortageTasks(matcher);
+      if (removed > 0) {
+        logger.info(
+          { townId: this.townId, resource, removed },
+          'TownBrain demand: reaped stale duplicate supply tasks',
+        );
+      }
+      if (claimedActive) {
+        // A bot is already working this shortage — don't queue a duplicate.
+        continue;
+      }
+
       const description = `town:${this.townId} needs ${need} more ${resource} (requesting role: ${role}).${resourceLocaleHint(resource)}`;
       // BlackboardManager.addTask requires a Task — we hand it a minimal one;
       // the Voyager loop synthesizes spec/guidance downstream.

@@ -395,6 +395,35 @@ export class BlackboardManager {
     return removed;
   }
 
+  /**
+   * Bound a recurring task family (e.g. a town's per-resource supply shortage)
+   * to at most one in-flight row. Reaps every pending/blocked task matching
+   * `matcher`, then reports whether a `claimed` (actively worked) row survives.
+   *
+   * The town demand loop re-evaluates shortages every tick and previously
+   * called addTask() unconditionally, so a shortage that stayed unmet piled a
+   * fresh duplicate on every tick — pending dups plus a growing wall of
+   * `blocked` rows from failed attempts (553 supply rows / 433 blocked observed
+   * 2026-06-30, all < 24h so gcTerminalTasks's age cutoff never reached them).
+   * Bots then churned the stale heap instead of the current task. Calling this
+   * before re-queueing keeps it to one fresh row per shortage. Returns whether
+   * a claim is already active (so the caller skips re-queueing) and the count
+   * removed.
+   */
+  reapShortageTasks(matcher: (t: BlackboardTask) => boolean): { claimedActive: boolean; removed: number } {
+    const removeIds = new Set(
+      this.state.tasks
+        .filter((t) => matcher(t) && (t.status === 'pending' || t.status === 'blocked'))
+        .map((t) => t.id),
+    );
+    if (removeIds.size > 0) {
+      this.state.tasks = this.state.tasks.filter((t) => !removeIds.has(t.id));
+      this.persist();
+    }
+    const claimedActive = this.state.tasks.some((t) => matcher(t) && t.status === 'claimed');
+    return { claimedActive, removed: removeIds.size };
+  }
+
   releaseStale(timeoutMs: number = 5 * 60 * 1000): number {
     const now = Date.now();
     let released = 0;

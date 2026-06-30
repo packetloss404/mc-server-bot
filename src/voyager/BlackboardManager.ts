@@ -3,6 +3,7 @@ import path from 'path';
 import { Task } from './CurriculumAgent';
 import { LongTermGoal } from './LongTermGoal';
 import type { TownRule } from '../town/RuleStore';
+import { RESOURCE_LOCALE } from '../town/resourceThresholds';
 
 export type TaskPriority = 'low' | 'normal' | 'high' | 'critical';
 
@@ -543,6 +544,23 @@ export class BlackboardManager {
     if (botPosition && task.location) {
       const dx = botPosition.x - task.location.x, dy = botPosition.y - task.location.y, dz = botPosition.z - task.location.z;
       score += Math.max(0, 15 - Math.sqrt(dx * dx + dy * dy + dz * dz) / 256 * 15) * 1.5;
+    }
+    // Locale-aware position bias for town supply tasks: route SURFACE-resource
+    // tasks (wood/food) to bots near the surface and UNDERGROUND-resource tasks
+    // (stone/iron) to bots down in the rock. Without this an idle miner deep in
+    // a shaft kept claiming food/wood tasks it couldn't fulfil (no crops/animals
+    // at y=-47) — it would burn the whole task before ever reaching daylight.
+    // The penalty stays below the town: +30 boost so town work still dominates;
+    // it only re-orders WHICH bot pulls WHICH resource. No-op for non-supply
+    // tasks (no resource match → undefined locale) and when position is unknown.
+    if (botPosition) {
+      const m = task.description.match(/needs\s+\d+\s+more\s+(\w+)/i);
+      const locale = m ? RESOURCE_LOCALE[m[1].toLowerCase()] : undefined;
+      if (locale === 'surface' && botPosition.y < 50) {
+        score -= Math.min(40, (50 - botPosition.y) * 0.5);
+      } else if (locale === 'underground' && botPosition.y > 60) {
+        score -= Math.min(20, (botPosition.y - 60) * 0.5);
+      }
     }
     score += Math.min(10, (Date.now() - task.createdAt) / 60000);
     return score;

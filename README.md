@@ -45,6 +45,9 @@ That's the single-bot story. The repo is also the full **fleet + civilization pl
 
 ### Generative architecture build pipeline
 - **LLM design → real schematic → multi-bot build** — An LLM designs a building, the design is validated into a `BlockPlan`, encoded into a genuine gzip **Sponge-v2 `.schem`** file, then constructed by a multi-bot build coordinator with auto-gather and site preparation
+- **Curated schematic library** — 100+ ready-to-place Sponge-v2 builds (houses, towers, statues, trees, vehicles, props) drop into `schematics/`; the coordinator selects a flat, footprint-clear site (`SiteSelector`) and places them via `snapToGround`/`clearSite`/`fillFoundation`
+- **Data-driven rail network** — A hub-and-spoke underground rail connector (`/api/tunnel`) reads live building footprints and carves a hub + powered-rail spokes with stair/ladder risers into each structure, with dry-run preview and post-build verify/repair
+- **Leashed caretaker-builder** — A `builder` bot pinned to a home anchor (`config.leash`) runs a place-only caretaker curriculum: withdraw materials from a home chest and expand the structure it's parked on, instead of chasing roaming swarm tasks
 
 ### Operations
 - **Worker-thread-per-bot** — Each bot runs in its own `worker_threads` worker; shared singletons (affinity, culture, world model, comms, LLM) are reached through typed IPC proxy classes so cross-bot state stays authoritative on the main thread
@@ -104,6 +107,7 @@ curl -s http://localhost:3001/api/bots
 | `farmer` | Farms crops and tends animals |
 | `blacksmith` | Mines, smelts, and crafts |
 | `elder` | Wise advisor, shares knowledge |
+| `builder` | Places structures; runs the caretaker curriculum when leashed to a home |
 
 ## Project Structure
 

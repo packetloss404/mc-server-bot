@@ -242,6 +242,8 @@ export interface Config {
       name?: string;
       minX: number; minY: number; minZ: number;
       maxX: number; maxY: number; maxZ: number;
+      /** false = mining-protection only, not a night-shelter destination. */
+      shelter?: boolean;
     }>;
     /** Designated communal dig site bots travel to for routed block types. */
     mineSite?: { x: number; y: number; z: number; radius?: number };

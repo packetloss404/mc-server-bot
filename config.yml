@@ -202,6 +202,15 @@ mining:
       maxX: 990
       maxY: 130
       maxZ: -150
+    - name: "50eleven-hq"            # packetloss404's island hut @ (1559,64,-392) + Eleven's expansion zone
+      minX: 1540
+      minY: 40
+      minZ: -412
+      maxX: 1578
+      maxY: 110
+      maxZ: -374
+      shelter: false                 # mining-protection only — do NOT pull the roaming fleet here at night
+                                     # (it was dragging all bots ~590 blocks NW every night; town shelters at victorian-cluster)
   # Communal mine site: bots walk here before mining any routed block type, then
   # dig down/out AT the site instead of wherever they happen to be standing.
   # Placed just east of the victorian cluster, outside its protected box.
@@ -243,6 +252,6 @@ mining:
 # its island/site. Adjust radius to the island size.
 leash:
   - botName: Eleven      # 50ELEVEN HQ caretaker — must not leave the island
-    x: 1562
-    z: -374
+    x: 1559
+    z: -392
     radius: 64

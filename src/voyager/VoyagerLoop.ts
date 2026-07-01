@@ -123,6 +123,15 @@ export class VoyagerLoop {
   private skillLibrary: SkillLibrary;
   private codeExecutor: CodeExecutor;
   private curriculumAgent: CurriculumAgent;
+  /** Home anchor when this bot is movement-leashed (config.leash), else null. */
+  private leashHome: { x: number; z: number; radius: number } | null = null;
+  /** True when a leashed `builder` bot should run the place-only caretaker
+   *  curriculum (withdraw from a home chest → expand the home structure)
+   *  instead of the roaming Voyager/DungeonMaster curriculum. */
+  private isCaretakerBuilder = false;
+  /** Rotating index over CARETAKER_BUILD_TASKS so the caretaker cycles through
+   *  distinct expansion tasks instead of repeating one. */
+  private caretakerBuildIndex = 0;
   private actionAgent: ActionAgent | null;
   private criticAgent: CriticAgent;
   private statsTracker: StatsTracker;
@@ -239,9 +248,20 @@ export class VoyagerLoop {
       (l) => l.botName.toLowerCase() === botName.toLowerCase(),
     );
     if (leashEntry) {
+      this.leashHome = { x: leashEntry.x, z: leashEntry.z, radius: leashEntry.radius };
       this.codeExecutor.setLeash({ x: leashEntry.x, z: leashEntry.z, radius: leashEntry.radius });
+      // A leashed `builder` becomes a HQ caretaker: it must not chase roaming
+      // swarm/DungeonMaster explore tasks (the leash would just reject the move
+      // and it thrashes). Instead it withdraws materials from a home chest and
+      // place-only expands the structure it's parked on. See proposeCaretakerTask.
+      this.isCaretakerBuilder = personality.toLowerCase() === 'builder';
       logger.info(
-        { bot: botName, home: { x: leashEntry.x, z: leashEntry.z }, radius: leashEntry.radius },
+        {
+          bot: botName,
+          home: { x: leashEntry.x, z: leashEntry.z },
+          radius: leashEntry.radius,
+          caretaker: this.isCaretakerBuilder,
+        },
         'VoyagerLoop: bot is leashed to a home boundary',
       );
     }
@@ -268,6 +288,68 @@ export class VoyagerLoop {
     } catch (err: any) {
       logger.warn({ err: err.message }, 'DependencyResolver init failed, prerequisite resolution disabled');
     }
+  }
+
+  /**
+   * Placeable building/decoration materials the caretaker withdraws + places.
+   * Used both to detect "am I out of supplies?" and to hint the withdraw task.
+   */
+  private static readonly CARETAKER_MATERIAL_HINTS = [
+    'planks', 'log', 'stripped_', 'stone_bricks', 'bricks', 'cobblestone',
+    'stone', 'deepslate', 'sandstone', 'quartz', 'glass', 'glass_pane',
+    'stairs', 'slab', 'fence', 'wall', 'door', 'trapdoor', 'terracotta',
+    'concrete', 'wool', 'torch', 'lantern', 'ladder', 'chest', 'barrel',
+    'copper', 'polished_', 'chiseled_', 'tuff', 'calcite', 'prismarine',
+  ];
+
+  /**
+   * Place-only expansion tasks the caretaker rotates through. Each is phrased
+   * for the codegen ActionAgent: it uses placeBlock(...) with blocks already in
+   * the bot's inventory, anchored at the home structure. Every entry repeats the
+   * hard rule — NEVER mine/break existing blocks — so the caretaker only ever
+   * adds to the user's build, never damages it.
+   */
+  private static readonly CARETAKER_BUILD_TASKS: Array<{ description: string; keywords: string[] }> = [
+    { description: 'Extend an outer wall of your home base outward by a few blocks, placing building blocks from your inventory to grow the footprint. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'wall', 'expand'] },
+    { description: 'Raise the walls of your home base one layer taller by stacking building blocks from your inventory on top of the existing walls. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'wall', 'height'] },
+    { description: 'Add a new room next to your home base: lay out a floor and four short walls from blocks in your inventory, leaving a doorway. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'room', 'expand'] },
+    { description: 'Build a flat roof or ceiling over an open part of your home base using slabs or planks from your inventory. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'roof'] },
+    { description: 'Add a second floor above your home base: place a floor layer, then a short wall ring around it, from blocks in your inventory. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'floor', 'expand'] },
+    { description: 'Light up and finish your home base: place torches or lanterns and fill any gaps in the walls with blocks from your inventory. PLACE ONLY — never mine or break any existing block.', keywords: ['build', 'place', 'torch', 'light'] },
+  ];
+
+  /**
+   * Caretaker curriculum for a leashed builder. If the bot is low on placeable
+   * materials it goes to the nearest chest to restock; otherwise it runs the
+   * next place-only home-expansion task. Never proposes mining/exploration, so
+   * a leashed builder can never wander off or dig up the user's build.
+   */
+  private proposeCaretakerTask(): Task {
+    const home = this.leashHome;
+    const items = (() => {
+      try { return this.bot.inventory.items(); } catch { return []; }
+    })();
+    const isMaterial = (name: string) =>
+      VoyagerLoop.CARETAKER_MATERIAL_HINTS.some((h) => name.includes(h));
+    const materialCount = items
+      .filter((i) => isMaterial(i.name))
+      .reduce((sum, i) => sum + i.count, 0);
+
+    // Out of supplies → restock from the home chest before building.
+    if (materialCount < 16) {
+      const anchor = home ? ` near (${home.x}, ${home.z})` : '';
+      return {
+        description: `Go to the nearest chest${anchor} and withdraw full stacks of building materials (planks, stone bricks, logs, glass, stairs, slabs, torches). Use inspectContainer('chest') to see what's inside, then withdrawItem('chest', <block>, 64) for several block types. Do not break anything.`,
+        keywords: ['withdraw', 'chest', 'container', 'restock', 'build'],
+      };
+    }
+
+    // Have materials → run the next place-only expansion task.
+    const idx = this.caretakerBuildIndex % VoyagerLoop.CARETAKER_BUILD_TASKS.length;
+    this.caretakerBuildIndex = (this.caretakerBuildIndex + 1) % VoyagerLoop.CARETAKER_BUILD_TASKS.length;
+    const base = VoyagerLoop.CARETAKER_BUILD_TASKS[idx];
+    const anchor = home ? ` Your home base is centered near (${home.x}, ${home.z}); build within ${home.radius} blocks of it.` : '';
+    return { description: base.description + anchor, keywords: base.keywords };
   }
 
   start(): void {
@@ -1029,7 +1111,11 @@ export class VoyagerLoop {
     } catch {
       /* swallow — role boost is additive */
     }
-    const blackboardTask = !goalTask ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos, botRole ?? undefined)) || null : null;
+    // Caretaker builders never claim blackboard/swarm tasks — those are the
+    // roaming DungeonMaster "explore N blocks for iron" quests that the leash
+    // can't fulfill. They run only their own place-only caretaker curriculum
+    // (below), plus any explicit player/goal task.
+    const blackboardTask = (!goalTask && !this.isCaretakerBuilder) ? (await this.blackboardManager?.claimBestTask(this.botName, this.currentTask || this.personality, this.personality, botPos, botRole ?? undefined)) || null : null;
     this.activeBlackboardTask = blackboardTask;
     const playerTask = goalTask || this.playerTaskQueue.shift();
 
@@ -1096,6 +1182,9 @@ export class VoyagerLoop {
       || goalTask
       || playerTask
       || (blackboardTask ? { description: blackboardTask.description, keywords: blackboardTask.keywords } : null)
+      // Caretaker builders bypass the roaming Voyager curriculum entirely and
+      // run the place-only home-expansion loop instead.
+      || (this.isCaretakerBuilder ? this.proposeCaretakerTask() : null)
       || await this.curriculumAgent.proposeTask(
       this.bot,
       this.personality,

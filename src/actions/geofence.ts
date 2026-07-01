@@ -30,6 +30,13 @@ export interface ProtectedZone {
   maxX: number;
   maxY: number;
   maxZ: number;
+  /**
+   * Whether this zone is a valid night-shelter destination (see
+   * getNearestProtectedCenter). Defaults to true. Set false for zones that
+   * exist purely to block mining (e.g. a leashed caretaker's build area) so
+   * they don't pull the roaming fleet away from the actual town at night.
+   */
+  shelter?: boolean;
 }
 
 export interface MineSite {
@@ -126,6 +133,7 @@ export function getNearestProtectedCenter(x: number, z: number): { x: number; y:
   let best: ProtectedZone | null = null;
   let bestDist = Infinity;
   for (const zz of zones) {
+    if (zz.shelter === false) continue; // mining-only zone, not a night-shelter target
     const cx = (zz.minX + zz.maxX) / 2;
     const cz = (zz.minZ + zz.maxZ) / 2;
     const d = (x - cx) ** 2 + (z - cz) ** 2;

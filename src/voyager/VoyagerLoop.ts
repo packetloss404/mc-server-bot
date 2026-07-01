@@ -125,6 +125,10 @@ export class VoyagerLoop {
   private curriculumAgent: CurriculumAgent;
   /** Home anchor when this bot is movement-leashed (config.leash), else null. */
   private leashHome: { x: number; z: number; radius: number } | null = null;
+  /** Safe fallback teleport target for stranded-bot self-rescue (config.rescueHome). */
+  private rescueHome: { x: number; y: number; z: number } | null = null;
+  /** Rate-limits self-rescue attempts so an un-rescuable bot can't spam /tp. */
+  private lastRescueAttemptAt = 0;
   /** True when a leashed `builder` bot should run the place-only caretaker
    *  curriculum (withdraw from a home chest → expand the home structure)
    *  instead of the roaming Voyager/DungeonMaster curriculum. */
@@ -240,6 +244,8 @@ export class VoyagerLoop {
 
     this.skillLibrary = new SkillLibrary(config.skills.directory, config.skills.maxSkills, llmClient);
     this.codeExecutor = new CodeExecutor(config.voyager.codeExecutionTimeoutMs);
+
+    this.rescueHome = config.rescueHome ?? null;
 
     // Movement leash: if config.leash names this bot, pin it to a home anchor +
     // radius so generated code can't walk it off its island (enforced in
@@ -857,6 +863,74 @@ export class VoyagerLoop {
     }, Math.max(50, Math.round(this.config.voyager.taskCooldownMs * this.taskCooldownMultiplier)));
   }
 
+  /**
+   * When a bot is both stuck (its task is on the failure cooldown) and physically
+   * stranded (standing in liquid), teleport it back to a safe home so it can make
+   * progress again. Bots are server-op, so a bot can /tp itself — but op is granted
+   * externally (ops.json) and NOT guaranteed, so we VERIFY the teleport by re-reading
+   * position. If the bot didn't move, it isn't op (or /tp was rejected): we emit a
+   * loud, greppable WARN with the exact manual command instead of looping silently —
+   * i.e. we only bother a human when self-rescue genuinely can't work. Rate-limited.
+   */
+  private async tryRescueIfStranded(task: Task): Promise<void> {
+    const RESCUE_COOLDOWN_MS = 10 * 60 * 1000;
+    if (Date.now() - this.lastRescueAttemptAt < RESCUE_COOLDOWN_MS) return;
+
+    const pos = this.bot.entity?.position;
+    if (!pos) return;
+
+    // Physical stranding signal: feet block is liquid, or mineflayer flags in-water.
+    let inLiquid = false;
+    try {
+      const feet = this.bot.blockAt(pos);
+      inLiquid = (!!feet && (feet.name === 'water' || feet.name === 'lava'))
+        || (this.bot.entity as any)?.isInWater === true;
+    } catch {
+      return;
+    }
+    if (!inLiquid) return; // stuck but not stranded — the cooldown alone caps cost
+
+    // Destination: leashed bots return to their anchor (using the configured rescue
+    // Y); unleashed bots go to the fleet rescueHome. No home → escalate, don't guess.
+    const dest = this.leashHome
+      ? { x: this.leashHome.x, y: this.rescueHome?.y ?? Math.round(pos.y), z: this.leashHome.z }
+      : this.rescueHome;
+    this.lastRescueAttemptAt = Date.now();
+
+    if (!dest) {
+      logger.warn(
+        { bot: this.botName, pos: { x: Math.round(pos.x), y: Math.round(pos.y), z: Math.round(pos.z) } },
+        'STRANDED bot has no rescue home (set config.rescueHome or leash it) — manual /tp needed',
+      );
+      return;
+    }
+
+    const dx = Math.round(dest.x), dy = Math.round(dest.y), dz = Math.round(dest.z);
+    const before = { x: pos.x, z: pos.z };
+    logger.warn({ bot: this.botName, dest: { x: dx, y: dy, z: dz } }, 'STRANDED in liquid — attempting self-rescue /tp home');
+    try {
+      this.bot.chat(`/tp ${this.bot.username} ${dx} ${dy} ${dz}`);
+    } catch (err: any) {
+      logger.warn({ bot: this.botName, err: err.message }, 'Self-rescue /tp threw');
+      return;
+    }
+    await new Promise((r) => setTimeout(r, 2500));
+
+    const after = this.bot.entity?.position;
+    const movedToHome = !!after && Math.hypot(after.x - dx, after.z - dz) < 12;
+    if (movedToHome) {
+      // Landed near home → clear the doomed task's blockers so it retries fresh.
+      this.curriculumAgent.getBlockerMemory().clearTask(task);
+      logger.info({ bot: this.botName, dest: { x: dx, y: dy, z: dz } }, 'Self-rescue succeeded — teleported home, cleared blockers');
+    } else {
+      const moved = after ? Math.hypot(after.x - before.x, after.z - before.z) : 0;
+      logger.warn(
+        { bot: this.botName, movedBlocks: Math.round(moved), manualCommand: `/tp ${this.bot.username} ${dx} ${dy} ${dz}` },
+        'STRANDED bot could NOT self-rescue (not op / tp rejected) — MANUAL /tp REQUIRED',
+      );
+    }
+  }
+
   private async runOneCycle(): Promise<void> {
     if (this.paused) return;
 
@@ -1193,6 +1267,26 @@ export class VoyagerLoop {
       cultureContext || undefined,
     );
 
+    // Stuck-task cost guard: if this autonomously-chosen task has failed hard
+    // recently (count >= 2 within the cooldown window), don't burn a codegen call
+    // regenerating a doomed task every ~30s. Idle this cycle; the cooldown lets us
+    // retry later once the situation may have changed (e.g. the bot was rescued
+    // from a spot where the task was impossible). Player/goal/blackboard tasks
+    // bypass this — the user explicitly asked for those.
+    const STUCK_TASK_COOLDOWN_MS = 5 * 60 * 1000;
+    if (task && !haveHigherPriority
+      && this.curriculumAgent.getBlockerMemory().isOnCooldown(task, STUCK_TASK_COOLDOWN_MS)) {
+      // A bot stuck on the same task is often physically stranded (e.g. beached in
+      // water with no reachable resources). Try to self-rescue it home before we
+      // idle — otherwise it's cheap but permanently useless until a human notices.
+      await this.tryRescueIfStranded(task);
+      logger.info(
+        { bot: this.botName, task: task.description },
+        'Stuck task on cooldown — skipping codegen this cycle (cost guard)',
+      );
+      return;
+    }
+
     const progression = getProgressionState(this.bot, (this.curriculumAgent as any).completedTasks || []);
     const plan = buildTaskPlan(task, progression);
     this.currentTask = task.description;
@@ -1495,7 +1589,16 @@ export class VoyagerLoop {
     const composableSkills = await this.skillLibrary.getComposableMatches(query, 3);
     const blockerSummary = this.curriculumAgent.getBlockerMemory().summarize(task);
     const worldMemorySummary = this.curriculumAgent.getWorldMemory().summary();
-    const useDirectSkill = !!bestSkill && composableSkills.length <= 1;
+    // A confident direct-skill match reuses cached skill code WITHOUT an LLM call
+    // (codeSource='skill-library' below). The old `composableSkills.length <= 1`
+    // gate defeated this whenever ≥2 skills loosely matched (getComposableMatches
+    // admits score ≥ 8), forcing full codegen even on a strong exact match — the
+    // dominant source of "regenerate the same already-learned task 100×" spend.
+    // Trust a strong direct match (getBestMatch already requires score ≥ 16;
+    // ≥ 24 is a confident hit) regardless of how many weak composables co-matched.
+    const STRONG_DIRECT_SKILL_SCORE = 24;
+    const useDirectSkill = !!bestSkill
+      && (composableSkills.length <= 1 || bestSkill.score >= STRONG_DIRECT_SKILL_SCORE);
 
     // Try action templates as a middle tier between skill library and full code gen
     const templateMatch = !useDirectSkill && this.actionTemplates

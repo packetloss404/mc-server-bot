@@ -37,6 +37,12 @@ interface ModelRouterConfig {
   routes?: Record<string, RouteConfig>;
   /** Returns false to refuse all LLM calls (global kill switch). */
   isEnabled?: () => boolean;
+  /**
+   * Returns false to skip a paid/governed provider for this call (daily budget
+   * cap / idle throttle). Non-governed providers should return true so calls
+   * fall through to the cheap fallbacks. Defaults to always-allow.
+   */
+  paidProviderAllowed?: (provider: string, taskType: string) => boolean;
 }
 
 /** A snapshot of one LLM call, emitted for live timeline visualization. */
@@ -61,6 +67,20 @@ export class AIDisabledError extends Error {
   constructor(message = 'AI is disabled (kill switch)') {
     super(message);
     this.name = 'AIDisabledError';
+  }
+}
+
+/**
+ * Thrown when every provider in the chain is a governed/paid provider currently
+ * blocked by the daily budget cap or idle throttle. Extends AIDisabledError so
+ * callers that already tolerate the kill switch idle instead of crash-looping.
+ * (Common case never reaches this: codegen falls through to its cheap fallbacks.)
+ */
+export class BudgetCappedError extends AIDisabledError {
+  code = 'AI_DISABLED';
+  constructor(message = 'Daily LLM budget cap reached (enable override to continue)') {
+    super(message);
+    this.name = 'BudgetCappedError';
   }
 }
 
@@ -123,6 +143,7 @@ export class ModelRouter implements LLMClient {
   private defaultProvider: string;
   private ledger: TokenLedger;
   private isEnabledFn: () => boolean;
+  private paidProviderAllowedFn: (provider: string, taskType: string) => boolean;
   /** Consecutive full-chain failures. Resets on any success. */
   private consecutiveFailures = 0;
   /** When > Date.now(), all LLM calls fast-fail with AIDisabledError. */
@@ -144,6 +165,7 @@ export class ModelRouter implements LLMClient {
     this.defaultProvider = config.defaultProvider;
     this.ledger = ledger;
     this.isEnabledFn = config.isEnabled ?? (() => true);
+    this.paidProviderAllowedFn = config.paidProviderAllowed ?? (() => true);
 
     this.routes = new Map();
     if (config.routes) {
@@ -330,6 +352,23 @@ export class ModelRouter implements LLMClient {
     if (!providerChain.includes(this.defaultProvider)) {
       providerChain.push(this.defaultProvider);
     }
+
+    // Budget/idle gate: drop any governed provider that's currently capped so the
+    // call degrades to its cheap fallbacks instead of spending. If the whole chain
+    // is governed-and-blocked, idle like the kill switch (BudgetCappedError).
+    const gatedChain = providerChain.filter((p) => this.paidProviderAllowedFn(p, String(taskType)));
+    if (gatedChain.length === 0) {
+      logger.warn({ taskType, providerChain }, 'All providers blocked by budget cap — idling this call');
+      throw new BudgetCappedError();
+    }
+    if (gatedChain.length !== providerChain.length) {
+      logger.info(
+        { taskType, skipped: providerChain.filter((p) => !gatedChain.includes(p)), using: gatedChain },
+        'Budget cap: skipping paid provider, falling through to cheaper fallback',
+      );
+    }
+    providerChain.length = 0;
+    providerChain.push(...gatedChain);
 
     const effectiveMaxTokens = route?.maxTokens ?? maxTokens;
 

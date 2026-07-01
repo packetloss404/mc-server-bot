@@ -51,6 +51,19 @@ export class BlockerMemory {
     return this.getTaskBlockers(task).some((r) => r.count >= 2);
   }
 
+  /**
+   * True when a task has failed hard (count >= 2) AND its most recent failure was
+   * within `cooldownMs`. The VoyagerLoop uses this to skip regenerating a doomed
+   * task every cycle (a codegen call it will only waste), then retry once the
+   * cooldown lapses — in case the world changed or the bot was rescued from a bad
+   * spot. Unlike hasStrongBlocker, this decays with time so the task isn't
+   * abandoned forever.
+   */
+  isOnCooldown(task: Task, cooldownMs: number): boolean {
+    const now = Date.now();
+    return this.getTaskBlockers(task).some((r) => r.count >= 2 && now - r.updatedAt < cooldownMs);
+  }
+
   summarize(task?: Task): string {
     let records: BlockerRecord[];
     if (task) {

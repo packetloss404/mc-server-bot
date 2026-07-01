@@ -9,21 +9,32 @@ const MAX_RECORDS = 10000;
 
 /** Cost per 1M tokens (USD). Update as pricing changes. */
 const COST_PER_MILLION: Record<string, { input: number; output: number }> = {
-  // Gemini
-  'gemini-3-flash-preview': { input: 0.15, output: 0.60 },
+  // Gemini (3.5 Flash launched May 2026 at $1.50/$9.00 — Pro-level coding at
+  // Flash cost; do NOT reuse the old 2.5-flash $0.15/$0.60 rate for it).
+  'gemini-3.5-flash': { input: 1.50, output: 9.00 },
+  'gemini-3.5-pro': { input: 2.50, output: 15.0 },
+  'gemini-3.1-pro': { input: 2.0, output: 12.0 },
+  'gemini-3-flash-preview': { input: 1.50, output: 9.00 },
   'gemini-2.5-flash': { input: 0.15, output: 0.60 },
   'gemini-2.5-flash-preview-05-20': { input: 0.15, output: 0.60 },
   'gemini-2.0-flash': { input: 0.10, output: 0.40 },
   'gemini-2.5-pro-preview-05-06': { input: 1.25, output: 10.0 },
   'gemini-embedding-001': { input: 0.0, output: 0.0 },
-  // Anthropic
+  // Anthropic — legacy Claude 4
   'claude-sonnet-4-20250514': { input: 3.0, output: 15.0 },
   'claude-opus-4-20250514': { input: 15.0, output: 75.0 },
   'claude-haiku-3-20240307': { input: 0.25, output: 1.25 },
-  // Anthropic — current models. TODO: verify pricing (placeholder copied from
-  // Sonnet/Opus 4 entries above; refresh once Anthropic publishes the rate card).
+  // Anthropic — current models (rate card as of 2026-07). Opus 4.7/4.8 are
+  // $5/$25 — NOT the old $15/$75 Opus-4 pricing. Sonnet 5 uses standard
+  // $3/$15 (not the intro $2/$10) so the budget cap errs on the safe side
+  // and trips slightly early rather than overshooting.
+  'claude-sonnet-5': { input: 3.0, output: 15.0 },
   'claude-sonnet-4-6': { input: 3.0, output: 15.0 },
-  'claude-opus-4-7': { input: 15.0, output: 75.0 },
+  'claude-opus-4-8': { input: 5.0, output: 25.0 },
+  'claude-opus-4-7': { input: 5.0, output: 25.0 },
+  'claude-haiku-4-5': { input: 1.0, output: 5.0 },
+  // MiniMax — approximate; refresh if MiniMax publishes an exact rate card.
+  'MiniMax-M3': { input: 0.30, output: 1.20 },
 };
 
 export class TokenLedger {
@@ -120,6 +131,25 @@ export class TokenLedger {
       byTaskType,
       byBot,
     };
+  }
+
+  /**
+   * Sum of estimated USD spend since the start of the local calendar day,
+   * optionally scoped to a provider and/or task type. Drives the daily budget
+   * cap. Only records written after the pricing fix carry real cost; older
+   * $0-era records simply contribute nothing.
+   */
+  getSpendTodayUsd(opts: { provider?: string; taskType?: string } = {}): number {
+    const now = new Date();
+    const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+    let sum = 0;
+    for (const r of this.records) {
+      if (r.timestamp < startOfDay) continue;
+      if (opts.provider && r.provider !== opts.provider) continue;
+      if (opts.taskType && r.taskType !== opts.taskType) continue;
+      sum += r.estimatedCostUsd;
+    }
+    return sum;
   }
 
   private estimateCost(model: string, inputTokens: number, outputTokens: number): number {

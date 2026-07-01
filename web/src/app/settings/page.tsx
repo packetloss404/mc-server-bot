@@ -212,6 +212,17 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
   const [aiEnabled, setAiEnabled] = useState<boolean>(true);
   const [togglingAi, setTogglingAi] = useState(false);
 
+  // Daily budget guardrail
+  const [budget, setBudget] = useState<{ dailyUsd: number; scope: 'anthropic' | 'all'; override: boolean; idleThrottle: boolean }>({
+    dailyUsd: 5,
+    scope: 'anthropic',
+    override: false,
+    idleThrottle: false,
+  });
+  const [spendToday, setSpendToday] = useState<{ anthropic: number; total: number }>({ anthropic: 0, total: 0 });
+  const [savingBudget, setSavingBudget] = useState(false);
+  const [dailyUsdInput, setDailyUsdInput] = useState<string>('5');
+
   // New provider form
   const [newProvider, setNewProvider] = useState({ name: 'gemini', apiKey: '', model: '', maxConcurrent: 3 });
 
@@ -230,6 +241,7 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
       'claude-fable-5',
       'claude-opus-4-8',
       'claude-opus-4-7',
+      'claude-sonnet-5',
       'claude-sonnet-4-6',
       'claude-haiku-4-5',
       // Legacy but still callable
@@ -289,16 +301,22 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
   const fetchSettings = useCallback(async () => {
     try {
       const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
-      const [settingsRes, usageRes, enabledRes] = await Promise.all([
+      const [settingsRes, usageRes, enabledRes, budgetRes] = await Promise.all([
         fetch(`${base}/api/llm/providers`).then((r) => r.json()),
         fetch(`${base}/api/llm/usage`).then((r) => r.json()),
         fetch(`${base}/api/llm/enabled`).then((r) => r.json()).catch(() => ({ enabled: true })),
+        fetch(`${base}/api/llm/budget`).then((r) => r.json()).catch(() => null),
       ]);
       setSettings(settingsRes);
       setUsage(usageRes.usage);
       setEditRoutes(settingsRes.routes || {});
       setRoutesBaseline(stableStringify(settingsRes.routes || {}));
       setAiEnabled(enabledRes.enabled !== false);
+      if (budgetRes?.budget) {
+        setBudget(budgetRes.budget);
+        setDailyUsdInput(String(budgetRes.budget.dailyUsd));
+        if (budgetRes.spendTodayUsd) setSpendToday(budgetRes.spendTodayUsd);
+      }
     } catch {
       showFeedback('error', 'Failed to load settings');
     } finally {
@@ -332,7 +350,49 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
     }
   };
 
+  const patchBudget = async (patch: Partial<typeof budget>, successMsg?: string) => {
+    setSavingBudget(true);
+    try {
+      const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+      const res = await fetch(`${base}/api/llm/budget`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setBudget(data.budget);
+        setDailyUsdInput(String(data.budget.dailyUsd));
+        if (successMsg) showFeedback('success', successMsg);
+      } else {
+        showFeedback('error', data.error || 'Failed to update budget');
+      }
+    } catch {
+      showFeedback('error', 'Failed to update budget');
+    } finally {
+      setSavingBudget(false);
+    }
+  };
+
+  const toggleOverride = () => {
+    const next = !budget.override;
+    patchBudget(
+      { override: next },
+      next ? 'Override ON — hog wild, no daily cap' : 'Override OFF — daily cap re-armed',
+    );
+  };
+
   useEffect(() => { fetchSettings(); }, [fetchSettings]);
+  // Refresh today's spend every 20s so the readout tracks live burn.
+  useEffect(() => {
+    const base = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
+    const id = setInterval(() => {
+      fetch(`${base}/api/llm/budget`).then((r) => r.json()).then((d) => {
+        if (d?.spendTodayUsd) setSpendToday(d.spendTodayUsd);
+      }).catch(() => {});
+    }, 20000);
+    return () => clearInterval(id);
+  }, []);
 
   // Dirty tracking: form is dirty when either the add-provider form has any
   // edits OR the routes table differs from the last-saved baseline.
@@ -550,6 +610,137 @@ function AiProviderTab({ onDirtyChange }: AiProviderTabProps) {
           </button>
         </div>
       </section>
+
+      {/* ── Daily Budget Guardrail ── */}
+      {(() => {
+        const scopedSpend = budget.scope === 'all' ? spendToday.total : spendToday.anthropic;
+        const capped = !budget.override && budget.dailyUsd > 0 && scopedSpend >= budget.dailyUsd;
+        const pct = budget.dailyUsd > 0 ? Math.min(100, (scopedSpend / budget.dailyUsd) * 100) : 0;
+        return (
+          <section
+            className={`rounded-lg border p-5 ${
+              budget.override
+                ? 'bg-amber-950/40 border-amber-700'
+                : capped
+                ? 'bg-red-950/40 border-red-800'
+                : 'bg-zinc-900 border-zinc-800'
+            }`}
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-lg font-semibold flex items-center gap-2">
+                  Daily Budget
+                  <span
+                    className={`text-xs px-2 py-0.5 rounded border ${
+                      budget.override
+                        ? 'bg-amber-900/50 text-amber-200 border-amber-600'
+                        : capped
+                        ? 'bg-red-900/60 text-red-200 border-red-700'
+                        : 'bg-emerald-900/50 text-emerald-300 border-emerald-700'
+                    }`}
+                  >
+                    {budget.override ? 'OVERRIDE — HOG WILD' : capped ? 'CAPPED' : 'ARMED'}
+                  </span>
+                </h2>
+                <p className="text-zinc-400 text-sm mt-1">
+                  {budget.override
+                    ? 'Cap bypassed. Paid codegen runs unrestricted — use for a code session, then turn back off.'
+                    : `When today's ${budget.scope === 'all' ? 'total' : 'Anthropic'} spend hits the cap, paid codegen falls back to the cheap model (bots keep working, no more paid spend).`}
+                </p>
+              </div>
+              {/* Go hog wild override */}
+              <div className="flex flex-col items-end gap-1">
+                <span className="text-xs text-zinc-400">Go hog wild</span>
+                <button
+                  onClick={toggleOverride}
+                  disabled={savingBudget}
+                  className={`relative inline-flex h-9 w-16 items-center rounded-full border-2 transition-colors ${
+                    budget.override ? 'bg-amber-500 border-amber-400' : 'bg-zinc-700 border-zinc-600'
+                  } disabled:opacity-50`}
+                  aria-label="Toggle budget override"
+                >
+                  <span
+                    className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform ${
+                      budget.override ? 'translate-x-8' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+            </div>
+
+            {/* Today's spend readout */}
+            <div className="mt-4">
+              <div className="flex justify-between text-sm mb-1">
+                <span className="text-zinc-400">
+                  Today: <span className="text-zinc-100 font-mono">${scopedSpend.toFixed(2)}</span>
+                  {' / '}
+                  <span className="text-zinc-100 font-mono">${budget.dailyUsd.toFixed(2)}</span>
+                  <span className="text-zinc-500"> ({budget.scope === 'all' ? 'all providers' : 'Anthropic'})</span>
+                </span>
+                <span className="text-zinc-500 font-mono">total all providers: ${spendToday.total.toFixed(2)}</span>
+              </div>
+              <div className="h-2 w-full rounded bg-zinc-800 overflow-hidden">
+                <div
+                  className={`h-full transition-all ${budget.override ? 'bg-amber-500' : capped ? 'bg-red-500' : pct > 75 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                  style={{ width: `${budget.override ? 100 : pct}%` }}
+                />
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div className="mt-4 flex flex-wrap items-end gap-4">
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-400">Daily cap (USD)</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    value={dailyUsdInput}
+                    onChange={(e) => setDailyUsdInput(e.target.value)}
+                    className="w-24 rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-sm font-mono"
+                  />
+                  <button
+                    onClick={() => {
+                      const v = parseFloat(dailyUsdInput);
+                      if (!Number.isFinite(v) || v < 0) { showFeedback('error', 'Enter a non-negative number'); return; }
+                      patchBudget({ dailyUsd: v }, `Daily cap set to $${v.toFixed(2)}`);
+                    }}
+                    disabled={savingBudget}
+                    className="rounded bg-zinc-700 hover:bg-zinc-600 px-3 py-1 text-sm disabled:opacity-50"
+                  >
+                    Set
+                  </button>
+                </div>
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-xs text-zinc-400">Scope</span>
+                <select
+                  value={budget.scope}
+                  onChange={(e) => patchBudget({ scope: e.target.value as 'anthropic' | 'all' })}
+                  disabled={savingBudget}
+                  className="rounded bg-zinc-800 border border-zinc-700 px-2 py-1 text-sm disabled:opacity-50"
+                >
+                  <option value="anthropic">Anthropic only (the paid path)</option>
+                  <option value="all">All providers</option>
+                </select>
+              </label>
+
+              <label className="flex items-center gap-2 pb-1">
+                <input
+                  type="checkbox"
+                  checked={budget.idleThrottle}
+                  onChange={(e) => patchBudget({ idleThrottle: e.target.checked })}
+                  disabled={savingBudget}
+                  className="h-4 w-4 accent-emerald-500"
+                />
+                <span className="text-sm text-zinc-300">Idle throttle <span className="text-zinc-500">(pause paid codegen when no players online)</span></span>
+              </label>
+            </div>
+          </section>
+        );
+      })()}
 
       {/* ── Providers ── */}
       <section className="bg-zinc-900 rounded-lg border border-zinc-800 p-5">

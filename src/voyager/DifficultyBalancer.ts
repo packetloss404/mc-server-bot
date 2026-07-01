@@ -124,8 +124,17 @@ export class DifficultyBalancer {
       challenge: 64,
     };
 
+    // Idle backoff: when NO real players are online, slow the whole fleet's task
+    // loop way down. Bots were generating a codegen call every ~2-4s 24/7 even on
+    // an empty server (measured: playerCount==0 ~99% of the day), which was ~25%
+    // of total LLM spend for zero user-facing benefit. ×6 turns a ~2s cadence into
+    // ~12s+, cutting empty-server codegen ~85% while still making slow progress.
+    const IDLE_COOLDOWN_MULTIPLIER = 6;
+    let taskCooldownMultiplier = cooldownMap[diff.tier];
+    if (diff.playerCount === 0) taskCooldownMultiplier *= IDLE_COOLDOWN_MULTIPLIER;
+
     return {
-      taskCooldownMultiplier: cooldownMap[diff.tier],
+      taskCooldownMultiplier,
       preferredTaskTypes: taskMap[diff.tier],
       chatProbability: diff.botChatFrequency,
       helpRadius: radiusMap[diff.tier],

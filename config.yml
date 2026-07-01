@@ -255,3 +255,15 @@ leash:
     x: 1559
     z: -392
     radius: 64
+  - botName: Sam         # kept in the rail-hub forest (verified trees, surface y67)
+    x: 1663              # was wandering 1700+ blocks to the ocean and drowning;
+    z: 194               # this pins him to the wooded town so "mine oak log" works
+    radius: 96
+
+# Safe fallback spot a stranded bot self-teleports to when stuck in liquid and
+# unable to complete tasks (VoyagerLoop.tryRescueIfStranded). Known-safe HQ land
+# (packetloss404's island hut, y=64). Point this at the town capital if preferred.
+rescueHome:
+  x: 1559
+  y: 65
+  z: -392

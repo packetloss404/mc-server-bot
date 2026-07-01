@@ -123,4 +123,67 @@ export function registerLLMRoutes(
     logger.warn({ enabled }, 'AI kill switch broadcast to all workers');
     res.json({ success: true, enabled });
   });
+
+  // ── Daily budget guardrail ──
+  // The router's gate closure reads llmSettings live on every call, so these
+  // changes take effect immediately with no restart or /reload.
+  app.get('/api/llm/budget', (_req: Request, res: Response) => {
+    const budget = llmSettings.getBudget();
+    res.json({
+      budget,
+      spendTodayUsd: {
+        anthropic: Math.round(tokenLedger.getSpendTodayUsd({ provider: 'anthropic' }) * 10000) / 10000,
+        total: Math.round(tokenLedger.getSpendTodayUsd() * 10000) / 10000,
+      },
+      // What the gate would decide right now for a codegen call — handy for the UI.
+      codegenPaidAllowed: llmSettings.isPaidCallAllowed('anthropic', 'codegen'),
+    });
+  });
+
+  app.put('/api/llm/budget', (req: Request, res: Response) => {
+    const { dailyUsd, scope, override, idleThrottle } = req.body ?? {};
+    const patch: Record<string, unknown> = {};
+    if (dailyUsd !== undefined) {
+      if (typeof dailyUsd !== 'number' || dailyUsd < 0 || !Number.isFinite(dailyUsd)) {
+        res.status(400).json({ error: 'dailyUsd must be a non-negative number' });
+        return;
+      }
+      patch.dailyUsd = dailyUsd;
+    }
+    if (scope !== undefined) {
+      if (scope !== 'anthropic' && scope !== 'all') {
+        res.status(400).json({ error: "scope must be 'anthropic' or 'all'" });
+        return;
+      }
+      patch.scope = scope;
+    }
+    if (override !== undefined) {
+      if (typeof override !== 'boolean') {
+        res.status(400).json({ error: 'override must be a boolean' });
+        return;
+      }
+      patch.override = override;
+    }
+    if (idleThrottle !== undefined) {
+      if (typeof idleThrottle !== 'boolean') {
+        res.status(400).json({ error: 'idleThrottle must be a boolean' });
+        return;
+      }
+      patch.idleThrottle = idleThrottle;
+    }
+    const budget = llmSettings.setBudget(patch);
+    res.json({ success: true, budget });
+  });
+
+  // Convenience: the "go hog wild" toggle.
+  app.post('/api/llm/budget/override', (req: Request, res: Response) => {
+    const { override } = req.body ?? {};
+    if (typeof override !== 'boolean') {
+      res.status(400).json({ error: 'override (boolean) is required' });
+      return;
+    }
+    const budget = llmSettings.setBudgetOverride(override);
+    logger.warn({ override }, 'LLM budget override toggled');
+    res.json({ success: true, budget });
+  });
 }

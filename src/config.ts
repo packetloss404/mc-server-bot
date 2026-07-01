@@ -257,6 +257,14 @@ export interface Config {
    * dedicated caretaker bot on its island/site. Absent/empty → no bot leashed.
    */
   leash?: Array<{ botName: string; x: number; z: number; radius: number }>;
+  /**
+   * Safe fallback location a stranded bot teleports itself to when it gets stuck
+   * in liquid and can't complete tasks (see VoyagerLoop.tryRescueIfStranded).
+   * Leashed bots rescue to their anchor using this Y; unleashed bots rescue here.
+   * Should be a known-safe land coordinate (e.g. near base). Absent → no
+   * auto-rescue for unleashed bots (they escalate via a WARN log instead).
+   */
+  rescueHome?: { x: number; y: number; z: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -293,6 +301,7 @@ const KNOWN_TOP_LEVEL_KEYS = new Set<string>([
   'mining',
   'build',
   'leash',
+  'rescueHome',
 ]);
 
 const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> = {

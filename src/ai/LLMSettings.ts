@@ -22,19 +22,41 @@ export interface ProviderConfig {
   enabled: boolean;
 }
 
+/** Daily-spend guardrail on the paid LLM path. See LLMSettings.isPaidCallAllowed. */
+export interface BudgetConfig {
+  /** Daily USD cap on governed (paid) providers. <= 0 disables the cap. */
+  dailyUsd: number;
+  /** 'anthropic' = only gate Anthropic (the expensive path); 'all' = gate every provider. */
+  scope: 'anthropic' | 'all';
+  /** "Go hog wild" — when true, the cap AND idle throttle are bypassed. */
+  override: boolean;
+  /** When true, block governed codegen while zero humans are online (needs an online-count hook). */
+  idleThrottle: boolean;
+}
+
 export interface LLMSettingsData {
   providers: ProviderConfig[];
   routes: Record<string, RouteConfig>;
   defaultProvider: string;
   /** Global kill switch — when false, all LLM calls throw AI_DISABLED without spending. */
   aiEnabled: boolean;
+  /** Daily spend guardrail. Absent = defaults (see getBudget). */
+  budget?: BudgetConfig;
 }
+
+const DEFAULT_BUDGET: BudgetConfig = {
+  dailyUsd: 5,
+  scope: 'anthropic',
+  override: false,
+  idleThrottle: false,
+};
 
 const DEFAULT_SETTINGS: LLMSettingsData = {
   providers: [],
   routes: {},
   defaultProvider: 'gemini',
   aiEnabled: true,
+  budget: { ...DEFAULT_BUDGET },
 };
 
 /**
@@ -47,6 +69,8 @@ export class LLMSettings {
   private currentRouter: ModelRouter | null = null;
   /** Listener re-applied after every buildRouter() so hot-reload keeps emitting. */
   private callListener: ((event: LLMCallEvent) => void) | null = null;
+  /** Optional hook returning the number of real (non-bot) players online; drives idle throttle. */
+  private onlineHumanCountFn: (() => number) | null = null;
 
   constructor(ledger: TokenLedger) {
     this.ledger = ledger;
@@ -132,6 +156,59 @@ export class LLMSettings {
     logger.warn({ aiEnabled: enabled }, 'AI kill switch toggled');
   }
 
+  /** Register a source for the online (human) player count, used by the idle throttle. */
+  setOnlineHumanCountProvider(fn: () => number): void {
+    this.onlineHumanCountFn = fn;
+  }
+
+  /** Current budget guardrail, with defaults filled in for older settings files. */
+  getBudget(): BudgetConfig {
+    const b: Partial<BudgetConfig> = this.settings.budget ?? {};
+    return {
+      dailyUsd: typeof b.dailyUsd === 'number' ? b.dailyUsd : DEFAULT_BUDGET.dailyUsd,
+      scope: b.scope === 'all' ? 'all' : 'anthropic',
+      override: b.override === true,
+      idleThrottle: b.idleThrottle === true,
+    };
+  }
+
+  /** Merge-update the budget guardrail and persist. */
+  setBudget(partial: Partial<BudgetConfig>): BudgetConfig {
+    const next = { ...this.getBudget(), ...partial };
+    this.settings.budget = next;
+    this.save();
+    logger.warn({ budget: next }, 'LLM budget guardrail updated');
+    return next;
+  }
+
+  /** Convenience for the "go hog wild" toggle. */
+  setBudgetOverride(override: boolean): BudgetConfig {
+    return this.setBudget({ override });
+  }
+
+  /**
+   * Decide whether a paid/governed provider may be used for this call. Returns
+   * true (allow) unless the guardrail says otherwise. Consulted per call by the
+   * ModelRouter — when it returns false the router skips that provider and falls
+   * through to the cheap fallbacks (or idles if none remain).
+   */
+  isPaidCallAllowed(provider: string, taskType: string): boolean {
+    const b = this.getBudget();
+    if (b.override) return true; // hog-wild: no cap, no throttle
+    const governed = b.scope === 'all' ? true : provider === 'anthropic';
+    if (!governed) return true; // cheap providers are never gated
+    // Idle throttle: only when a human-count source is wired (else inert).
+    if (b.idleThrottle && this.onlineHumanCountFn && taskType === 'codegen') {
+      if (this.onlineHumanCountFn() <= 0) return false;
+    }
+    // Daily cap.
+    if (b.dailyUsd > 0) {
+      const scopeProvider = b.scope === 'all' ? undefined : 'anthropic';
+      if (this.ledger.getSpendTodayUsd({ provider: scopeProvider }) >= b.dailyUsd) return false;
+    }
+    return true;
+  }
+
   /** Build a new ModelRouter from current settings. Returns null if no providers have keys. */
   buildRouter(): ModelRouter | null {
     const clients = new Map<string, LLMClient>();
@@ -203,6 +280,7 @@ export class LLMSettings {
       defaultProvider: this.settings.defaultProvider,
       routes: Object.keys(this.settings.routes).length > 0 ? this.settings.routes : undefined,
       isEnabled: () => this.isAiEnabled(),
+      paidProviderAllowed: (provider, taskType) => this.isPaidCallAllowed(provider, taskType),
     }, this.ledger);
 
     // Re-apply any previously registered call listener so the live timeline

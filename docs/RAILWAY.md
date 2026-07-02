@@ -23,22 +23,30 @@ There are **two separate underground systems** the fleet has built:
 - **Verified in-world:** probes at the hub and along the corridors read
   `powered_rail` / `rail` at Y=52, matching the plan exactly.
 
-### Entrances (walk to the doorway at ground level, go down)
+### Entrances (rebuilt 2026-07-02 — grand staircases + kiosk heads)
 
-| Building                 | Doorway (entrance)   | Access | Riser (shaft)        |
-|--------------------------|----------------------|--------|----------------------|
-| Small medieval town hall | (1700, 73, 180)      | stairs | 1700/179, Y51→73     |
-| Parrot statue            | (1691, 75, 180)      | ladder | 1692/180, Y51→75     |
-| Victorian palace         | (1687, 64, 194)      | stairs | 1687/193, Y51→64     |
-| Well                     | (1700, 63, 170)      | stairs | 1700/171, Y51→63     |
-| Gnomo statue             | (1651, 64, 116)      | stairs | 1651/117, Y51→64     |
-| Totem pole               | (1639, 64, 133)      | ladder | 1640/133, Y51→64     |
-| Sam-cottage              | (1641, 64, 126)      | ladder | 1642/126, Y51→64     |
-| Villager statue          | (1632, 64, 117)      | ladder | 1633/117, Y51→64     |
+The old 1×1 riser shafts were replaced by **5 grand stone-brick staircases** (3–7 wide,
+red-carpet landings, lantern-lit, arched into the corridor wall BESIDE the track) plus
+**4 kiosk heads** over the surviving ladder shafts. Every arch lands on the walkway,
+never on rails; all walklines verified continuously walkable in-world.
 
-**Easiest entrances:** the town-hall staircase at **(1721, 73, 180)** (top of the
-flight) or the palace staircase at **(1675, 64, 194)** — walkable stairs beat the
-ladder shafts.
+| Access                  | Surface portal        | Corridor arch            | Serves                    |
+|-------------------------|-----------------------|--------------------------|---------------------------|
+| Flagship hub stair      | (1682, 63, 173)       | (1693–1695, 52–54, z177) | Hub (former parrot riser) |
+| Town hall switchback    | entry strip z185, Y73 | (1708–1710, 52–54, z183) | Town hall (Y73→Y52)       |
+| Well stair              | (1716, 63, 173)       | (1703, 52–54, 172–174)   | Well / trunk east side    |
+| Palace stair + gallery  | (1695, 63, 183)       | (1690, 52–54, 187–189)   | Victorian palace          |
+| Statue-plaza descent    | (1638, 63, 101)       | (1636–1638, 52–54, z114) | Gnomo + villager statues  |
+| Kiosk: villager statue  | (1632, ~63, 117)      | ladder 1633/117          | Villager statue           |
+| Kiosk: gnomo statue     | (1652, ~63, 118)      | shaft 1651/117 (plugged) | Decorative only — use plaza descent |
+| Kiosk: sam-cottage      | (1643, ~64, 126)      | ladder 1642/126          | Sam-cottage               |
+| Kiosk: totem pole       | (1641, ~63, 133)      | ladder 1640/133          | Totem pole                |
+
+Removed/plugged (rails beneath verified intact): the old parrot ladder (1692/180),
+the hall 1×1 riser column (1700/179), and the palace buried ladder (1687/193).
+
+**Easiest entrances:** the flagship hub stair at **(1682, 63, 173)** (7-wide, straight
+into the hub) or the well stair at **(1716, 63, 173)**.
 
 **Skipped:** `sam-plaque` — its corridor collided with another building's footprint,
 so it has no spoke (reach it on foot from a neighbouring doorway).
@@ -159,6 +167,31 @@ bot there first (e.g. an explorer), then re-scan.
 > this outpost exists.
 
 ---
+
+## Notes from the 2026-07-02 town cleanup + staircase build
+
+- **Walk-transfer junctions (as-built):** no through-cart continuity exists anywhere —
+  every spoke line stops 2–3 cells short of the trunk (x1696–1697), the E-W lines break
+  at the x1664/x1666 crossings, and the hub-east cells (x1701–1702 @z180) and palace
+  cells (x1687, z181–182) are walkway slabs. Carts require a walk-transfer at every
+  junction. A junction-rework job is needed if through-carting is ever wanted.
+- **Undocumented N-S rail line at x1665** (Y52 on stone_bricks, powered at z120/z128,
+  spans at least z105→z133), crossing the z117/z126/z133 spokes. Its west aisle is
+  **flooded** (water at Y52, x1664 z108–117, spilling into the z117 spoke's north
+  walkway). Ceiling is sealed; source is inside the tunnel north of z114. Needs a
+  separate drain+seal job. Pre-existing — not caused by the cleanup.
+- **Registry/docs drift (in-world truth):** gnomo statue spans west to **x1642**;
+  villager statue ~(1627–1630, z111–115); totem pole ~(1629–1631, z124–132); the
+  parrot statue is **absent** at (1691,75,180) — its riser was replaced by the
+  flagship hub stair.
+- **Keepers near the old destroyed hall (user decision — do NOT demolish):** the
+  furnished spruce/andesite tower (1694–1698, z214–220, to ~Y101) and the glass dome
+  (1688–1698, z226–262+, glass at Y104). The registry marks that footprint `destroyed`;
+  the structures are deliberate builds.
+- The town hall now stands on a **solid stone foundation** (Y63–72 fill, stone-brick
+  skirt) instead of a 20.5k-block void; its grounded east annexe (x1752–1779) is
+  untouched. The ridge across the common (z≈150–162) is terraced (63|68|74|68|63) with
+  two 3-wide connector stairs.
 
 ## Note: terrain-scan fix (2026-07-01)
 

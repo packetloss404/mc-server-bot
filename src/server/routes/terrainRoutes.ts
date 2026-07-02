@@ -10,6 +10,24 @@ import type { BotManager } from '../../bot/BotManager';
 export function registerTerrainRoutes(app: Express, deps: { botManager: BotManager }): void {
   const { botManager } = deps;
 
+  // Pick the connected bot closest to (x, z). A probe outside view distance
+  // reads every block as air (bot.blockAt returns null → treated as air), so a
+  // far-away probe silently reports empty/wrong terrain. Falls back to the first
+  // connected bot when no handle exposes a cached position.
+  const nearestProbe = async (x: number, z: number): Promise<any | null> => {
+    let probeHandle: any = null;
+    let bestDist = Infinity;
+    for (const h of botManager.getAllWorkers() as any[]) {
+      if (typeof h.isBotConnected !== 'function') continue;
+      if (!(await h.isBotConnected())) continue;
+      const pos = h.getCachedStatus?.()?.position;
+      if (!pos) { if (probeHandle === null) probeHandle = h; continue; }
+      const d = Math.hypot(pos.x - x, pos.z - z);
+      if (d < bestDist) { bestDist = d; probeHandle = h; }
+    }
+    return probeHandle;
+  };
+
   // Height-map probe around (cx, cz). Returns the top non-air block at each grid
   // cell as a flat array, matching the TerrainData frontend shape.
   app.get('/api/terrain', async (req: Request, res: Response) => {
@@ -18,13 +36,7 @@ export function registerTerrainRoutes(app: Express, deps: { botManager: BotManag
     const radius = Math.min(parseInt(String(req.query.radius ?? '16')), 64);
     const step = Math.max(parseInt(String(req.query.step ?? '1')), 1);
 
-    let probeHandle: any = null;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected === 'function' && (await h.isBotConnected())) {
-        probeHandle = h;
-        break;
-      }
-    }
+    const probeHandle = await nearestProbe(cx, cz);
     if (!probeHandle) {
       res.status(503).json({ error: 'No connected bot available to scan terrain' });
       return;
@@ -43,19 +55,9 @@ export function registerTerrainRoutes(app: Express, deps: { botManager: BotManag
     const maxY = parseInt(String(req.query.maxY ?? '320'));
     const minY = parseInt(String(req.query.minY ?? '-64'));
 
-    // Pick the connected bot closest to (x, z). bot.blockAt() returns null for
-    // chunks outside view distance, so a far-away probe makes the scan miss the
-    // surface and report height=null even when ground is clearly there.
-    let probeHandle: any = null;
-    let bestDist = Infinity;
-    for (const h of botManager.getAllWorkers() as any[]) {
-      if (typeof h.isBotConnected !== 'function') continue;
-      if (!(await h.isBotConnected())) continue;
-      const pos = h.getCachedStatus?.()?.position;
-      if (!pos) { if (probeHandle === null) probeHandle = h; continue; }
-      const d = Math.hypot(pos.x - x, pos.z - z);
-      if (d < bestDist) { bestDist = d; probeHandle = h; }
-    }
+    // bot.blockAt() returns null for chunks outside view distance, so the probe
+    // must be the bot closest to (x, z) or the scan misses the surface entirely.
+    const probeHandle = await nearestProbe(x, z);
     if (!probeHandle) {
       res.status(503).json({ error: 'No connected bot available to scan terrain' });
       return;

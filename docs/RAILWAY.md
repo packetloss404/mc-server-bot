@@ -104,9 +104,26 @@ rail-continuous end to end (every block probed, 0 gaps).
   at the platform ("50ELEVEN HQ STATION") and at the surface arch.
 - The corridor's west end passes directly under the warehouse; the staircase site was
   chosen east of it to avoid touching any HQ structure.
-- Undocumented **east stub** on Z=180: rail continuous x1700→1723 at Y52, unrailed
-  corridor floor to x1725, solid from x1726. Dead-end leftover from Stage A staging —
-  harmless, protected, leave intact.
+- **East stub** on Z=180: rail continuous x1700→1723 at Y52 (unrailed floor to x1725,
+  solid from x1726). No longer a dead end — it now carries the **bunker spur
+  junction** (§1c). Rails on Z=180 must stay to x1723.
+
+## 1c. Bunker spur (COMPLETE 2026-07-02)
+
+Cart route from the hub to packetloss404's sub-bunker (floor Y34, under the town —
+see `docs/BUNKER-MAP.md`):
+
+- **Junction:** curve at **(1721, 52, 180)** on the east stub — eastbound carts from
+  the hub turn south. Platform slabs both sides, signed "v BUNKER RAIL SPUR".
+- **Descent:** x1721, z184→z200, Y52→Y35 (1:1), `powered_rail` every 3rd block on
+  redstone blocks, 2-wide stone-brick walk-stairs on the east side, lanterns.
+- **Flat legs at Y35:** west along z202 (x1719→1706), then north along x1705
+  (z201→z178), both with the standard slab walkway + lanterns, powered every 8.
+- **BUNKER STATION:** rail ends (1703, 35, 178); pedestrian arch through the east
+  wall at z179 into the bunker vestibule (beside the up-ladder at 1702/z181, which
+  is preserved). Signed at station and vestibule.
+- Route stays entirely outside the bunker rooms and east of the planned town-hall
+  stairwell box (x≥1718 during the descent), below the protected corridor band.
 
 ## 2. The lone bot-dig at (1226, 51, 524) — REMOVED
 

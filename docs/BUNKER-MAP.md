@@ -57,11 +57,24 @@ above stays capped.
 
 ## Rail connection
 
-The **existing east ladder at (1702, z181)** climbs Y35→Y51, landing at the town
-rail-corridor level right by the hub (1700,51,180) — so it *is* the bunker's rail
-spur. Wayfinding: `oak_wall_sign` "^ RAIL HUB" at the ladder base (1700,36,180),
-standing `oak_sign` "v BUNKER" at the top (1699,52,182). The town rail network now
-has people-mover walkways (see `docs/RAILWAY.md`), so you can climb up and ride.
+**TWO ways in from the rail network:**
+
+1. **RAIL SPUR (built 2026-07-02)** — ride a cart from the hub straight to the bunker
+   door. Branches off the east stub on Z=180 at a curve **(1721,52,180)**, then:
+   south descent x1721 (z184→z200, Y52→Y35, powered_rail every 3rd block, walk-stairs
+   beside the track), west leg along z202, north leg along x1705 (runs one block east
+   of the bunker's east wall), ending at **BUNKER STATION (1703,35,178)** — a lit
+   platform with a pedestrian arch through the east wall at **z179** into the
+   vestibule, right beside the ladder. Signed at the junction ("v BUNKER RAIL SPUR"),
+   the station, and the vestibule side ("< RAIL SPUR to town hub & island HQ").
+   The ladder column (1702, z181) was preserved untouched; the north-leg tunnel keeps
+   a pillar bulge at (1703, z181) to protect its attachment.
+2. **Ladder** — the original east ladder at (1702, z181), Y35→Y51, topping out by the
+   hub (1700,51,180). Wayfinding signs at base and top as before.
+
+The town rail network has people-mover walkways throughout (see `docs/RAILWAY.md`),
+and the island-HQ line is complete — so the bunker is now one cart ride from both
+the town hub and the 50ELEVEN island.
 
 ## Build log
 
@@ -80,4 +93,10 @@ has people-mover walkways (see `docs/RAILWAY.md`), so you can climb up and ride.
   signs). Punched a doorway through the existing spruce structure at z160–166 so the
   **north room (z156–159) stays reachable** — verified the corridor is clear end to
   end (z156→z176). Built by Eleven.
+- 2026-07-02 — **built the RAIL SPUR:** junction curve off the east stub (1721,52,180),
+  17-block southern descent (shell-first bore, powered rails every 3, stone-brick
+  walk-stairs), flat legs at Y35 around the bunker's SE corner (z202 west leg, x1705
+  north leg), BUNKER STATION platform (1703,35,178) + pedestrian arch into the
+  vestibule at z179. Ladder preserved (verified all heights). Zero water. Built by
+  Maven; verified by probe sweep. See docs/RAILWAY.md §1c.
 - _Untouched:_ south pillared hall (z187–199) — existing player build. Next candidate.

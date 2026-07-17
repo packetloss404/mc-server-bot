@@ -4,6 +4,105 @@ All notable changes to DyoBot are documented in this file.
 
 ---
 
+## 2026-07-02
+
+### Features — Rail & bunker
+- **Town↔island-HQ rail link complete** — Finished the hub-and-spoke rail tunnel under Hollybrook: a 5-tall lit corridor (floor Y=51, track Y=52) with `powered_rail` every 8 blocks, a central hub at `(1700, 51, 180)`, a terminus station, and per-building vertical risers back to the shared corridor. Includes a terrain nearest-probe fix and a bunker spur cart route from the town hub into the sub-bunker vestibule. Documented in `docs/RAILWAY.md`.
+- **Grand staircase entrances** — Replaced the old 1×1 riser shafts with 5 grand stone-brick staircases (red-carpet landings, lantern-lit, arched beside the track) plus 4 kiosk heads over the surviving ladder shafts (`docs/RAILWAY.md`, Hollybrook cleanup).
+
+### Documentation
+- **Bunker ground-truth audit** — `docs/BUNKER.md` / `docs/BUNKER-MAP.md` correct the earlier "furnished shelter" assumption: the outpost at `(1226, 51, 524)` is a half-finished natural cave shaft (drained 2026-07-01, diamond-block plug left in place), not a built bunker with rooms or rails.
+
+---
+
+## 2026-07-01
+
+### Performance
+- **Cut 24/7 LLM burn ~88%** — Reduced always-on LLM cost with a daily budget guardrail and a stranded-bot rescue path.
+
+### Bug Fixes
+- **Stop night-shelter dragging the fleet to the HQ zone** — Night-shelter behavior no longer pulls the whole fleet off-task; town buildout fixes alongside.
+
+---
+
+## 2026-06-30
+
+### Features
+- **Dashboard telemetry** — Emit per-bot stats/armor/combat state and add a town resource-demand view.
+
+### Bug Fixes
+- **Per-bot movement leash** — Keep a caretaker bot pinned to its island instead of wandering.
+- **Footprint-aware site selection** — Stop buildings stacking on each other; avoid-aware fallback when no flat site qualifies.
+- **Town supply-task hygiene** — Dedup supply tasks (stop unbounded blackboard accumulation), locale-aware position bias when claiming, location-aware supply tasks, and stop routing food gathers as "eat".
+- **Voyager guards** — Teach ActionAgent to guard find-then-mine lookups; reject empty-name primitive calls at runtime.
+- **Web GUI audit pass** — Remove dead code, fix contract bugs and stale copy, add the supply-queue view.
+
+---
+
+## 2026-06-29
+
+### Bug Fixes
+- **Recover zombie disconnects** — Detect and recover bots stuck in a half-disconnected state; break the perpetual iron-explore loop.
+- **Per-task LLM routing** — Wire up per-task provider/model routing and repair provider/model API mismatches.
+
+---
+
+## 2026-06-18
+
+### Features
+- **Runtime-switchable Minecraft server** — Change the target server at runtime via a new Settings "Server" tab.
+- **Walkable stair risers + enclosed-building links** — Building risers are now walkable; footprints persist to the town registry. Town rail-network connector now sources from completed build jobs.
+
+---
+
+## 2026-06-17
+
+### Refactor — API + Town decomposition
+- **`api.ts` decomposition** — Split the monolithic `createAPIServer` into focused route modules under `src/server/routes/` (bots, build/tunnel, terrain, schematics, supply-chains, metrics/civilization, missions/commands, commander, control platform (markers/zones/routes/squads/roles), campaigns, routines/templates, runtime-config, skill-library, Java-plugin event relay, Town Builder + `requireMayor`), with shared helpers lifted to `routes/helpers.ts`. Removed imports left unused after the split.
+- **TownManager repositories** — Decomposed `TownManager` into per-domain repositories (Building, District, Disaster, Chronicle, StyleObservation, Relationship, Approval) with shared row helpers (`rows.ts`). Consolidated ApprovalManager's second DB connection into TownManager.
+- **Build-engine extractions** — Extracted `GatherPlanner` and `SchematicStore` from `BuildCoordinator`.
+
+### Bug Fixes
+- **Security + crash-safety hardening (Phase 1)** — Hardened the API surface and crash-safety paths.
+- **Town DB migrations** — Version-gated migrations via `user_version`; wrap `deleteBuilding`'s two deletes in a transaction; ApprovalManager awaits rehydration before firing handlers.
+- **Build/supply stability** — Rewire ChainCoordinator to worker IPC with a double-exec guard; cancel timed-out site-prep instead of digging on; require explicit confirm to carve the hard-coded tunnel; holes-only verify-repair (stop reverting player edits); keep paused builds paused across restart; make `clearSite` respect the mining geofence; idempotent child-town founding.
+
+### Documentation
+- Added the staff-engineer repo review + working notes (`REPO_REVIEW.md`, `REPO_REVIEW_NOTES.md`).
+
+---
+
+## 2026-06-01
+
+### Documentation
+- **README rewrite** — Rewrote `README.md` to reflect actual implemented features from a code-grounded audit.
+
+---
+
+## 2026-05-28
+
+### Bug Fixes — Stability & memory
+- **Unbounded-growth caps** — GC terminal blackboard tasks (and drop deep-clone on read); FIFO-cap `exploredChunks` at 50000; cap reputation events at 5000 with hourly auto-decay; evict terminal build jobs from in-memory maps after a 1h grace; global blackboard GC loop independent of town state; 60s memory-usage diagnostics with per-collection sizes.
+- **Town-build resilience** — Per-kind build-failure backoff in TownBrain; persist the brain paused flag; relax SiteSelector flatness and enable clearSite/snapToGround for town builds; raise SiteSelector budgets to fit town-scale schematics; pick the closest connected bot as the probe; cascade-delete `style_observations` on `deleteBuilding`.
+- **Voyager** — Tolerate any direction shape in `exploreUntil`; suppress LLM-proposed tasks with strong blockers; seed auto-flat site spiral at the caller origin.
+
+---
+
+## 2026-05-26
+
+### Bug Fixes — Overnight stability
+- **Unattended uptime** — Bump `maxReconnectAttempts` 30→1000 for overnight uptime; disable always-on cognition timers to stop the keepalive bounce.
+- **Town↔build linkage** — Reconcile building rows on `build:completed` so linkage survives restart; bound the `startBuild` pre-job phase so site-selection can't freeze the tick loop; wire town↔build linkage so auto-builds can't deadlock.
+
+---
+
+## 2026-05-25
+
+### Features
+- **Town-build resilience + tunnel tooling** — Town-build resilience improvements, mining geofence, and cleanup + tunnel tooling.
+
+---
+
 ## 2026-05-24
 
 ### Security

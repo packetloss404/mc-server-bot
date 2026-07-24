@@ -624,8 +624,12 @@ export class BotManager {
       const status = handle.getCachedStatus();
 
       // (1) Clean disconnect: 'end'/'kicked' fired and set DISCONNECTED. The
-      // in-worker scheduleReconnect usually handles this; the command is a backstop.
+      // in-worker scheduleReconnect usually handles this; the command is a backstop
+      // for bots stranded with NO queued retry (e.g. max attempts reached). When a
+      // retry IS queued — throttle-hint delay or the slow version-mismatch backoff —
+      // forcing a connect every tick would hammer the server's login throttle.
       if (status?.state === 'DISCONNECTED') {
+        if (status?.reconnectQueued) continue;
         logger.info({ bot: handle.botName }, 'Watchdog: reconnecting disconnected worker');
         handle.sendCommand('reconnect', {});
         continue;
@@ -647,7 +651,7 @@ export class BotManager {
       // (2) Zombie socket: worker loop is alive (heartbeats flowing) but no inbound
       // MC traffic — half-open/CLOSE-WAIT whose 'end' never fired. Force a reconnect.
       const inboundAgeMs = status?.inboundAgeMs;
-      if (typeof inboundAgeMs === 'number' && inboundAgeMs > BotManager.ZOMBIE_INBOUND_AGE_MS) {
+      if (typeof inboundAgeMs === 'number' && inboundAgeMs > BotManager.ZOMBIE_INBOUND_AGE_MS && !status?.reconnectQueued) {
         logger.warn(
           { bot: handle.botName, inboundAgeMs },
           'Watchdog: stale inbound socket (zombie) — forcing reconnect',

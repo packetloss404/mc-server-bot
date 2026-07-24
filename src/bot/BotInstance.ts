@@ -2058,6 +2058,15 @@ export class BotInstance {
       logger.warn({ bot: this.name }, 'forceReconnect suppressed: bot is quarantined');
       return;
     }
+    // A queued reconnect (throttle-hint delay or the slow version-mismatch
+    // backoff) means the disconnect was already handled — connecting now would
+    // defeat the deliberate wait and re-trip the server's login throttle. A
+    // true zombie socket never reaches scheduleReconnect, so its timer is
+    // never set and this guard cannot mask that case.
+    if (this.pendingConnectTimeout) {
+      logger.debug({ bot: this.name }, 'forceReconnect skipped: reconnect already queued');
+      return;
+    }
     logger.warn({ bot: this.name, inboundAgeMs: this.lastInboundPacketAt > 0 ? Date.now() - this.lastInboundPacketAt : null }, 'Watchdog: forcing reconnect on stale/zombie socket');
     this.stopAmbientBehaviors();
     this.state = BotState.DISCONNECTED;
@@ -2101,6 +2110,10 @@ export class BotInstance {
       // a reconnect. null until the first connect() so a not-yet-spawned bot is
       // not flagged.
       inboundAgeMs: this.lastInboundPacketAt > 0 ? Date.now() - this.lastInboundPacketAt : null,
+      // True while a reconnect timer is pending (join stagger, throttle-hint
+      // delay, or the slow version-mismatch backoff). The watchdog must leave
+      // such bots alone instead of forcing an immediate reconnect.
+      reconnectQueued: this.pendingConnectTimeout !== null,
       position: this.bot?.entity?.position
         ? {
             x: Math.round(this.bot.entity.position.x),

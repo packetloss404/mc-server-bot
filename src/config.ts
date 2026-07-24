@@ -40,6 +40,11 @@ export interface Config {
     joinStaggerMs: number;
     reconnectDelaySec: number;
     maxReconnectAttempts: number;
+    /** Slow retry cadence (seconds) when the server rejects our protocol
+     *  version ("Outdated client!"). Permanent failure until the server or
+     *  our protocol stack changes, so retries are a heartbeat, not a storm.
+     *  Default 900 (15 min). */
+    versionMismatchBackoffSec?: number;
   };
   behavior: {
     headTrackingRange: number;
@@ -332,6 +337,7 @@ const SECTION_SPECS: Record<string, { required: boolean; fields: FieldSpec[] }> 
       { key: 'joinStaggerMs', type: 'number' },
       { key: 'reconnectDelaySec', type: 'number' },
       { key: 'maxReconnectAttempts', type: 'number' },
+      { key: 'versionMismatchBackoffSec', type: 'number', optional: true },
     ],
   },
   behavior: {

@@ -548,7 +548,10 @@ export class BotInstance {
       logger.warn({ bot: this.name, reason }, 'Bot disconnected');
       this.state = BotState.DISCONNECTED;
       this.stopAmbientBehaviors();
-      this.scheduleReconnect();
+      // Pass the end reason through so version-mismatch disconnects
+      // (`differentVersionError`) hit the slow-backoff branch even when no
+      // `kicked` event preceded them.
+      this.scheduleReconnect(reason);
     });
   }
 
@@ -750,6 +753,21 @@ export class BotInstance {
     return /duplicate_login|logged in from another( location)?|you logged in from another/i.test(text);
   }
 
+  /**
+   * True when the disconnect is a client/server protocol-version mismatch —
+   * e.g. the server upgraded to a Minecraft version our protocol stack does
+   * not speak yet. Matches the vanilla/Paper kick ("Outdated client! Please
+   * use X"), mineflayer's `end` reason (`differentVersionError`), and the
+   * handshake error text ("This server is version X, you are using ...").
+   * Unlike a throttle kick this cannot resolve by retrying soon: it clears
+   * only when the server adds a compat layer (ViaBackwards) or our deps gain
+   * the server's version.
+   */
+  static parseVersionMismatchKick(reason: unknown): boolean {
+    const text = BotInstance.normalizeKickReason(reason);
+    return /outdated (client|server)|differentVersionError|this server is version/i.test(text);
+  }
+
   private static parseLoginThrottleHint(reason: unknown): number | null {
     const text = BotInstance.normalizeKickReason(reason);
     const specific = /wait\s+(\d+)\s+seconds?\s+before\s+logg/i.exec(text);
@@ -773,6 +791,29 @@ export class BotInstance {
       logger.debug({ bot: this.name }, 'Reconnect already queued, skipping duplicate schedule');
       return;
     }
+
+    // Protocol-version mismatch is permanent until the server or our deps
+    // change — the normal 30s cadence just hammers the server (~2.5k kicks/
+    // day fleet-wide). Retry on a slow heartbeat instead, and don't consume
+    // reconnect attempts, so the fleet self-heals unattended whenever the
+    // server starts accepting our protocol version. Deliberately placed
+    // before the max-attempts gate: earlier fast-path churn must not strand
+    // the bot once we know why connects are failing.
+    if (BotInstance.parseVersionMismatchKick(kickReason)) {
+      const backoffSec = this.config.bots.versionMismatchBackoffSec ?? 900;
+      const spread = Math.random() * Math.max(1, this.config.bots.maxBots) * 4000;
+      const delay = Math.round(backoffSec * 1000 + spread);
+      logger.warn(
+        { bot: this.name, delay, backoffSec },
+        'Version mismatch with server — slow reconnect backoff (resolves only when server adds ViaBackwards or bot deps learn its version)',
+      );
+      this.pendingConnectTimeout = setTimeout(() => {
+        this.pendingConnectTimeout = null;
+        void this.connect();
+      }, delay);
+      return;
+    }
+
     if (this.reconnectAttempts >= this.config.bots.maxReconnectAttempts) {
       logger.error({ bot: this.name }, 'Max reconnect attempts reached');
       return;

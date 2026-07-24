@@ -27,6 +27,12 @@ bots:
   joinStaggerMs: 45000
   reconnectDelaySec: 60
   maxReconnectAttempts: 1000
+  # Slow retry cadence when the server rejects our protocol version
+  # ("Outdated client!") — e.g. DyoCraft on Paper 26.2 vs our 1.21.11 stack
+  # (2026-07-24). Permanent until the server adds ViaBackwards or mineflayer
+  # learns the server's version, so retry as a 15-min heartbeat instead of
+  # the normal 30s storm. Doesn't consume maxReconnectAttempts.
+  versionMismatchBackoffSec: 900
 
 behavior:
   headTrackingRange: 10
